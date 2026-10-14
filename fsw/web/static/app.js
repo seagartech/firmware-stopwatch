@@ -223,7 +223,7 @@ m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件�
   <section class="panel"><h2>以前测过的</h2>${recentList()}</section></div>`}}
 };
 
-let setOS='mac',setLLM='claude',keyTested=false,setFirst=true,envMark=false;
+let keyErr='',keyDraft='',setOS='mac',setLLM='claude',keyTested=false,setFirst=true,envMark=false;
 // 帮装（决策 48）：0 没开始，1 正在装，2 装好，3 装失败；样子里用定时器假装进度
 let inst={st:0,step:0,pct:0,log:'',timer:null};
 const INSTALL={
@@ -274,12 +274,11 @@ function settingsPage(){
    <div class="radio">${opt('claude','Claude','识别准确率最高（验证期 9 个对 8 个）。需要你自己的 Claude API 密钥，按用量付费。',' <span class="chip c-ok">推荐</span>')}
    ${opt('deepseek','DeepSeek','便宜，国内访问快。验证期识别 9 个只对 4 个，选它时找关键步骤那页会提醒你仔细核对。')}
    ${opt('cc','本机已登录的 Claude Code','不用填密钥，用你自己 Claude 会员的额度。属于可选用法，以官方条款为准。')}</div>
-   ${setLLM==='cc'?`<p class="note" style="margin:10px 0 0">${first?'正在本机找 Claude Code……找到了，已登录。':'已找到本机的 Claude Code，已登录。'}</p>`:`<div class="field" style="margin-top:12px"><label for="set-key">${setLLM==='claude'?'Claude':'DeepSeek'} API 密钥</label><div class="inrow"><input type="text" id="set-key" value="${first&&!keyTested?'':'••••••••••••••••a3F9'}" placeholder="粘贴你的密钥" autocomplete="off"><button class="btn" data-test="1">测试密钥</button></div>
+   ${setLLM==='cc'?`<p class="note" style="margin:10px 0 0">${first?'正在本机找 Claude Code……找到了，已登录。':'已找到本机的 Claude Code，已登录。'}</p>`:`<div class="field" style="margin-top:12px"><label for="set-key">${setLLM==='claude'?'Claude':'DeepSeek'} API 密钥</label><div class="inrow"><input type="text" id="set-key" value="${first&&!keyTested?keyDraft.replace(/"/g,'&quot;'):'••••••••••••••••a3F9'}" placeholder="粘贴你的密钥" autocomplete="off"><button class="btn" data-test="1">测试密钥</button></div>${keyErr?`<p class="note" style="color:var(--bad);margin:6px 0 0">✕ ${keyErr}</p>`:''}
    ${keyTested?'':`<details class="manual" style="margin-top:10px" open><summary>密钥是什么、去哪拿</summary>
    <p style="margin:6px 0;font-size:14px">密钥是大模型公司给你的一串字符，码表用它替你调用大模型读代码，按用量从你的账户扣钱。一次找关键步骤约几毛钱到一两块钱（估算）。</p>
    ${setLLM==='claude'?`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 Claude 开发者平台 console.anthropic.com，用邮箱注册登录</li><li>先在"账单"里充值（最少 5 美元）</li><li>左边点"API Keys"→"Create Key"，起个名字比如"码表"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`:`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 DeepSeek 开放平台 platform.deepseek.com，用手机号注册登录</li><li>先在"充值"里充一点（10 元就够试用）</li><li>左边点"API keys"→"创建 API key"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`}
-   <p class="note" style="margin:6px 0 0">已经有 Claude 会员、电脑上装了 Claude Code？选上面第三项"本机已登录的 Claude Code"，不用密钥。</p>
-   <button class="pill" data-demokey="1" style="margin-top:6px">演示：粘贴一个示例密钥</button></details>`}
+   <p class="note" style="margin:6px 0 0">已经有 Claude 会员、电脑上装了 Claude Code？选上面第三项"本机已登录的 Claude Code"，不用密钥。</p></details>`}
    <span class="note">${keyTested?'<span style="color:var(--ok)">✓ 能用</span>　':''}只存在这台电脑的 <span class="code">~/.config/firmware-stopwatch/</span>，不上传、不进代码。</span></div>`}
    <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px"><input type="checkbox" id="set-reuse" checked>源码没变时，直接用上次的识别结果，不再调用大模型（省钱、省时间）</label>
   </section>
@@ -1019,8 +1018,8 @@ document.addEventListener('click',e=>{
   const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
   const ca=e.target.closest('[data-col]');if(ca){const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
   if(e.target.closest('[data-resume]')){page='home';hStage=2;render();window.scrollTo(0,0);return}
-  if(e.target.closest('[data-demokey]')){const k=document.getElementById('set-key');if(k){k.value='demo-0000-key-示例';toast('已粘贴示例密钥，点「测试密钥」')}return}
-  const tk=e.target.closest('[data-test]');if(tk){keyTested=true;render();return}
+  const tk=e.target.closest('[data-test]');if(tk){const i=document.getElementById('set-key'),v=i?i.value.trim():'';keyErr='';if(v&&!v.startsWith('•'))keyDraft=v;tk.disabled=true;tk.textContent='正在测试……';
+   api('/api/llm/test',{provider:setLLM,key:v&&!v.startsWith('•')?v:null}).then(r=>{keyTested=!!r.ok;keyErr=r.ok?'':r.message;render()}).catch(()=>{keyErr='码表后台没有回应，看看运行码表的窗口是不是关了。';render()});return}
   const fil=e.target.closest('[data-fill]');if(fil){const i=document.getElementById('h-what');if(i)i.value=fil.dataset.fill;hSay=fil.dataset.fill;return}
 });
 document.addEventListener('input',e=>{if(e.target.id==='h-boardq'){hBoardQ=e.target.value;const p=e.target.selectionStart;render();const q=document.getElementById('h-boardq');if(q){q.focus();q.setSelectionRange(p,p)}}});
@@ -1029,7 +1028,7 @@ document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.clo
 document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(!z)return;e.preventDefault();uploadDrop(e.dataTransfer.items)});
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
-document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;render()}});
+document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';render()}});
 document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){

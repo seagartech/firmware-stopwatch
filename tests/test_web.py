@@ -137,3 +137,20 @@ def test_home_page_reads_real_source_instead_of_demo_data():
     assert "function pickSrc(" not in js, "首页还在用假的选源码"
     assert "demoErr==='java'" not in js and "demoErr==='stm32'" not in js
     assert "你用的是哪块？" in js  # 决策 61：多块板子时问用哪块
+
+
+def test_key_test_button_is_real_and_demo_key_button_is_gone():
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "/api/llm/test" in js
+    assert "data-demokey" not in js
+
+
+@pytest.mark.parametrize("path", ["/", "/static/app.js", "/static/style.css"])
+def test_browser_always_checks_for_a_newer_page(client, path):
+    """升级码表后浏览器不能还用旧的网页代码。"""
+    assert client.get(path).headers.get("cache-control") == "no-cache"
+
+
+def test_page_files_are_requested_with_a_version_tag(client):
+    html = client.get("/").text
+    assert re.search(r'/static/app\.js\?v=\w+', html) and re.search(r'/static/style\.css\?v=\w+', html)
