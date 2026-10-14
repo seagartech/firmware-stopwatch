@@ -720,19 +720,21 @@ function enough(){const g=okRounds(),C=CC(),D=build(SCENES[scene]),L=D.lines.len
 let colVar='b',colN=20,col={st:0,att:0,got:[],phase:0},colT=null;
 const CC=()=>COLLECT[scene];
 const PH=()=>CC().ph;
-function colStop(){if(colT){colT.close();colT=null}}
-function colPoints(){const S=SCENES[scene],p=new Set();S.lines.forEach(l=>l.segs.forEach(k=>S.segs[k].code.split('→').forEach(x=>p.add(x.trim()))));return p.size}
-function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,att:0,got:[],phase:0,sc:scene};const D=build(SCENES[scene]);const C=CC();
- const ok0=col.got.filter(x=>!x.bad).length,need=Math.max(0,colN-ok0),drop=col.att<9?9-col.att:0,want=colPoints();let marks=-1;
- const finish=()=>{if(marks<0)return;col.att++;
-  if(marks<want){col.got.push({bad:true,att:col.att});ding(true)}
-  else{const r=D.rounds[col.got.filter(x=>!x.bad).length%D.rounds.length];col.got.push({n:col.got.filter(x=>!x.bad).length+1,e:r.ends,probs:C.probs.filter(p=>p.rounds.includes(r.n)),att:col.att});ding(false)}
-  marks=-1;col.phase=0};
- const es=new EventSource(`/api/device/stream?demo=${encodeURIComponent(scene)}&rounds=${need}&start=${ok0}&drop_at=${drop}&interval=0.12`);colT=es;
- es.onmessage=e=>{if(e.data==='END'){finish();colStop();col.st=2;if(page==='collect')render();return}
-  if(e.data==='FSW,RESET'){finish();marks=0;col.phase=0}
-  else{marks++;col.last=e.data;col.phase=marks>=want?4:Math.min(3,Math.floor(marks*4/want))}
-  if(page==='collect')render()}}
+// 多轮实测：后台一行行读设备输出（没真源码时回放演示数据的设备输出），按轮切分、算用时、查问题；这里每 0.3 秒问一次
+function colStop(){if(colT){clearInterval(colT);colT=null}}
+function colApply(j){const C=CC(),before=col.got.length;
+ col.got=(j.rounds||[]).map(r=>r.ok?{n:r.n,e:r.ends,probs:C.probs.filter(p=>(r.probs||[]).includes(p.k)),att:r.att,segs:r.segs}:{bad:true,att:r.att,missing:r.missing||[]});
+ col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):'';
+ const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));
+ for(const x of col.got.slice(before))ding(!!x.bad);
+ if(j.status==='done'){colStop();col.st=2}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
+ if(page==='collect')render()}
+async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,att:0,got:[],phase:0,sc:scene};
+ const real=realFlash()&&FSWJ&&FSWJ.status==='done';
+ const body=real?{page:IDENT.page,source:'device',project_dir:REAL.project_dir,rounds:colN,resume:!!keep}
+  :{demo:scene,rounds:colN,resume:!!keep,interval:.12,drop_at:keep?0:9};
+ try{const r=await fetch('/api/collect/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast('✕ '+(j.detail||'没开始'));col.st=0;render();return}colApply(j)}catch(e){toast('✕ 码表后台没有回应');return}
+ colT=setInterval(async()=>{try{colApply(await (await fetch('/api/collect')).json())}catch(e){}},300)}
 const okRounds=()=>col.got.filter(x=>!x.bad);
 function issues(x){if(x.bad)return `<span class="chip c-gray">${CC().miss}，不计入，自动补收一轮</span>`;
  return x.probs.map(p=>`<span class="chip c-${p.c}">${p.t}</span>`).join(' ')||'<span class="note">正常</span>'}
@@ -788,7 +790,7 @@ function collectPage(){
  if(col.st===0)return `<div class="stack">${colSetup()}</div>`;
  const body={a:colA,b:colB,c:colC}[colVar]();
  const g=okRounds(),bad=col.got.length-g.length;
- return `<div class="stack">${col.st===1?`<div class="status" style="justify-content:flex-end">${beepBtn()}</div>`:''}${body}${col.st===2||(col.st===3&&okRounds().length>=10)?enough():''}
+ return `<div class="stack">${col.st===1&&col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:''}${col.st===1?`<div class="status" style="justify-content:flex-end">${beepBtn()}</div>`:''}${body}${col.st===2||(col.st===3&&okRounds().length>=10)?enough():''}
  <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${col.st===3?(()=>{const k=g.length,can=k>=10,to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];return `<span class="note">已停止。测了的 ${k} 轮都留着，可以接着测。${can?'也可以先看结果，会注明只测了 '+k+' 轮。':''}</span><span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" data-go="${to[0]}" ${can?'':blk('[data-col="resume"]','至少测 10 轮才能看结果')}>${to[1]}</button><button class="btn" data-col="restart">从头重测</button><button class="btn pri" data-col="resume">接着测（从第 ${k+1} 轮）</button></span>`})():`<span class="note">${col.st===2?`测完 ${g.length} 轮${bad?`（另有 ${bad} 轮没收全，没算）`:''}；原始日志已存。`:'可以随时停，停了能接着测，已测的都留着。'}</span><span style="display:flex;gap:8px">${col.st===1?'<button class="btn" data-col="stop">停止实测</button>':`<button class="btn ${needMore()?'pri':''}" data-col="more">再测 10 轮${needMore()?'（建议）':''}</button>`}${flow==='retest'&&rtC().steps[3][1]?`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="compare" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看前后对比</button>`:`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="report" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看报告</button>`}</span>`}</div></section></div>`}
 
 // ===== 前后对比 =====（通用：两次结果都用报告页同一套计算；改后数据是模拟的）
@@ -1148,7 +1150,7 @@ document.addEventListener('click',e=>{
   const cv=e.target.closest('[data-colvar]');if(cv){colVar=cv.dataset.colvar;render();return}
   if(e.target.closest('[data-beep]')){beep=!beep;render();return}
   const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
-  const ca=e.target.closest('[data-col]');if(ca){const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
+  const ca=e.target.closest('[data-col]');if(ca){const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
   if(e.target.closest('[data-resume]')){page='home';hStage=2;render();window.scrollTo(0,0);return}
   const tk=e.target.closest('[data-test]');if(tk){const i=document.getElementById('set-key'),v=i?i.value.trim():'';keyErr='';if(v&&!v.startsWith('•'))keyDraft=v;tk.disabled=true;tk.textContent='正在测试……';
    api('/api/llm/test',{provider:setLLM,key:v&&!v.startsWith('•')?v:null}).then(r=>{keyTested=!!r.ok;keyErr=r.ok?'':r.message;render()}).catch(()=>{keyErr='码表后台没有回应，看看运行码表的窗口是不是关了。';render()});return}
