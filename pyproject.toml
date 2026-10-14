@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "固件码表：找出固件哪一步慢、为什么、怎么改"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "AGPL-3.0-only"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.32",
