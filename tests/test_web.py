@@ -166,3 +166,10 @@ def test_background_build_pill_uses_real_status():
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "/api/bgbuild/start" in js and "/api/bgbuild'" in js
     assert "原版编译没通过，不是码表改的" in js
+
+
+def test_install_box_uses_real_installer_and_demo_switches_are_gone():
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "/api/install/start" in js and "/api/install/retry" in js
+    assert 'data-inst="fail"' not in js, "演示安装失败的按钮应去掉"
+    assert "样子演示，看哪台电脑" not in js

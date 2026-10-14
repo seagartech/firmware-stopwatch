@@ -11,6 +11,8 @@ def free_port(preferred):
     """先用默认端口；被占了就往后试 20 个，都占了才让系统随便给一个。"""
     for port in [*range(preferred, preferred + 20), 0]:
         with socket.socket() as s:
+            # 和网页服务一样允许重用地址：刚关掉的服务留下的 TIME_WAIT 连接不算占用
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 s.bind(("127.0.0.1", port))
                 return s.getsockname()[1]
