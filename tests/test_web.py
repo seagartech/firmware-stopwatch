@@ -129,3 +129,11 @@ def test_code_has_no_scenario_specific_names():
         for m in SCENE_WORDS.finditer(p.read_text(encoding="utf-8"))
     ]
     assert hits == []
+
+
+def test_home_page_reads_real_source_instead_of_demo_data():
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "/api/source/inspect" in js and "/api/source/pick" in js and "/api/source/upload/" in js
+    assert "function pickSrc(" not in js, "首页还在用假的选源码"
+    assert "demoErr==='java'" not in js and "demoErr==='stm32'" not in js
+    assert "你用的是哪块？" in js  # 决策 61：多块板子时问用哪块
