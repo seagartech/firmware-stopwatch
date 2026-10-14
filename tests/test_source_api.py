@@ -91,3 +91,16 @@ def test_upload_cannot_escape_its_folder(make):
 
 def test_bad_upload_token_is_refused(make):
     assert make().put("/api/source/upload/..%2Fx/a.txt", content=b"x").status_code in (400, 404)
+
+
+def test_key_test_button_uses_the_chosen_model(tmp_path):
+    from fsw.llm import FakeLLM
+    made = []
+
+    def factory(provider, key):
+        made.append((provider, key))
+        return FakeLLM("", test_kind="bad_key")
+    c = TestClient(create_app(data_dir=tmp_path / "data", llm_factory=factory))
+    r = c.post("/api/llm/test", json={"provider": "deepseek", "key": "fake-typed-key"}).json()
+    assert r["kind"] == "bad_key" and "密钥不对" in r["message"]
+    assert made == [("deepseek", "fake-typed-key")]

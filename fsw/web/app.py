@@ -10,12 +10,13 @@ import re
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from fsw.config import load_config
 from fsw.scenario import to_page
+from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
@@ -89,6 +90,16 @@ class SourceBody(BaseModel):
     board: str | None = None
 
 
+class KeyTestBody(BaseModel):
+    provider: str
+    key: str | None = None
+
+
+# 原型设置页里的叫法 → 码表内部的叫法
+PROVIDERS = {"claude": "claude-api", "cc": "claude-code", "deepseek": "deepseek",
+             "claude-api": "claude-api", "claude-code": "claude-code"}
+
+
 class PickBody(BaseModel):
     kind: str = "dir"
 
@@ -103,12 +114,13 @@ class SyncBody(BaseModel):
     skipped: list[str] = []
 
 
-def create_app(data_dir=None, picker=None):
+def create_app(data_dir=None, picker=None, llm_factory=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     data_dir = Path(data_dir) if data_dir else load_config().data_dir
     uploads = ascii_work_root(data_dir) / "_uploads"
     picker = picker or native_pick
+    llm_factory = llm_factory or (lambda provider, key: llms.make(provider, key, cfg=load_config()))
     state = {"flow": None, "demo": None, "settings": None}
 
     def settings():
@@ -141,7 +153,12 @@ def create_app(data_dir=None, picker=None):
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        """网页文件地址带上版本号（按文件修改时间），升级后浏览器一定拿新的。"""
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        for name in ("app.js", "style.css"):
+            v = format(int((STATIC / name).stat().st_mtime), "x")
+            html = html.replace(f"/static/{name}", f"/static/{name}?v={v}")
+        return HTMLResponse(html)
 
     @app.get("/api/demo")
     def demo_list():
@@ -218,6 +235,15 @@ def create_app(data_dir=None, picker=None):
             s["has_key"][s["llm_provider"]] = True
         return snapshot()
 
+    @app.post("/api/llm/test")
+    def llm_test(body: KeyTestBody):
+        """设置页的"测试密钥"：真问一句最短的话，分清是密钥错、没余额还是连不上。密钥只用这一次，不存、不打印。"""
+        try:
+            model = llm_factory(PROVIDERS.get(body.provider, body.provider), (body.key or "").strip() or None)
+            return model.test()
+        except llms.LLMError as e:
+            return {"ok": False, "kind": e.kind, "message": e.message}
+
     @app.post("/api/source/pick")
     def source_pick(body: PickBody):
         """选文件夹 / 选压缩包：弹出系统自带的选择窗口。"""
@@ -265,6 +291,14 @@ def create_app(data_dir=None, picker=None):
             yield "data: END\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.middleware("http")
+    async def no_stale_page(request, call_next):
+        """网页文件每次都让浏览器先问一下有没有新的，升级码表后不会还用旧代码。"""
+        resp = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
