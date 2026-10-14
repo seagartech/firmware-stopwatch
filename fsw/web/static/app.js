@@ -159,13 +159,18 @@ const PAGES=[
 const arrow=(now,prev)=>{const d=now-prev;if(Math.abs(d)<.02)return '<span class="note">持平</span>';return d<0?`<span class="down">↓ 快了 ${f(-d)} 秒</span>`:`<span class="up">↑ 慢了 ${f(d)} 秒</span>`};
 let applied={key:false,comp:false};
 const keyOK=()=>!setFirst||keyTested||setLLM==='cc';
-const envKey=()=>!setFirst||applied.key,envComp=()=>!setFirst||applied.comp;
+// 电脑上真装了的乐鑫编译工具（后台 /api/env 查的）；够项目要求的版本就算装好了
+let IDFS=[];
+const vt=v=>String(v||'0').split('.').map(Number).concat([0,0,0]).slice(0,3),vge=(a,b)=>{const x=vt(a),y=vt(b);for(let i=0;i<3;i++){if(x[i]!==y[i])return x[i]>y[i]}return true};
+const realIdf=()=>{const min=REAL?REAL.idf_min:null;const ok=IDFS.filter(i=>!min||vge(i.version,min));return ok.sort((a,b)=>vge(a.version,b.version)?-1:1)[0]||null};
+const shortV=v=>String(v).replace(/\.0$/,'');
+const envKey=()=>!setFirst||applied.key,envComp=()=>!setFirst||applied.comp||!!realIdf();
 function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm','大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${IDF()}`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
 let envBack='home',compPending=false;
 function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="background:var(--${c})"></i>${t}</span>`;
  const llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
  const a=[envKey()?L('ok',`大模型：${llmName}，${setLLM==='cc'?'已登录':'密钥已填'}`):L('bad','大模型：还没填密钥'),L('muted','设备：没插上（烧录前插上就行）')];
- if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v6.1`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
+ if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v${realIdf()?shortV(realIdf().version):'6.1'}`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
  return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
 let toastT=null;function toast(m){const t=document.getElementById('toast');t.textContent=m;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},1600)}
 const recentList=()=>`<div class="list">${PROJ.map(p=>`<div class="lrow"><button data-open="${p.scene}"><span><b>${p.name}</b>　<span class="note">${p.what} · ${p.last}</span></span><span class="num">${p.metric} ${f(p.now)} 秒　${arrow(p.now,p.prev)}</span></button><button class="pill" data-retest="${p.scene}">改完了，再测一次</button></div>${p.fswOnDevice&&!restored[p.scene]?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-restore="${p.scene}">还原成原版</button></div>`:''}`).join('')}</div>`;
@@ -239,7 +244,7 @@ const INSTALL={
   ['下载乐鑫编译工具 v6.1','装到纯英文路径 C:\\esp，避开中文用户名','Downloading esp-idf v6.1 … {p}%'],
   ['下载编译器等工具','共 9 个','Downloading xtensa-esp-elf-14.2.0 … {p}%'],
   ['试编译一次','编个官方小例子，确认真的能用','Project build complete.']]}};
-function compOK(){return !setFirst||inst.st===2}
+function compOK(){return !setFirst||inst.st===2||!!realIdf()}
 function instStop(){if(inst.timer){clearInterval(inst.timer);inst.timer=null}}
 function instStart(fail){instStop();inst={st:1,step:0,pct:0,log:'',timer:null};const S=INSTALL[setOS].steps;
  inst.timer=setInterval(()=>{inst.pct+=S[inst.step][2].includes('{p}')?9:34;
@@ -267,7 +272,7 @@ function settingsPage(){
   const done=[!first||keyTested, compOK(), false];
   const cnt=done.filter(Boolean).length;
   const head=first?`<section class="panel" style="border-color:var(--speak)"><h1 style="font-size:22px">第一次用码表，先准备三样东西</h1><p class="note" style="margin:0">已准备 <b class="num">${cnt}</b> / 3。都准备好后，点最下面的「保存」。</p></section>`:'';
-  const compiler=first?`<div id="instbox">${installBox()}</div>`
+  const compiler=first&&!IDFS.length?`<div id="instbox">${installBox()}</div>`:IDFS.length?`<div class="status">${IDFS.map((i,k)=>`<span><i class="dot" style="background:var(--${k?'muted':'ok'})"></i>找到 v${shortV(i.version)}：<span class="code">${i.path.replace(/^\/Users\/[^/]+/,'~')}</span></span>`).join('')}<button class="pill">重新查找</button><button class="pill">手动指定位置</button></div><p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`
    :`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>找到 v6.1：<span class="code">~/esp/esp-idf-v6.1</span></span><span><i class="dot" style="background:var(--muted)"></i>找到 v5.3：<span class="code">~/esp/esp-idf</span></span><button class="pill">重新查找</button><button class="pill">手动指定位置</button></div><p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`;
   return `<div class="stack">${head}
   <section class="panel ${page==='settings'&&envMark&&!keyOK()?'miss':''}" id="set-llm"><h2>${first?(done[0]?'✓ ':'① '):''}大模型（找关键步骤、写报告建议时用）</h2>
@@ -1035,5 +1040,6 @@ document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render
  const list=await (await fetch('/api/demo')).json();
  for(const d of list){const x=await (await fetch('/api/demo/'+encodeURIComponent(d.id))).json();SCENES[d.id]=x.S;FF[d.id]=x.F;COLLECT[d.id]=x.C;RUNS[d.id]=x.R;RANGE[d.id]=x.RG;RT[d.id]=x.RT;PROJ.push({...x.P,scene:d.id})}
  scene=DEMO&&SCENES[DEMO]?DEMO:list[0].id;pName=FF[scene].pname;mapSel=FF[scene].mapSel;
+ try{IDFS=((await (await fetch('/api/env')).json()).idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1)}catch(e){}
  try{const s=(await (await fetch('/api/state')).json()).settings;setFirst=SETTINGS==='done'?false:SETTINGS==='first'?true:!(s.llm_provider==='claude-code'||(s.llm_provider&&s.has_key[s.llm_provider]))}catch(e){}
  render()})();

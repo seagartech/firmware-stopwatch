@@ -154,3 +154,9 @@ def test_browser_always_checks_for_a_newer_page(client, path):
 def test_page_files_are_requested_with_a_version_tag(client):
     html = client.get("/").text
     assert re.search(r'/static/app\.js\?v=\w+', html) and re.search(r'/static/style\.css\?v=\w+', html)
+
+
+def test_home_light_uses_real_compiler_detection():
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "/api/env" in js
+    assert "已装 v6.1'" not in js, "环境灯里的版本号不能写死"

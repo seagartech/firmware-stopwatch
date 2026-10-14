@@ -18,6 +18,7 @@ from fsw.config import load_config
 from fsw.scenario import to_page
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
+from fsw.platforms.espidf import find_idf
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
 
@@ -114,12 +115,13 @@ class SyncBody(BaseModel):
     skipped: list[str] = []
 
 
-def create_app(data_dir=None, picker=None, llm_factory=None):
+def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     data_dir = Path(data_dir) if data_dir else load_config().data_dir
     uploads = ascii_work_root(data_dir) / "_uploads"
     picker = picker or native_pick
+    idf_finder = idf_finder or (lambda: find_idf(extra=load_config().idf_path))
     llm_factory = llm_factory or (lambda provider, key: llms.make(provider, key, cfg=load_config()))
     state = {"flow": None, "demo": None, "settings": None}
 
@@ -234,6 +236,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None):
         if body.get("key_entered") and s["llm_provider"] in s["has_key"]:
             s["has_key"][s["llm_provider"]] = True
         return snapshot()
+
+    @app.get("/api/env")
+    def env_status():
+        """电脑上的环境：装了哪些乐鑫编译工具（只按位置找文件，不用大模型）。"""
+        return {"idf": idf_finder()}
 
     @app.post("/api/llm/test")
     def llm_test(body: KeyTestBody):

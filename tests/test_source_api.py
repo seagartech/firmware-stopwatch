@@ -104,3 +104,8 @@ def test_key_test_button_uses_the_chosen_model(tmp_path):
     r = c.post("/api/llm/test", json={"provider": "deepseek", "key": "fake-typed-key"}).json()
     assert r["kind"] == "bad_key" and "密钥不对" in r["message"]
     assert made == [("deepseek", "fake-typed-key")]
+
+
+def test_environment_reports_installed_idf(tmp_path):
+    c = TestClient(create_app(data_dir=tmp_path / "data", idf_finder=lambda: [{"path": "/x/esp-idf-v6.1", "version": "6.1.0"}]))
+    assert c.get("/api/env").json()["idf"] == [{"path": "/x/esp-idf-v6.1", "version": "6.1.0"}]
