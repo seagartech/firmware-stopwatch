@@ -120,7 +120,7 @@ def test_keys_never_show_up_when_config_is_printed(tmp_path):
 def test_program_start_prints_plain_hint_when_not_configured(tmp_path):
     env = {"FSW_CONFIG_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
     result = subprocess.run(
-        [sys.executable, "-m", "fsw"], capture_output=True, text=True, env=env
+        [sys.executable, "-m", "fsw", "--check"], capture_output=True, text=True, env=env
     )
 
     assert result.returncode == 0, result.stderr
