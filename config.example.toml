@@ -1,0 +1,20 @@
+# 固件码表的设置示例。
+# 复制到 ~/.config/firmware-stopwatch/config.toml 再改；一般在网页的设置页里改就行。
+# 密钥不写在这里：放在同一个文件夹的 claude_key.txt 或 deepseek_key.txt 里，
+# 或者设环境变量 ANTHROPIC_API_KEY、DEEPSEEK_API_KEY。
+
+[llm]
+# 用哪个大模型找关键步骤：claude-api、claude-code（本机已登录的 Claude Code，不用密钥）、deepseek
+provider = "claude-code"
+
+[toolchain]
+# 乐鑫 ESP-IDF 的位置；空着就用环境变量 IDF_PATH 或自动找
+idf_path = ""
+
+[device]
+# 设备的调试口；空着就自动找
+serial_port = ""
+
+[output]
+# 测量结果和报告放在哪
+data_dir = "~/firmware-stopwatch-data"

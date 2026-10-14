@@ -1,6 +1,7 @@
 import argparse
 
 from fsw import __version__
+from fsw.config import load_config
 
 
 def main(argv=None):
@@ -10,6 +11,8 @@ def main(argv=None):
     )
     parser.parse_args(argv)
     print(f"firmware-stopwatch {__version__}")
+    for problem in load_config().problems():
+        print(f"· {problem}")
 
 
 if __name__ == "__main__":
