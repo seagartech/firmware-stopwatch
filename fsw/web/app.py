@@ -4,15 +4,19 @@
 """
 
 import asyncio
+import hashlib
 import json
+import re
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from fsw.config import load_config
+from fsw.workspace.picker import native_pick
+from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
 
 HERE = Path(__file__).resolve().parent
@@ -75,6 +79,19 @@ PAGE_TO_STEP = {
 }
 
 
+class SourceBody(BaseModel):
+    path: str | None = None
+    upload: str | None = None
+    board: str | None = None
+
+
+class PickBody(BaseModel):
+    kind: str = "dir"
+
+
+TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
 class SyncBody(BaseModel):
     reached: int
     viewing: str | None = None
@@ -82,9 +99,12 @@ class SyncBody(BaseModel):
     skipped: list[str] = []
 
 
-def create_app():
+def create_app(data_dir=None, picker=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
+    data_dir = Path(data_dir) if data_dir else load_config().data_dir
+    uploads = ascii_work_root(data_dir) / "_uploads"
+    picker = picker or native_pick
     state = {"flow": None, "demo": None, "settings": None}
 
     def settings():
@@ -193,6 +213,38 @@ def create_app():
         if body.get("key_entered") and s["llm_provider"] in s["has_key"]:
             s["has_key"][s["llm_provider"]] = True
         return snapshot()
+
+    @app.post("/api/source/pick")
+    def source_pick(body: PickBody):
+        """选文件夹 / 选压缩包：弹出系统自带的选择窗口。"""
+        return {"path": picker("zip" if body.kind == "zip" else "dir")}
+
+    @app.put("/api/source/upload/{token}/{rel:path}")
+    async def source_upload(token: str, rel: str, request: Request):
+        """拖进来的文件夹或压缩包：网页一个个文件传过来，先放进码表工作区。"""
+        parts = Path(rel).parts
+        if not TOKEN.match(token) or not parts or Path(rel).is_absolute() or ".." in parts:
+            raise HTTPException(400, "文件路径不对")
+        dest = uploads / token / Path(*parts)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(await request.body())
+        return {"ok": True}
+
+    @app.post("/api/source/inspect")
+    def source_inspect(body: SourceBody):
+        """选好源码：认出是什么固件，复制到纯英文路径，建码表项目文件夹。"""
+        if body.upload:
+            if not TOKEN.match(body.upload) or not (uploads / body.upload).is_dir():
+                raise HTTPException(400, "没收到拖进来的文件")
+            base = uploads / body.upload
+            entries = list(base.iterdir())
+            path = entries[0] if len(entries) == 1 else base
+        elif body.path:
+            path = Path(body.path.strip()).expanduser()
+        else:
+            raise HTTPException(400, "先选一个固件源码位置")
+        unpack = ascii_work_root(data_dir) / "_unpack" / hashlib.sha1(str(path).encode()).hexdigest()[:10]
+        return prepare(path, data_dir=data_dir, board=body.board, unpack_to=unpack)
 
     @app.get("/api/device/stream")
     async def device_stream(

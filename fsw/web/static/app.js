@@ -1,6 +1,6 @@
 // 演示数据（一个起点 + 几条线 + 每条线的段等）从后台 /api/demo 读，代码里不写死任何场景
 let SCENES={},FF={},COLLECT={},RUNS={},RANGE={},RT={},PROJ=[];
-// 原型底部"演示栏"的开关，真软件里改用网址参数：?demo= 选演示数据，?fail= 演示出错，?retest= 改完再测的情况，?settings=first|done 设置页状态
+// 原型底部"演示栏"的开关，真软件里改用网址参数：?demo= 选演示数据（选源码后面的页面先用它），?fail= 演示出错（nodev/build/burn/try/slowbg），?retest= 改完再测的情况，?settings=first|done 设置页状态
 const QS=new URLSearchParams(location.search);
 const FAIL=QS.get('fail')||'',DEMO=QS.get('demo')||'',RTCASE=QS.get('retest')||'same',SETTINGS=QS.get('settings')||'';
 // ===== 通用计算 =====
@@ -160,17 +160,44 @@ const arrow=(now,prev)=>{const d=now-prev;if(Math.abs(d)<.02)return '<span class
 let applied={key:false,comp:false};
 const keyOK=()=>!setFirst||keyTested||setLLM==='cc';
 const envKey=()=>!setFirst||applied.key,envComp=()=>!setFirst||applied.comp;
-function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm','大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${FF[scene].idf} 或更新`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
+function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm','大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${IDF()}`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
 let envBack='home',compPending=false;
 function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="background:var(--${c})"></i>${t}</span>`;
  const llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
  const a=[envKey()?L('ok',`大模型：${llmName}，${setLLM==='cc'?'已登录':'密钥已填'}`):L('bad','大模型：还没填密钥'),L('muted','设备：没插上（烧录前插上就行）')];
- if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${FF[scene].idf} 或更新：正在后台装`):envComp()?L('ok',`乐鑫 ESP-IDF ${FF[scene].idf} 或更新：已装 v6.1`):L('bad',`乐鑫 ESP-IDF ${FF[scene].idf} 或更新：没装`));
+ if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v6.1`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
  return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
 let toastT=null;function toast(m){const t=document.getElementById('toast');t.textContent=m;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},1600)}
 const recentList=()=>`<div class="list">${PROJ.map(p=>`<div class="lrow"><button data-open="${p.scene}"><span><b>${p.name}</b>　<span class="note">${p.what} · ${p.last}</span></span><span class="num">${p.metric} ${f(p.now)} 秒　${arrow(p.now,p.prev)}</span></button><button class="pill" data-retest="${p.scene}">改完了，再测一次</button></div>${p.fswOnDevice&&!restored[p.scene]?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-restore="${p.scene}">还原成原版</button></div>`:''}`).join('')}</div>`;
 let pName='',restored={},hNeed=false,hSrc='',hReading=false,hErr='',hScan=0,hScanT=null;
-function pickSrc(src,own){hErr='';envBack='home';if(demoErr==='java'||demoErr==='stm32'){const bad=demoErr;hReading=true;hSrc=src;hStage=1;render();setTimeout(()=>{hReading=false;hSrc='';hStage=0;hErr=bad==='java'?'<b>这不像单片机固件源码，测不了。</b><br>里面是一个 Java 项目：找到 pom.xml 和 312 个 .java 文件；<br>没找到编译固件用的配置（CMakeLists.txt、Makefile、platformio.ini 都没有）。<br>码表测的是烧进单片机里的程序，请换一个文件夹。':'<b>认出是 STM32 固件，第一版还不支持。</b><br>依据：找到 STM32CubeMX 工程文件（.ioc）和 STM32F4 的启动文件。<br>码表第一版只支持乐鑫 ESP32 系列，STM32 在计划里（乐鑫 → STM32 → Pico）。';render()},900);return}hSrc=src;pName=own?src.split('/').filter(Boolean).pop():FF[scene].pname;hReading=true;hStage=1;hSay='';render();setTimeout(()=>{hReading=false;hScan=1;if(missing().length)pop='env';render();clearTimeout(hScanT);hScanT=setTimeout(()=>{hScan=2;if(page==='home')render()},2500)},src.endsWith('.zip')?1500:700)}
+// ===== 选固件源码（真读）=====：后台只看项目文件、不用大模型，认出是不是固件、芯片、要的编译工具；复制到纯英文路径，原文件夹不动
+let REAL=null,hBoardQ='',hBoardNeed=false;
+const IDF=()=>REAL?(REAL.idf_min?REAL.idf_min+' 或更新':'（项目没写要哪个版本）'):FF[scene].idf+' 或更新';
+const CHIP=()=>REAL?(REAL.chip?`芯片 ${REAL.chip}${REAL.board?`，板子 ${REAL.board}`:''}`:'还没选板子'):FF[scene].chip;
+async function api(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json()}
+async function realPick(body,label,board){hErr='';envBack='home';hBoardNeed=false;hSrc=label||body.path||'';hReading=true;hStage=1;if(!board)hSay='';render();
+ let r;try{r=await api('/api/source/inspect',{...body,board:board||null})}catch(e){r={ok:false,message:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
+ hReading=false;
+ if(!r.ok){REAL=null;hSrc='';hStage=0;hErr=r.kind==='multiple'?`<b>${r.message}</b><div class="acts" style="margin:8px 0 0">${r.projects.map(p=>`<button class="btn" data-pickroot="${p.root.replace(/"/g,'&quot;')}">${p.name}<span class="note">　${p.root}</span></button>`).join('')}</div>`:r.message;render();return}
+ REAL={...r.info,body,label:hSrc};pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');
+ hScan=1;if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);hScanT=setTimeout(()=>{hScan=2;if(page==='home')render()},2500)}
+function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
+ const q=hBoardQ.trim().toLowerCase(),list=REAL.boards.filter(b=>!q||b.id.toLowerCase().includes(q)||(b.chip||'').toLowerCase().includes(q));
+ const groups={};list.forEach(b=>{const g=b.id.includes('/')?b.id.split('/')[0]:'其他';(groups[g]=groups[g]||[]).push(b)});
+ return `<div class="field" style="margin-top:14px"><label for="h-board">这个项目支持 ${REAL.boards.length} 块板子，你用的是哪块？</label>
+  <div class="inrow"><input type="text" id="h-boardq" placeholder="搜索板子，比如 core-s3" value="${hBoardQ}" style="flex:0 1 14em"><select id="h-board" style="flex:1 1 16em;font:inherit;font-size:15px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)"><option value="">${list.length?'选一块板子':'没有匹配的板子'}</option>${Object.entries(groups).map(([g,bs])=>`<optgroup label="${g}">${bs.map(b=>`<option value="${b.id}" ${REAL.board===b.id?'selected':''}>${b.id}（${b.chip}）</option>`).join('')}</optgroup>`).join('')}</select></div>
+  ${REAL.chip?`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>芯片 ${REAL.chip}（按你选的板子）</p>`:hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}</div>`}
+async function uploadDrop(items){const tok=Math.random().toString(36).slice(2,12),files=[];
+ const skip=new Set(['.git','build','managed_components','node_modules']);
+ const walk=async(entry,pre)=>{if(entry.isFile){files.push([pre+entry.name,await new Promise((ok,no)=>entry.file(ok,no))])}
+  else if(entry.isDirectory&&!skip.has(entry.name)){const rd=entry.createReader();let batch;do{batch=await new Promise((ok,no)=>rd.readEntries(ok,no));for(const e of batch)await walk(e,pre+entry.name+'/')}while(batch.length)}};
+ const roots=[...items].map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);if(!roots.length)return;
+ const label=roots.length===1?roots[0].name+'（拖进来的，已复制到码表工作区）':`${roots.length} 个拖进来的东西`;
+ hErr='';hSrc=label;hReading=true;hStage=1;render();
+ for(const r of roots)await walk(r,'');
+ let i=0;const put=async()=>{while(i<files.length){const [rel,file]=files[i++];await fetch(`/api/source/upload/${tok}/`+rel.split('/').map(encodeURIComponent).join('/'),{method:'PUT',body:file})}};
+ await Promise.all([...Array(8)].map(put));
+ realPick({upload:tok},label)}
 function chips(){const C=(t,x)=>`<button class="pill" data-fill="${x}">${x}</button>`;
  const hist=PROJ.filter(p=>p.path===hSrc).map(p=>p.what),ai=FF[scene].ai,gen=['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'];
  const row=(lbl,arr)=>`<div class="chiprow"><span class="note">${lbl}</span><div class="pills">${arr.map(x=>C(0,x)).join('')}</div></div>`;
@@ -189,7 +216,7 @@ m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件�
      <div class="acts" style="justify-content:center;margin:8px 0 0"><button class="btn pri" data-pick="dir">选文件夹</button><button class="btn" data-pick="zip">选压缩包</button></div></div>
      <div class="inrow" style="margin-top:8px"><input type="text" id="h-paste" placeholder="或者粘贴路径，比如 ~/projects/my-firmware"><button class="btn" data-pick="paste">用这个路径</button></div>
      ${hErr?`<div class="errbox" style="margin-top:10px">${hErr}</div>`:''}`}</div>`
-  :`<div class="field"><label for="h-path">固件源码位置</label><div class="inrow"><input type="text" id="h-path" value="${hSrc}" readonly><button class="btn" data-pick="reset">换一个</button></div></div>
+  :`<div class="field"><label for="h-path">固件源码位置</label><div class="inrow"><input type="text" id="h-path" value="${hSrc}" readonly><button class="btn" data-pick="reset">换一个</button></div></div>${boardRow()}
    <div class="field" style="margin-top:14px"><label for="h-what">你想测从什么时候到什么时候？用一句话说</label>
     <div class="inrow"><input type="text" id="h-what" placeholder="比如：从按下按键到屏幕亮" value="${hSay}"><button class="btn pri" data-stage="2">下一步</button></div>${hNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先写一句，或者点下面的一个。</p>':''}${chips()}</div>`}
   </section>
@@ -798,7 +825,7 @@ function startCd(){clearInterval(cdT);cd=3;cdT=setInterval(()=>{cd--;if(page!=='
 function modalHTML(){const F=FF[scene],llm={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
  const meant=hSay===F.ai[0]?F.measure:hSay.replace(/^从/,'').replace('到',' → ');
  if(hStage===2)return `<h2 id="dlg-t">确认要测的内容</h2>
-   <dl class="kv"><dt>项目名称</dt><dd><input type="text" id="h-pname" value="${pName}" style="width:100%;max-width:22em"></dd><dt>固件源码位置</dt><dd class="num">${hSrc}</dd><dt>芯片和板子</dt><dd>${F.chip}</dd><dt>要测的</dt><dd>${hSay}</dd><dt>码表理解为</dt><dd><b>${meant}</b></dd></dl>
+   <dl class="kv"><dt>项目名称</dt><dd><input type="text" id="h-pname" value="${pName}" style="width:100%;max-width:22em"></dd><dt>固件源码位置</dt><dd class="num">${hSrc}</dd><dt>芯片和板子</dt><dd>${CHIP()}</dd><dt>要测的</dt><dd>${hSay}</dd><dt>码表理解为</dt><dd><b>${meant}</b></dd></dl>
    <p class="note" style="margin:0">接下来码表把代码交给大模型（${llm}），找出中间经过的关键步骤，一般 1～3 分钟。</p>
    <div class="acts"><button class="btn" data-mclose="1" id="dlg-back">关闭</button><button class="btn pri" data-mfind="1">开始找关键步骤</button></div>`;
  if(hStage===3)return `<h2 id="dlg-t">${stepsRead===2?'找完了':'正在找关键步骤'}</h2><p class="note" style="margin-top:0">${pName} · 要测：${meant}</p>${stepsRead===2?`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span></div>`:''}<div id="readbox">${readBox()}</div>
@@ -950,13 +977,13 @@ document.addEventListener('click',e=>{
   const o=e.target.closest('[data-open]');if(o){scene=o.dataset.open;flow=null;page='report';mode='boss';render();window.scrollTo(0,0);return}
   const v=e.target.closest('[data-var]');if(v){homeVar=v.dataset.var;save('fsw-home',homeVar);render();return}
   const pk=e.target.closest('[data-pick]');if(pk){const a=pk.dataset.pick;
-   if(a==='reset'){clearInterval(bgT);bgT=null;bgSrc='';hStage=0;hSrc='';hScan=0;render();return}
-   if(a==='file'){hErr='"application.cc" 是单个文件。编译要整个项目，请拖整个固件文件夹，或者它的压缩包。';render();return}
-   if(a==='paste'){const v=(document.getElementById('h-paste').value||'').trim();if(!v){hErr='先粘贴一个路径。';render();return}pickSrc(v.replace(/[<>&"]/g,''),true);return}
-   const P=FF[scene].pick;pickSrc(a==='zip'?P.zip:a==='drag'?P.drag:P.dir);return}
+   if(a==='reset'){clearInterval(bgT);bgT=null;bgSrc='';hStage=0;hSrc='';hScan=0;REAL=null;hBoardQ='';render();return}
+   if(a==='paste'){const v=(document.getElementById('h-paste').value||'').trim();if(!v){hErr='先粘贴一个路径。';render();return}realPick({path:v});return}
+   api('/api/source/pick',{kind:a==='zip'?'zip':'dir'}).then(r=>{if(r.path)realPick({path:r.path})}).catch(()=>{hErr='打不开选择窗口，可以把路径粘贴到下面的框里。';render()});return}
+  const pr=e.target.closest('[data-pickroot]');if(pr){realPick({path:pr.dataset.pickroot});return}
   const rs=e.target.closest('[data-restore]');if(rs){restored[rs.dataset.restore]=true;render();return}
   const sgo=e.target.closest('[data-setgo]');if(sgo){page='settings';render();setTimeout(()=>{const el=document.getElementById(sgo.dataset.setgo);if(el){el.scrollIntoView({block:'start'});el.classList.add('flash')}},30);return}
-  const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
+  const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-board');b&&b.focus();return}const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
   const sv=e.target.closest('[data-setvar]');if(sv){setFirst=sv.dataset.setvar==='first';applied={key:false,comp:false};keyTested=false;instStop();inst={st:0,step:0,pct:0,log:'',timer:null};render();return}
   const os=e.target.closest('[data-os]');if(os){setOS=os.dataset.os;if(inst.st!==2){instStop();inst={st:0,step:0,pct:0,log:'',timer:null}}render();return}
   const ins=e.target.closest('[data-inst]');if(ins){const a=ins.dataset.inst;if(a==='manual'){inst.manual=true;render();const m=document.getElementById('manual');m&&m.scrollIntoView({block:'center'});return}instStart(a==='fail');render();return}
@@ -996,9 +1023,13 @@ document.addEventListener('click',e=>{
   const tk=e.target.closest('[data-test]');if(tk){keyTested=true;render();return}
   const fil=e.target.closest('[data-fill]');if(fil){const i=document.getElementById('h-what');if(i)i.value=fil.dataset.fill;hSay=fil.dataset.fill;return}
 });
+document.addEventListener('input',e=>{if(e.target.id==='h-boardq'){hBoardQ=e.target.value;const p=e.target.selectionStart;render();const q=document.getElementById('h-boardq');if(q){q.focus();q.setSelectionRange(p,p)}}});
+document.addEventListener('dragover',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(z){e.preventDefault();z.style.borderColor='var(--speak)'}});
+document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(z)z.style.borderColor=''});
+document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(!z)return;e.preventDefault();uploadDrop(e.dataTransfer.items)});
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
-document.addEventListener('change',e=>{if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;render()}});
+document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;render()}});
 document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){
