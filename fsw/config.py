@@ -106,3 +106,40 @@ def load_config(config_dir=None, env=None):
         config_dir / KEY_FILES["deepseek"]
     )
     return cfg
+
+
+SECTIONS = {"provider": ("llm", "provider"), "idf_path": ("toolchain", "idf_path"),
+            "serial_port": ("device", "serial_port"), "data_dir": ("output", "data_dir")}
+
+
+def _toml_str(s):
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def save_config(config_dir, *, provider=None, key=None, idf_path=None, serial_port=None, data_dir=None):
+    """设置页的"保存"：没传的项保持原样。密钥单独写成只有自己能读的文件，不进 config.toml。"""
+    config_dir = Path(config_dir).expanduser()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(config_dir, 0o700)
+    toml_path = config_dir / "config.toml"
+    try:
+        data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        data = {}
+    given = {"provider": provider, "idf_path": idf_path, "serial_port": serial_port, "data_dir": data_dir}
+    for name, value in given.items():
+        if value is not None:
+            sec, k = SECTIONS[name]
+            data.setdefault(sec, {})[k] = value
+    lines = []
+    for sec in ("llm", "toolchain", "device", "output"):
+        items = {k: v for k, v in data.get(sec, {}).items() if isinstance(v, str)}
+        if items:
+            lines += [f"[{sec}]"] + [f"{k} = {_toml_str(v)}" for k, v in items.items()] + [""]
+    toml_path.write_text("\n".join(lines), encoding="utf-8")
+    if key and (provider or data.get("llm", {}).get("provider")) in KEY_FILES:
+        p = config_dir / KEY_FILES[provider or data["llm"]["provider"]]
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(key.strip() + "\n")
+        os.chmod(p, 0o600)

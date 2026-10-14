@@ -2,7 +2,7 @@
 let SCENES={},FF={},COLLECT={},RUNS={},RANGE={},RT={},PROJ=[];
 // 原型底部"演示栏"的开关，真软件里改用网址参数：?demo= 选演示数据（选源码后面的页面先用它），?fail= 演示出错（nodev/build/burn/try/slowbg），?retest= 改完再测的情况，?settings=first|done 设置页状态
 const QS=new URLSearchParams(location.search);
-const FAIL=QS.get('fail')||'',DEMO=QS.get('demo')||'',RTCASE=QS.get('retest')||'same',SETTINGS=QS.get('settings')||'';
+const FAIL=QS.get('fail')||'',DEMO=QS.get('demo')||'',RTCASE=QS.get('retest')||'same';
 // ===== 通用计算 =====
 const sorted=a=>[...a].sort((x,y)=>x-y);
 const med=a=>{const s=sorted(a),m=s.length/2;return s.length%2?s[m|0]:(s[m-1]+s[m])/2};
@@ -157,19 +157,29 @@ const PAGES=[
  {id:'range',name:'合理范围',done:'已定'}];
 
 const arrow=(now,prev)=>{const d=now-prev;if(Math.abs(d)<.02)return '<span class="note">持平</span>';return d<0?`<span class="down">↓ 快了 ${f(-d)} 秒</span>`:`<span class="up">↑ 慢了 ${f(d)} 秒</span>`};
-let applied={key:false,comp:false};
-const keyOK=()=>!setFirst||keyTested||setLLM==='cc';
+// 已保存的设置（/api/state 读设置文件夹；密钥只知道有没有，不回传）、本机 Claude Code 登没登录、插着的设备（/api/env、/api/ports 真查）
+let SAVED={llm_provider:null,has_key:{},data_dir:'',idf_path:''},CCST=null,PORTS=[],dataDraft=null,idfErr='',portT=null;
+const P2UI={'claude-api':'claude','claude-code':'cc',deepseek:'deepseek'},UI2P={claude:'claude-api',cc:'claude-code',deepseek:'deepseek'};
+const ccOK=()=>!!(CCST&&CCST.logged_in),hasKey=ui=>!!SAVED.has_key[UI2P[ui]];
+const keyOK=()=>setLLM==='cc'?ccOK():keyTested||hasKey(setLLM);
+const tilde=p=>String(p||'').replace(/^\/Users\/[^/]+|^\/home\/[^/]+/,'~');
+// 每 2 秒查一次设备和编译工具（不跑 claude 命令）：插上设备、自己装好编译工具，灯和设置页都自动变
+async function portsPoll(){try{const e=await (await fetch('/api/env?cc=0')).json(),n=e.ports||[],idf=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);const ch=n.join()!==PORTS.join()||idf.map(i=>i.path).join()!==IDFS.map(i=>i.path).join();PORTS=n;IDFS=idf;if(!ch)return;if(page==='flash'&&fl.st===4&&PORTS.length){fl.st=1;flRun(3,fl.to);return}
+ if(page==='home'){const lt=document.querySelector('.lights');if(lt)lt.outerHTML=envStatus();return}  // 首页只换灯，不打断正在输入的
+ if(page==='settings'){const k=document.getElementById('set-key');if(k&&k.value.trim()&&!k.value.startsWith('•'))keyDraft=k.value.trim();render()}else if(page==='flash')render()}catch(e){}}
+function portsWatch(on){if(on&&!portT)portT=setInterval(portsPoll,2000);if(!on&&portT){clearInterval(portT);portT=null}}
 // 电脑上真装了的乐鑫编译工具（后台 /api/env 查的）；够项目要求的版本就算装好了
 let IDFS=[];
 const vt=v=>String(v||'0').split('.').map(Number).concat([0,0,0]).slice(0,3),vge=(a,b)=>{const x=vt(a),y=vt(b);for(let i=0;i<3;i++){if(x[i]!==y[i])return x[i]>y[i]}return true};
 const realIdf=()=>{const min=REAL?REAL.idf_min:null;const ok=IDFS.filter(i=>!min||vge(i.version,min));return ok.sort((a,b)=>vge(a.version,b.version)?-1:1)[0]||null};
 const shortV=v=>String(v).replace(/\.0$/,'');
-const envKey=()=>!setFirst||applied.key,envComp=()=>!setFirst||applied.comp||!!realIdf();
-function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm','大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${IDF()}`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
+// 首页灯和"用到时再检查"都按已保存的设置和真查的结果：没保存就回首页，缺的灯仍是红的
+const envKey=()=>{const p=SAVED.llm_provider;return p==='claude-code'?ccOK():!!(p&&SAVED.has_key[p])},envComp=()=>!!realIdf();
+function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm',SAVED.llm_provider==='claude-code'?'大模型：本机 Claude Code 登录':'大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${IDF()}`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
 let envBack='home',compPending=false;
 function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="background:var(--${c})"></i>${t}</span>`;
- const llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
- const a=[envKey()?L('ok',`大模型：${llmName}，${setLLM==='cc'?'已登录':'密钥已填'}`):L('bad','大模型：还没填密钥'),L('muted','设备：没插上（烧录前插上就行）')];
+ const sp=P2UI[SAVED.llm_provider],llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[sp];
+ const a=[envKey()?L('ok',`大模型：${llmName}，${sp==='cc'?'已登录':'密钥已填'}`):L('bad',sp==='cc'?(CCST&&!CCST.found?'大模型：没找到本机 Claude Code':'大模型：本机 Claude Code 还没登录'):'大模型：还没填密钥'),PORTS.length?L('ok',`设备：已插上 ${PORTS[0]}`):L('muted','设备：没插上（烧录前插上就行）')];
  if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装 ${Math.round(((inst.step||0)+(inst.pct||0)/100)/5*100)}%`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v${realIdf()?shortV(realIdf().version):'6.1'}`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
  return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
 let toastT=null;function toast(m){const t=document.getElementById('toast');t.textContent=m;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},1600)}
@@ -244,13 +254,13 @@ const INSTALL={
   ['下载乐鑫编译工具 v6.1','装到纯英文路径 C:\\esp，避开中文用户名','Downloading esp-idf v6.1 … {p}%'],
   ['下载编译器等工具','共 9 个','Downloading xtensa-esp-elf-14.2.0 … {p}%'],
   ['试编译一次','编个官方小例子，确认真的能用','Project build complete.']]}};
-function compOK(){return !setFirst||inst.st===2||!!realIdf()}
+function compOK(){return inst.st===2||!!realIdf()}
 function instStop(){if(inst.timer){clearInterval(inst.timer);inst.timer=null}if(typeof instPoll!=='undefined'&&instPoll){clearInterval(instPoll);instPoll=null}}
 // 帮装（真的）：后台跑乐鑫官方安装方式，这里每 0.8 秒问一次；点"保存"回首页也照样在装
 let instPoll=null;
 const INSTV=()=>inst.version||'v6.1',instPath=()=>(inst.path||INSTALL[setOS].path).replace(/^\/Users\/[^/]+/,'~');
 function instApply(j){inst.step=j.step||0;inst.pct=j.pct||0;inst.log=j.log||'';inst.version=j.version;inst.path=j.path;inst.msg=j.message;
- if(j.state==='done'){inst.st=2;clearInterval(instPoll);instPoll=null;if(compPending){applied.comp=true;compPending=false}
+ if(j.state==='done'){inst.st=2;clearInterval(instPoll);instPoll=null;if(compPending)compPending=false
   fetch('/api/env').then(r=>r.json()).then(e=>{IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);render()});toast('✓ 编译工具装好了')}
  else if(j.state==='failed'){inst.st=3;clearInterval(instPoll);instPoll=null}
  const b=document.getElementById('instbox');if(page==='settings'&&b)b.innerHTML=installBox();
@@ -264,7 +274,7 @@ function installBox(){const I=INSTALL[setOS],S=I.steps,n=S.length;
  const list=S.map(([t,d],i)=>{const done=inst.st===2||i<inst.step,cur=inst.st!==2&&i===inst.step,bad=inst.st===3&&cur;
   return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'✕':i+1}</b><span>${t.replace('v6.1',INSTV())}<small>${d}</small>${cur&&inst.st===1&&S[i][2].includes('{p}')?`<span class="pbar"><i style="width:${inst.pct}%"></i></span>`:''}</span></li>`}).join('');
  if(inst.st===0)return `<div class="status"><span><i class="dot" style="background:var(--warn)"></i>没找到乐鑫编译工具。这个项目要 ${IDF()}，码表帮你装 ${INSTV()}</span></div>
-  <div class="acts" style="justify-content:flex-start;margin:10px 0"><button class="btn pri" data-inst="go">帮我安装 ${INSTV()}</button><button class="pill">手动指定安装位置</button></div>
+  <div class="acts" style="justify-content:flex-start;margin:10px 0"><button class="btn pri" data-inst="go">帮我安装 ${INSTV()}</button><button class="pill" data-idf="pick">手动指定安装位置</button></div>
   <p class="note">调用乐鑫官方的安装方式，装到 <span class="code">${instPath()}</span>。要下载约 3 GB，一般 10～30 分钟（估算，看网速）。装的时候可以先去做别的，码表开着就行。</p>`;
  const head=inst.st===1?`正在装：第 ${inst.step+1} 步 / 共 ${n} 步`:inst.st===2?`装好了：${INSTV()}，在 <span class="code">${instPath()}</span>`:(inst.msg||`第 ${inst.step+1} 步"${S[inst.step][0]}"没装成`);
  const color=inst.st===1?'var(--speak)':inst.st===2?'var(--ok)':'var(--bad)';
@@ -278,18 +288,18 @@ function settingsPage(){
   const guide=setOS==='mac'?`<ol class="guide"><li>打开"终端"，复制这一行粘贴回车：<span class="code">mkdir -p ~/esp &amp;&amp; cd ~/esp &amp;&amp; git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git esp-idf-v6.1</span></li><li>再复制这一行：<span class="code">cd esp-idf-v6.1 &amp;&amp; ./install.sh esp32s3</span>，等它装完（十几分钟）</li><li>装完这里会自动变绿</li></ol>`:`<ol class="guide"><li>下载乐鑫官方的 Windows 安装器（ESP-IDF Installer），选 v6.1</li><li>安装路径用纯英文，比如 <span class="code">C:\\esp</span>（不要放在中文用户名的文件夹里）</li><li>装完这里会自动变绿</li></ol>`;
   const opt=(id,t,sub,extra='')=>`<label><input type="radio" name="llm" value="${id}" ${setLLM===id?'checked':''}><span><b>${t}</b>${extra}<small>${sub}</small></span></label>`;
   const where=setOS==='mac'?'<span class="code">~/esp</span>、<span class="code">~/.espressif</span>':'<span class="code">C:\\Espressif</span>、<span class="code">C:\\esp</span>';
-  const done=[!first||keyTested, compOK(), false];
+  const done=[keyOK(), compOK(), PORTS.length>0];
   const cnt=done.filter(Boolean).length;
   const head=first?`<section class="panel" style="border-color:var(--speak)"><h1 style="font-size:22px">第一次用码表，先准备三样东西</h1><p class="note" style="margin:0">已准备 <b class="num">${cnt}</b> / 3。都准备好后，点最下面的「保存」。</p></section>`:'';
-  const compiler=first&&!IDFS.length?`<div id="instbox">${installBox()}</div>`:IDFS.length?`<div class="status">${IDFS.map((i,k)=>`<span><i class="dot" style="background:var(--${k?'muted':'ok'})"></i>找到 v${shortV(i.version)}：<span class="code">${i.path.replace(/^\/Users\/[^/]+/,'~')}</span></span>`).join('')}<button class="pill">重新查找</button><button class="pill">手动指定位置</button></div><p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`
-   :`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>找到 v6.1：<span class="code">~/esp/esp-idf-v6.1</span></span><span><i class="dot" style="background:var(--muted)"></i>找到 v5.3：<span class="code">~/esp/esp-idf</span></span><button class="pill">重新查找</button><button class="pill">手动指定位置</button></div><p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`;
+  const idfE=idfErr?`<p class="note" style="color:var(--bad);margin:6px 0 0">✕ ${htmlEsc(idfErr)}</p>`:'';
+  const compiler=!IDFS.length||(hSrc&&!realIdf())?`<div id="instbox">${installBox()}</div>${idfE}`:`<div class="status">${IDFS.map((i,k)=>`<span><i class="dot" style="background:var(--${k?'muted':'ok'})"></i>找到 v${shortV(i.version)}：<span class="code">${htmlEsc(tilde(i.path))}</span></span>`).join('')}<button class="pill" data-idf="find">重新查找</button><button class="pill" data-idf="pick">手动指定位置</button></div>${idfE}<p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`;
   return `<div class="stack">${head}
   <section class="panel ${page==='settings'&&envMark&&!keyOK()?'miss':''}" id="set-llm"><h2>${first?(done[0]?'✓ ':'① '):''}大模型（找关键步骤、写报告建议时用）</h2>
    <div class="radio">${opt('claude','Claude','识别准确率最高（验证期 9 个对 8 个）。需要你自己的 Claude API 密钥，按用量付费。',' <span class="chip c-ok">推荐</span>')}
    ${opt('deepseek','DeepSeek','便宜，国内访问快。验证期识别 9 个只对 4 个，选它时找关键步骤那页会提醒你仔细核对。')}
    ${opt('cc','本机已登录的 Claude Code','不用填密钥，用你自己 Claude 会员的额度。属于可选用法，以官方条款为准。')}</div>
-   ${setLLM==='cc'?`<p class="note" style="margin:10px 0 0">${first?'正在本机找 Claude Code……找到了，已登录。':'已找到本机的 Claude Code，已登录。'}</p>`:`<div class="field" style="margin-top:12px"><label for="set-key">${setLLM==='claude'?'Claude':'DeepSeek'} API 密钥</label><div class="inrow"><input type="text" id="set-key" value="${first&&!keyTested?keyDraft.replace(/"/g,'&quot;'):'••••••••••••••••a3F9'}" placeholder="粘贴你的密钥" autocomplete="off"><button class="btn" data-test="1">测试密钥</button></div>${keyErr?`<p class="note" style="color:var(--bad);margin:6px 0 0">✕ ${keyErr}</p>`:''}
-   ${keyTested?'':`<details class="manual" style="margin-top:10px" open><summary>密钥是什么、去哪拿</summary>
+   ${setLLM==='cc'?(!CCST?`<p class="note" style="margin:10px 0 0">正在本机找 Claude Code……</p>`:ccOK()?`<p class="note" style="margin:10px 0 0">${first?'正在本机找 Claude Code……找到了，已登录。':'已找到本机的 Claude Code，已登录。'}</p>`:`<p class="note" style="color:var(--bad);margin:10px 0 0">✕ ${CCST.found?'找到了 Claude Code，但还没登录：在终端里运行 claude，按提示登录一次，再点「重新检查」。':'这台电脑上没找到 Claude Code。装好并登录后点「重新检查」，或者改用填密钥的方式。'} <button class="pill" data-cc="1">重新检查</button></p>`):`<div class="field" style="margin-top:12px"><label for="set-key">${setLLM==='claude'?'Claude':'DeepSeek'} API 密钥</label><div class="inrow"><input type="text" id="set-key" value="${keyDraft?keyDraft.replace(/"/g,'&quot;'):hasKey(setLLM)?'••••••••••••••••':''}" placeholder="粘贴你的密钥" autocomplete="off"><button class="btn" data-test="1">测试密钥</button></div>${keyErr?`<p class="note" style="color:var(--bad);margin:6px 0 0">✕ ${keyErr}</p>`:''}
+   ${keyTested?'':`<details class="manual" style="margin-top:10px" ${hasKey(setLLM)?'':'open'}><summary>密钥是什么、去哪拿</summary>
    <p style="margin:6px 0;font-size:14px">密钥是大模型公司给你的一串字符，码表用它替你调用大模型读代码，按用量从你的账户扣钱。一次找关键步骤约几毛钱到一两块钱（估算）。</p>
    ${setLLM==='claude'?`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 Claude 开发者平台 console.anthropic.com，用邮箱注册登录</li><li>先在"账单"里充值（最少 5 美元）</li><li>左边点"API Keys"→"Create Key"，起个名字比如"码表"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`:`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 DeepSeek 开放平台 platform.deepseek.com，用手机号注册登录</li><li>先在"充值"里充一点（10 元就够试用）</li><li>左边点"API keys"→"创建 API key"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`}
    <p class="note" style="margin:6px 0 0">已经有 Claude 会员、电脑上装了 Claude Code？选上面第三项"本机已登录的 Claude Code"，不用密钥。</p></details>`}
@@ -304,17 +314,16 @@ function settingsPage(){
    ${guide}<p class="note">码表每隔几秒自己查一次，自己装好的也会自动变绿。</p></details>
   </section>
   <section class="panel" id="set-dev"><h2>${first?'③ ':''}设备连接</h2>
-   <div class="status"><span><i class="dot" style="background:var(--warn)"></i>现在没看到设备。用 USB 线插上后这里会自动出现，比如 <span class="code">${setOS==='mac'?'/dev/cu.usbmodem1101':'COM3'}</span></span></div>
+   <div class="status">${PORTS.length?PORTS.map((p,k)=>`<span><i class="dot" style="background:var(--${k?'muted':'ok'})"></i>${k?'也插着':'已连上'}：<span class="code">${htmlEsc(p)}</span></span>`).join(''):`<span><i class="dot" style="background:var(--warn)"></i>现在没看到设备。用 USB 线插上后这里会自动出现，比如 <span class="code">${setOS==='mac'?'/dev/cu.usbmodem1101':'COM3'}</span></span>`}</div>
    <p class="note">读设备输出的速度默认 115200，一般不用改。</p>
   </section>
   <section class="panel"><h2>测量结果放在哪</h2>
-   <div class="inrow"><input type="text" id="set-data" value="~/firmware-stopwatch-data" readonly><button class="btn">更换位置</button></div>
+   <div class="inrow"><input type="text" id="set-data" value="${htmlEsc(tilde(dataDraft||SAVED.data_dir||'~/firmware-stopwatch-data'))}" readonly><button class="btn" data-datadir="1">更换位置</button></div>
    <p class="note">每个项目一个文件夹：识别结果、合理范围、每次的原始日志和报告。都在你电脑上。</p>
   </section>
   <div class="acts" style="justify-content:center;margin:4px 0 8px"><button class="btn pri" data-save="1" style="min-width:10em">保存</button></div>
 </div>`;
 }
-const SETVAR={first:{label:'第一次打开',idea:'第一次打开：密钥空着；码表自己先找一遍编译工具，找不到就给"帮我安装"，点了能看到进度（样子里是假进度，可切 Mac/Windows、可演示装失败）。切到这种情况后去首页走一遍，能看到缺东西时在哪一步提示。'},done:{label:'已经设置好',idea:'已经设置好：显示找到的编译工具版本和填好的密钥，以后只有某一步提示缺东西时才回来。'}};
 
 // ===== 为什么、怎么改（2026-10-13 补：需求 9）=====
 // 真产品里：问题从数据算出（反而晚、偶发慢、大头），"为什么、怎么改"由 AI 读代码 + 这次数据写，效果都是估算
@@ -544,11 +553,11 @@ const FST=()=>{const F=FF[scene];return [
  ['试一次：确认计时点有输出',`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
 let demoErr=FAIL==='nodev'?'':FAIL,justFlashed=false,flashVar='b',fl={st:0,step:0,pct:0,log:''},flT=null,flNoDev=false,diffOk=false,diffFile=0,swOn=true,onDev='orig';
 function flStop(){clearInterval(flT);flT=null}
-function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:''};
+function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
  flT=setInterval(()=>{const S=FST()[fl.step];
   const fe=demoErr==='build'&&fl.step===2&&fl.pct>=60?'build':demoErr==='burn'&&fl.step===3&&fl.pct>=48?'burn':demoErr==='try'&&fl.step===4&&fl.pct>=70?'try':'';
   if(fe){fl.st=5;fl.err=fe;flStop();if(page==='flash')render();return}
-  if(fl.step===3&&flNoDev){fl.st=4;fl.log='没看到设备';flStop();if(page==='flash')render();return}
+  if(fl.step===3&&(REAL?!PORTS.length:flNoDev)){fl.st=4;fl.log='没看到设备';flStop();if(REAL)portsWatch(true);if(page==='flash')render();return}
   if(fl.step===2&&bgFailed()){fl.st=5;fl.err='orig';flStop();if(page==='flash')render();return}
   if(fl.step===2&&!bgDone()){fl.wait=true;fl.log=`等后台把原始代码编完（${bgPct()}%）`;if(page==='flash')render();return}fl.wait=false;
   fl.pct+=fl.step===2||fl.step===3?8:fl.step===4?6:25;
@@ -562,7 +571,7 @@ function flErr(){const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
  return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code><button class="pill">完整日志</button></div><div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
 function flList(from=0,to=4){const n=to-from+1;
  const li=FST().slice(from,to+1).map(([t,d],j)=>{const i=from+j,done=fl.st===2||(fl.st>=1&&i<fl.step)||(fl.st===3&&i<=fl.step-1),cur=(fl.st===1||fl.st===4||fl.st===5)&&i===fl.step,bad=(fl.st===4||fl.st===5)&&cur;
-  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small><button class="pill" data-fl="plug">演示：设备已插上</button>`:''}</span></li>`}).join('');
+  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small>${REAL?'':'<button class="pill" data-fl="plug">演示：设备已插上</button>'}`:''}</span></li>`}).join('');
  const say=FF[scene].big;
  const N=live().length,got=Math.min(N,Math.round(fl.pct/100*N));
  const big=fl.st===1&&fl.step===4&&to>=4?`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`:fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${N} 个计时点都收到了，设备准备好了。</span></div>`:'';
@@ -600,7 +609,7 @@ const FLASHVAR={a:{label:'A 一键到底',idea:'A 一键到底：点一下从复
 function flashPage(){
  const body={a:flashA,b:flashB,c:flashC}[flashVar]();
  const done=fl.st===2||(flashVar==='c'&&onDev==='fsw'&&fl.st===3);
- return `<div class="stack"><div class="status"><span><i class="dot" style="background:var(--ok)"></i>要插 ${typeof live==='function'?live().length:9} 个计时点（找关键步骤那页确认的）</span>${envComp()?'<span><i class="dot" style="background:var(--ok)"></i>编译工具 v6.1</span>':'<span><i class="dot" style="background:var(--bad)"></i>编译工具：还没装，编译前要装好</span>'}<span><i class="dot" style="background:${done||(fl.step>=3&&!flNoDev&&fl.st)?'var(--ok)':'var(--warn)'}"></i>设备：${done||(fl.step>=3&&!flNoDev&&fl.st)?'设备已连上 '+(setOS==='mac'?'/dev/cu.usbmodem1101':'COM3'):'没插上，烧录前插上就行（插上会自动变成"已连上"）'}</span></div>
+ return `<div class="stack"><div class="status"><span><i class="dot" style="background:var(--ok)"></i>要插 ${typeof live==='function'?live().length:9} 个计时点（找关键步骤那页确认的）</span>${envComp()?`<span><i class="dot" style="background:var(--ok)"></i>编译工具 v${realIdf()?shortV(realIdf().version):'6.1'}</span>`:'<span><i class="dot" style="background:var(--bad)"></i>编译工具：还没装，编译前要装好</span>'}<span><i class="dot" style="background:${done||(fl.step>=3&&!flNoDev&&fl.st)?'var(--ok)':'var(--warn)'}"></i>设备：${done||(fl.step>=3&&!flNoDev&&fl.st)?'设备已连上 '+(PORTS[0]||(setOS==='mac'?'/dev/cu.usbmodem1101':'COM3')):'没插上，烧录前插上就行（插上会自动变成"已连上"）'}</span></div>
  ${body}
  <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">${done?'设备上已经是计时版，计时点输出正常。测完以后可以在报告底部或首页还原成原版。':''}</span><span style="display:flex;gap:8px"><button class="btn pri" data-go="collect" ${done?'':(()=>{const g=guide();return blk(g&&g[1]||'#flbox','烧录和试一次都完成后才能测')})()}>开始多轮实测</button></span></div></section></div>`}
 
@@ -974,7 +983,14 @@ document.addEventListener('click',e=>{
   const nd=e.target.closest('[data-need]');if(nd){if(nd.dataset.needgo&&nd.dataset.needgo!==page){if(hStage>=2)hStage=1;page=nd.dataset.needgo;render();window.scrollTo(0,0);return}const g=nd.previousElementSibling;if(g&&g.classList.contains('gate'))g.classList.add('hit');nudge(nd.dataset.need);return}
   if(e.target.closest('#pop button')){pop=null;document.getElementById('pop').hidden=true}
   if(e.target.closest('[data-envgo]')){envBack=page==='flash'?'flash':'home';envMark=true;hStage=Math.min(hStage,1);page='settings';render();window.scrollTo(0,0);return}
-  if(e.target.closest('[data-save]')){applied.key=keyOK();applied.comp=compOK();compPending=inst.st===1;envMark=false;toast(compPending?'✓ 已保存。编译工具还在后台装，装好自动变绿':'✓ 保存成功');const back=hSrc?envBack:'home';envBack='home';setTimeout(()=>{page=back;if(hStage>=2)hStage=1;render();window.scrollTo(0,0)},compPending?1800:1000);return}
+  if(e.target.closest('[data-save]')){const sb=e.target.closest('[data-save]');const ki=document.getElementById('set-key'),kv=ki?ki.value.trim():'';sb.disabled=true;
+   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({llm_provider:setLLM,key:setLLM!=='cc'&&kv&&!kv.startsWith('•')?kv:null,data_dir:dataDraft})}).then(async r=>{const j=await r.json();if(!r.ok){sb.disabled=false;toast('✕ '+(j.detail||'没保存上'));return}
+   SAVED=j.settings;keyDraft='';dataDraft=null;compPending=inst.st===1;envMark=false;toast(compPending?'✓ 已保存。编译工具还在后台装，装好自动变绿':'✓ 保存成功');const back=hSrc?envBack:'home';envBack='home';setTimeout(()=>{page=back;if(hStage>=2)hStage=1;render();window.scrollTo(0,0)},compPending?1800:1000)}).catch(()=>{sb.disabled=false;toast('✕ 码表后台没有回应，看看运行码表的窗口是不是关了')});return}
+  if(e.target.closest('[data-cc]')){CCST=null;render();fetch('/api/env').then(r=>r.json()).then(j=>{CCST=j.claude_code;render()});return}
+  const ib=e.target.closest('[data-idf]');if(ib){idfErr='';if(ib.dataset.idf==='find'){ib.textContent='正在查找……';fetch('/api/env').then(r=>r.json()).then(j=>{IDFS=(j.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast(IDFS.length?`✓ 找到 ${IDFS.length} 个`:'没找到乐鑫编译工具');render()});return}
+   api('/api/source/pick',{kind:'dir'}).then(async p=>{if(!p.path)return;const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idf_path:p.path})});const j=await r.json();if(!r.ok){idfErr=j.detail;render();return}
+    SAVED=j.settings;const e2=await (await fetch('/api/env')).json();IDFS=(e2.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast('✓ 已记下这个位置');render()});return}
+  if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
   if(e.target.closest('[data-mclose]')){hStage=1;render();return}
   if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}
   if(e.target.closest('[data-cdskip]')){clearInterval(cdT);cdT=null;cd=0;hStage=4;render();return}
@@ -1016,7 +1032,6 @@ document.addEventListener('click',e=>{
   const rs=e.target.closest('[data-restore]');if(rs){restored[rs.dataset.restore]=true;render();return}
   const sgo=e.target.closest('[data-setgo]');if(sgo){page='settings';render();setTimeout(()=>{const el=document.getElementById(sgo.dataset.setgo);if(el){el.scrollIntoView({block:'start'});el.classList.add('flash')}},30);return}
   const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-board');b&&b.focus();return}const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
-  const sv=e.target.closest('[data-setvar]');if(sv){setFirst=sv.dataset.setvar==='first';applied={key:false,comp:false};keyTested=false;instStop();inst={st:0,step:0,pct:0,log:'',timer:null};render();return}
   const os=e.target.closest('[data-os]');if(os){setOS=os.dataset.os;if(inst.st!==2){instStop();inst={st:0,step:0,pct:0,log:'',timer:null}}render();return}
   const ins=e.target.closest('[data-inst]');if(ins){const a=ins.dataset.inst;if(a==='manual'){inst.manual=true;render();const m=document.getElementById('manual');m&&m.scrollIntoView({block:'center'});return}instStart(a==='retry');render();return}
   const svr=e.target.closest('[data-stepvar]');if(svr){stepsVar=svr.dataset.stepvar;render();return}
@@ -1061,13 +1076,14 @@ document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.clo
 document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(!z)return;e.preventDefault();uploadDrop(e.dataTransfer.items)});
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
-document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';render()}});
+document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
 document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){
  const list=await (await fetch('/api/demo')).json();
  for(const d of list){const x=await (await fetch('/api/demo/'+encodeURIComponent(d.id))).json();SCENES[d.id]=x.S;FF[d.id]=x.F;COLLECT[d.id]=x.C;RUNS[d.id]=x.R;RANGE[d.id]=x.RG;RT[d.id]=x.RT;PROJ.push({...x.P,scene:d.id})}
  scene=DEMO&&SCENES[DEMO]?DEMO:list[0].id;pName=FF[scene].pname;mapSel=FF[scene].mapSel;
- try{IDFS=((await (await fetch('/api/env')).json()).idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1)}catch(e){}
- try{const s=(await (await fetch('/api/state')).json()).settings;setFirst=SETTINGS==='done'?false:SETTINGS==='first'?true:!(s.llm_provider==='claude-code'||(s.llm_provider&&s.has_key[s.llm_provider]))}catch(e){}
+ try{const e=await (await fetch('/api/env')).json();IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);CCST=e.claude_code||null;PORTS=e.ports||[]}catch(e){}
+ try{SAVED=(await (await fetch('/api/state')).json()).settings;if(P2UI[SAVED.llm_provider])setLLM=P2UI[SAVED.llm_provider];setFirst=!SAVED.llm_provider}catch(e){}
+ portsWatch(true)
  render()})();

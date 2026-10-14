@@ -16,11 +16,11 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from fsw.config import load_config
+from fsw.config import load_config, save_config
 from fsw.scenario import to_page
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
-from fsw.platforms.espidf import EspIdf, find_idf, pick_idf
+from fsw.platforms.espidf import EspIdf, find_idf, find_ports, pick_idf
 from fsw.platforms.espidf.install import MacInstaller, choose_version
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
@@ -121,6 +121,13 @@ PROVIDERS = {"claude": "claude-api", "cc": "claude-code", "deepseek": "deepseek"
              "claude-api": "claude-api", "claude-code": "claude-code"}
 
 
+class SettingsBody(BaseModel):
+    llm_provider: str | None = None
+    key: str | None = None  # 只在这次保存时用，写进密钥文件后不回传
+    idf_path: str | None = None
+    data_dir: str | None = None
+
+
 class PickBody(BaseModel):
     kind: str = "dir"
 
@@ -135,10 +142,15 @@ class SyncBody(BaseModel):
     skipped: list[str] = []
 
 
-def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None):
+def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
+               config_dir=None, cc_status=None, port_finder=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
-    data_dir = Path(data_dir) if data_dir else load_config().data_dir
+    cfg = lambda: load_config(config_dir)  # 设置文件夹默认 ~/.config/firmware-stopwatch/，测试时换成临时文件夹
+    data_dir = Path(data_dir) if data_dir else cfg().data_dir
+    live = {"data": data_dir}  # 设置页改了"测量结果放在哪"，新选的源码就放到新位置
+    cc_status = cc_status or llms.claude_code_status
+    port_finder = port_finder or find_ports
     uploads = ascii_work_root(data_dir) / "_uploads"
     picker = picker or native_pick
     installs_rec = data_dir / "idf-installs.json"  # 码表帮装过的编译工具，记下位置以后也能找到
@@ -149,25 +161,21 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         except (OSError, ValueError):
             return []
 
-    idf_finder = idf_finder or (lambda: find_idf(extra=[load_config().idf_path, *_recorded()]))
+    idf_finder = idf_finder or (lambda: find_idf(extra=[cfg().idf_path, *_recorded()]))
     installer_factory = installer_factory or (lambda version, dest, tools=None: MacInstaller(dest, version, tools_path=tools))
-    llm_factory = llm_factory or (lambda provider, key: llms.make(provider, key, cfg=load_config()))
-    state = {"flow": None, "demo": None, "settings": None}
+    llm_factory = llm_factory or (lambda provider, key: llms.make(provider, key, cfg=cfg()))
+    state = {"flow": None, "demo": None}
 
     def settings():
-        if state["settings"] is None:
-            cfg = load_config()
-            state["settings"] = {
-                "llm_provider": cfg.llm_provider,
-                "has_key": {
-                    "claude-api": bool(cfg.claude_api_key),
-                    "deepseek": bool(cfg.deepseek_api_key),
-                },
-                "idf_path": cfg.idf_path or "",
-                "serial_port": cfg.serial_port or "",
-                "data_dir": str(cfg.data_dir),
-            }
-        return state["settings"]
+        """已保存的设置：只说有没有密钥，密钥本身不回传给网页。"""
+        c = cfg()
+        return {
+            "llm_provider": c.llm_provider,
+            "has_key": {"claude-api": bool(c.claude_api_key), "deepseek": bool(c.deepseek_api_key)},
+            "idf_path": c.idf_path or "",
+            "serial_port": c.serial_port or "",
+            "data_dir": str(live["data"]),
+        }
 
     def snapshot():
         flow = state["flow"]
@@ -257,13 +265,20 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return snapshot()
 
     @app.post("/api/settings")
-    def save_settings(body: dict):
-        s = settings()
-        for k in ("llm_provider", "idf_path", "serial_port", "data_dir"):
-            if k in body:
-                s[k] = body[k] or None if k == "llm_provider" else body[k]
-        if body.get("key_entered") and s["llm_provider"] in s["has_key"]:
-            s["has_key"][s["llm_provider"]] = True
+    def save_settings(body: SettingsBody):
+        """设置页"保存"：真写进设置文件夹（密钥单独一个只有自己能读的文件），重开码表还在。"""
+        provider = PROVIDERS.get(body.llm_provider, "?") if body.llm_provider else None
+        if provider == "?":
+            raise HTTPException(400, "不认识这个大模型：只能选 Claude、DeepSeek 或本机的 Claude Code。")
+        idf_path = body.idf_path.strip() if body.idf_path else None
+        if idf_path:
+            want = Path(idf_path).expanduser().resolve()
+            if not any(Path(i["path"]) == want for i in find_idf(home="/nonexistent", env={}, extra=[idf_path])):
+                raise HTTPException(400, f"这个文件夹里没找到乐鑫编译工具（没有 tools/idf.py）：{idf_path}。请选 esp-idf 那一层文件夹。")
+        save_config(config_dir or load_config().config_dir, provider=provider, key=(body.key or "").strip() or None,
+                    idf_path=idf_path, data_dir=body.data_dir or None)
+        if body.data_dir:
+            live["data"] = Path(body.data_dir).expanduser()
         return snapshot()
 
     # ---- 后台编原始代码：点"开始找关键步骤"时开始，和找步骤同时跑，互不影响 ----
@@ -362,9 +377,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return inst["job"] or {"state": "idle"}
 
     @app.get("/api/env")
-    def env_status():
-        """电脑上的环境：装了哪些乐鑫编译工具（只按位置找文件，不用大模型）。"""
-        return {"idf": idf_finder()}
+    def env_status(cc: bool = True):
+        """电脑上的环境：装了哪些乐鑫编译工具、本机 Claude Code 登没登录、插着哪些设备。都不用大模型、不花钱。"""
+        return {"idf": idf_finder(), "claude_code": cc_status() if cc else None, "ports": port_finder()}
+
+    @app.get("/api/ports")
+    def ports():
+        """插着的设备（USB 转串口）：设置页、首页灯、烧录前等设备时每隔几秒问一次。"""
+        return {"ports": port_finder()}
 
     @app.post("/api/llm/test")
     def llm_test(body: KeyTestBody):
@@ -404,8 +424,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             path = Path(body.path.strip()).expanduser()
         else:
             raise HTTPException(400, "先选一个固件源码位置")
-        unpack = ascii_work_root(data_dir) / "_unpack" / hashlib.sha1(str(path).encode()).hexdigest()[:10]
-        return prepare(path, data_dir=data_dir, board=body.board, unpack_to=unpack)
+        unpack = ascii_work_root(live["data"]) / "_unpack" / hashlib.sha1(str(path).encode()).hexdigest()[:10]
+        return prepare(path, data_dir=live["data"], board=body.board, unpack_to=unpack)
 
     @app.get("/api/device/stream")
     async def device_stream(
