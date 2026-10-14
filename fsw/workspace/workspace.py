@@ -92,11 +92,12 @@ def prepare(src, data_dir, board=None, unpack_to=None):
 
     fp = fingerprint(root)
     work = ascii_work_root(data_dir) / proj.name / "src"
-    if work.exists():
-        shutil.rmtree(work)
-    shutil.copytree(root, work, ignore=shutil.ignore_patterns(*SKIP_DIRS))
-
     status = "new" if old is None else "unchanged" if old.get("fingerprint") == fp else "changed"
+    if status != "unchanged" or not work.exists():
+        if work.exists():
+            shutil.rmtree(work)
+        shutil.copytree(root, work, ignore=shutil.ignore_patterns(*SKIP_DIRS))
+    # 没改过的源码不重新复制：编好的原版（build 文件夹）留着，还原和算计时点开销都要用
     rec = {
         "key": key, "name": info["name"], "platform": info["platform"], "chip": info["chip"],
         "board": info["board"], "idf_min": info["idf_min"], "repo": info["repo"], "commit": info["commit"],

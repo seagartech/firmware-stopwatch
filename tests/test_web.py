@@ -160,3 +160,9 @@ def test_home_light_uses_real_compiler_detection():
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "/api/env" in js
     assert "已装 v6.1'" not in js, "环境灯里的版本号不能写死"
+
+
+def test_background_build_pill_uses_real_status():
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "/api/bgbuild/start" in js and "/api/bgbuild'" in js
+    assert "原版编译没通过，不是码表改的" in js

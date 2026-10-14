@@ -7,6 +7,8 @@ import asyncio
 import hashlib
 import json
 import re
+import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -18,7 +20,7 @@ from fsw.config import load_config
 from fsw.scenario import to_page
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
-from fsw.platforms.espidf import find_idf
+from fsw.platforms.espidf import EspIdf, find_idf, pick_idf
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
 
@@ -91,6 +93,17 @@ class SourceBody(BaseModel):
     board: str | None = None
 
 
+class BgBuildBody(BaseModel):
+    work: str
+    chip: str | None = None
+    board: str | None = None
+    idf_min: str | None = None
+
+
+def _default_builder(work, target, board, idf_path, on_progress):
+    return EspIdf(idf_path).build(work, target=target, board=board, on_progress=on_progress)
+
+
 class KeyTestBody(BaseModel):
     provider: str
     key: str | None = None
@@ -115,7 +128,7 @@ class SyncBody(BaseModel):
     skipped: list[str] = []
 
 
-def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None):
+def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     data_dir = Path(data_dir) if data_dir else load_config().data_dir
@@ -236,6 +249,49 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None):
         if body.get("key_entered") and s["llm_provider"] in s["has_key"]:
             s["has_key"][s["llm_provider"]] = True
         return snapshot()
+
+    # ---- 后台编原始代码：点"开始找关键步骤"时开始，和找步骤同时跑，互不影响 ----
+    bg_builder = bg_builder or _default_builder
+    bg = {"job": None, "lock": threading.Lock()}
+
+    @app.post("/api/bgbuild/start")
+    def bgbuild_start(body: BgBuildBody):
+        with bg["lock"]:
+            job = bg["job"]
+            if job and job["work"] == body.work and job["state"] in ("running", "done"):
+                return job  # 同一份原始代码已经在编或编好了，不重复编
+            idf = pick_idf(idf_finder(), body.idf_min)
+            if not idf:
+                bg["job"] = {"work": body.work, "state": "waiting_tool", "pct": 0,
+                             "message": "等编译工具装好就开始编；不挡找关键步骤，烧录前装好就行。"}
+                return bg["job"]
+            job = {"work": body.work, "state": "running", "pct": 0, "message": "准备编译", "started": time.time(),
+                   "seconds": None, "error": None, "idf": idf["version"]}
+            bg["job"] = job
+        target = re.sub(r"[^a-z0-9]", "", (body.chip or "esp32").lower())
+
+        def progress(pct, msg):
+            job["pct"], job["message"] = pct, msg
+
+        def run():
+            try:
+                r = bg_builder(body.work, target, body.board, idf["path"], progress)
+            except Exception as e:  # 编译工具本身出问题也要说清楚，不能一直转圈
+                r = {"ok": False, "seconds": round(time.time() - job["started"], 1), "error": str(e)}
+            job["seconds"] = r.get("seconds")
+            if r.get("ok"):
+                job.update(state="done", pct=100, message="原始代码已编好")
+            else:
+                job.update(state="failed", error=r.get("error"),
+                           message="原版编译没通过，不是码表改的：你选的源码本身在这台电脑上编不过"
+                                   "（编译工具、依赖或板子配置的问题），烧录前要先解决。")
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @app.get("/api/bgbuild")
+    def bgbuild_status():
+        return bg["job"] or {"state": "idle", "pct": 0}
 
     @app.get("/api/env")
     def env_status():

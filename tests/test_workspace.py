@@ -103,3 +103,15 @@ def test_chosen_board_sets_the_chip(tmp_path):
 
     assert r["info"]["chip"] == "ESP32-S3"
     assert r["info"]["board"] == "acme/s3-box"
+
+
+def test_unchanged_source_keeps_its_build_folder(tmp_path):
+    src = idf_project(tmp_path / "door")
+    first = prepare(src, data_dir=tmp_path / "data")
+    (Path(first["work"]) / "build").mkdir()
+    (Path(first["work"]) / "build" / "app.bin").write_text("built")
+
+    again = prepare(src, data_dir=tmp_path / "data")
+
+    assert again["status"] == "unchanged"
+    assert (Path(again["work"]) / "build" / "app.bin").exists()
