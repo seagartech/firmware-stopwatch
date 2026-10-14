@@ -21,6 +21,7 @@ from fsw.scenario import to_page
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, find_idf, pick_idf
+from fsw.platforms.espidf.install import MacInstaller, choose_version
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
 
@@ -104,6 +105,12 @@ def _default_builder(work, target, board, idf_path, on_progress):
     return EspIdf(idf_path).build(work, target=target, board=board, on_progress=on_progress)
 
 
+class InstallBody(BaseModel):
+    idf_min: str | None = None
+    dest: str | None = None
+    tools: str | None = None  # 编译器等工具放哪；不写就用乐鑫默认的位置
+
+
 class KeyTestBody(BaseModel):
     provider: str
     key: str | None = None
@@ -128,13 +135,22 @@ class SyncBody(BaseModel):
     skipped: list[str] = []
 
 
-def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None):
+def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     data_dir = Path(data_dir) if data_dir else load_config().data_dir
     uploads = ascii_work_root(data_dir) / "_uploads"
     picker = picker or native_pick
-    idf_finder = idf_finder or (lambda: find_idf(extra=load_config().idf_path))
+    installs_rec = data_dir / "idf-installs.json"  # 码表帮装过的编译工具，记下位置以后也能找到
+
+    def _recorded():
+        try:
+            return json.loads(installs_rec.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    idf_finder = idf_finder or (lambda: find_idf(extra=[load_config().idf_path, *_recorded()]))
+    installer_factory = installer_factory or (lambda version, dest, tools=None: MacInstaller(dest, version, tools_path=tools))
     llm_factory = llm_factory or (lambda provider, key: llms.make(provider, key, cfg=load_config()))
     state = {"flow": None, "demo": None, "settings": None}
 
@@ -292,6 +308,58 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.get("/api/bgbuild")
     def bgbuild_status():
         return bg["job"] or {"state": "idle", "pct": 0}
+
+    # ---- 编译工具帮装（决策 48）：后台跑乐鑫官方安装方式，点"保存"回首页也照样在装 ----
+    inst = {"job": None, "args": None}
+
+    def _install(version, dest, tools=None):
+        job = {"state": "running", "step": 0, "pct": 0, "log": "", "message": "", "version": version,
+               "path": str(dest), "started": time.time()}
+        inst["job"], inst["args"] = job, (version, dest, tools)
+
+        def event(e):
+            job.update({k: v for k, v in e.items() if k in ("step", "pct", "log")})
+
+        def run():
+            try:
+                r = installer_factory(version, dest, tools).run(on_event=event)
+            except Exception as e:
+                r = {"ok": False, "step": job["step"], "message": f"安装中途出错：{e}", "log": str(e)}
+            job["seconds"] = round(time.time() - job["started"], 1)
+            if r.get("ok"):
+                job.update(state="done", pct=100, message="✓ 编译工具装好了")
+                rec = _recorded()
+                if str(dest) not in rec:
+                    installs_rec.parent.mkdir(parents=True, exist_ok=True)
+                    installs_rec.write_text(json.dumps(rec + [str(dest)], ensure_ascii=False), encoding="utf-8")
+            else:
+                job.update(state="failed", step=r.get("step", job["step"]), message=r.get("message", ""),
+                           log=r.get("log") or job["log"])
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @app.post("/api/install/start")
+    def install_start(body: InstallBody):
+        if inst["job"] and inst["job"]["state"] == "running":
+            return inst["job"]
+        version = choose_version(body.idf_min)
+        if not version:
+            raise HTTPException(409, f"码表还不认识 ESP-IDF {body.idf_min} 这么新的版本，请照手动安装步骤自己装")
+        dest = Path(body.dest).expanduser() if body.dest else Path.home() / "esp" / f"esp-idf-{version}"
+        return _install(version, dest, Path(body.tools).expanduser() if body.tools else None)
+
+    @app.post("/api/install/retry")
+    def install_retry():
+        if not inst["args"]:
+            raise HTTPException(409, "还没开始装")
+        if inst["job"]["state"] == "running":
+            return inst["job"]
+        return _install(*inst["args"])  # 已下好的不重下，从断的地方接着装
+
+    @app.get("/api/install")
+    def install_status():
+        return inst["job"] or {"state": "idle"}
 
     @app.get("/api/env")
     def env_status():

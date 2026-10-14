@@ -49,7 +49,7 @@ def find_idf(home=None, env=None, extra=None):
     """找电脑上装的乐鑫编译工具：环境变量 IDF_PATH、设置里写的、常见位置、乐鑫安装器的记录。只按位置找文件。"""
     home = Path(home) if home else Path.home()
     env = os.environ if env is None else env
-    cands = [env.get("IDF_PATH"), extra]
+    cands = [env.get("IDF_PATH")] + (list(extra) if isinstance(extra, (list, tuple)) else [extra])
     cands += sorted(str(p) for p in (home / "esp").glob("esp-idf*")) if (home / "esp").is_dir() else []
     cands += [str(home / "esp" / "esp-idf")]
     rec = home / ".espressif" / "idf-env.json"
@@ -133,16 +133,24 @@ class EspIdf:
         self.runner, self._env, self.list_ports, self.sleep = runner, env, list_ports, sleep
 
     # ---- 加载乐鑫的环境（相当于在终端里先 source export.sh）----
+    def export_env(self):
+        """跑 export 脚本时用的环境：码表帮装的编译工具，它自己的工具放在另一个地方（.fsw_tools_path 里记着）。"""
+        env = dict(os.environ)
+        rec = self.idf_path / ".fsw_tools_path"
+        if rec.exists():
+            env["IDF_TOOLS_PATH"] = rec.read_text(encoding="utf-8").strip()
+        return env
+
     def env(self):
         if self._env is None:
             if os.name == "nt":
                 cmd = ["powershell", "-NoProfile", "-Command",
                        f'. "{self.idf_path / "export.ps1"}" *> $null; Get-ChildItem env: | ForEach-Object {{ "$($_.Name)=$($_.Value)" }}']
-                out = subprocess.run(cmd, capture_output=True, text=True).stdout.splitlines()
+                out = subprocess.run(cmd, capture_output=True, text=True, env=self.export_env()).stdout.splitlines()
                 pairs = [l.split("=", 1) for l in out if "=" in l]
             else:
                 cmd = ["bash", "-c", f'. "{self.idf_path / "export.sh"}" >/dev/null 2>&1 && env -0']
-                out = subprocess.run(cmd, capture_output=True).stdout.decode("utf-8", "replace")
+                out = subprocess.run(cmd, capture_output=True, env=self.export_env()).stdout.decode("utf-8", "replace")
                 pairs = [l.split("=", 1) for l in out.split("\0") if "=" in l]
             self._env = dict(pairs)
             if "IDF_PYTHON_ENV_PATH" not in self._env:

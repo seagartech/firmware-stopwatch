@@ -109,3 +109,35 @@ def test_key_test_button_uses_the_chosen_model(tmp_path):
 def test_environment_reports_installed_idf(tmp_path):
     c = TestClient(create_app(data_dir=tmp_path / "data", idf_finder=lambda: [{"path": "/x/esp-idf-v6.1", "version": "6.1.0"}]))
     assert c.get("/api/env").json()["idf"] == [{"path": "/x/esp-idf-v6.1", "version": "6.1.0"}]
+
+
+def test_install_job_reports_steps_and_can_retry(tmp_path):
+    runs = []
+
+    def factory(version, dest, tools=None):
+        class Fake:
+            def run(self, on_event):
+                runs.append(version)
+                on_event({"state": "running", "step": 2, "pct": 45, "log": "Downloading xtensa 45%"})
+                if len(runs) == 1:
+                    return {"ok": False, "step": 2, "message": "第 3 步「下载编译器等工具」没装成：连不上乐鑫的服务器", "log": "timed out"}
+                return {"ok": True, "path": str(dest)}
+        return Fake()
+
+    import time
+    c = TestClient(create_app(data_dir=tmp_path / "d", installer_factory=factory, idf_finder=lambda: []))
+    r = c.post("/api/install/start", json={"idf_min": "6.0.1"}).json()
+    assert r["version"] == "v6.1"
+    for _ in range(100):
+        s = c.get("/api/install").json()
+        if s["state"] in ("done", "failed"):
+            break
+        time.sleep(0.02)
+    assert s["state"] == "failed" and s["step"] == 2 and "连不上" in s["message"]
+    c.post("/api/install/retry")
+    for _ in range(100):
+        s = c.get("/api/install").json()
+        if s["state"] == "done":
+            break
+        time.sleep(0.02)
+    assert s["state"] == "done" and len(runs) == 2

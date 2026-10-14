@@ -170,7 +170,7 @@ let envBack='home',compPending=false;
 function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="background:var(--${c})"></i>${t}</span>`;
  const llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
  const a=[envKey()?L('ok',`大模型：${llmName}，${setLLM==='cc'?'已登录':'密钥已填'}`):L('bad','大模型：还没填密钥'),L('muted','设备：没插上（烧录前插上就行）')];
- if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v${realIdf()?shortV(realIdf().version):'6.1'}`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
+ if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装 ${Math.round(((inst.step||0)+(inst.pct||0)/100)/5*100)}%`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v${realIdf()?shortV(realIdf().version):'6.1'}`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
  return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
 let toastT=null;function toast(m){const t=document.getElementById('toast');t.textContent=m;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},1600)}
 const recentList=()=>`<div class="list">${PROJ.map(p=>`<div class="lrow"><button data-open="${p.scene}"><span><b>${p.name}</b>　<span class="note">${p.what} · ${p.last}</span></span><span class="num">${p.metric} ${f(p.now)} 秒　${arrow(p.now,p.prev)}</span></button><button class="pill" data-retest="${p.scene}">改完了，再测一次</button></div>${p.fswOnDevice&&!restored[p.scene]?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-restore="${p.scene}">还原成原版</button></div>`:''}`).join('')}</div>`;
@@ -228,7 +228,7 @@ m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件�
   <section class="panel"><h2>以前测过的</h2>${recentList()}</section></div>`}}
 };
 
-let keyErr='',keyDraft='',setOS='mac',setLLM='claude',keyTested=false,setFirst=true,envMark=false;
+let keyErr='',keyDraft='',setOS=/Win/i.test(navigator.platform)?'win':'mac',setLLM='claude',keyTested=false,setFirst=true,envMark=false;
 // 帮装（决策 48）：0 没开始，1 正在装，2 装好，3 装失败；样子里用定时器假装进度
 let inst={st:0,step:0,pct:0,log:'',timer:null};
 const INSTALL={
@@ -245,24 +245,33 @@ const INSTALL={
   ['下载编译器等工具','共 9 个','Downloading xtensa-esp-elf-14.2.0 … {p}%'],
   ['试编译一次','编个官方小例子，确认真的能用','Project build complete.']]}};
 function compOK(){return !setFirst||inst.st===2||!!realIdf()}
-function instStop(){if(inst.timer){clearInterval(inst.timer);inst.timer=null}}
-function instStart(fail){instStop();inst={st:1,step:0,pct:0,log:'',timer:null};const S=INSTALL[setOS].steps;
- inst.timer=setInterval(()=>{inst.pct+=S[inst.step][2].includes('{p}')?9:34;
-  if(fail&&inst.step===2&&inst.pct>=45){instStop();inst.st=3;inst.log='curl: (28) Connection timed out after 30000 ms';if(page==='settings')render();return}
-  if(inst.pct>=100){inst.step++;inst.pct=0;if(inst.step>=S.length){instStop();inst.st=2;if(compPending){applied.comp=true;compPending=false}toast('✓ 编译工具装好了');if(page==='settings')render();return}}
-  inst.log=S[inst.step][2].replace('{p}',Math.min(inst.pct,99));const b=document.getElementById('instbox');if(page==='settings'&&b)b.innerHTML=installBox()},450)}
+function instStop(){if(inst.timer){clearInterval(inst.timer);inst.timer=null}if(typeof instPoll!=='undefined'&&instPoll){clearInterval(instPoll);instPoll=null}}
+// 帮装（真的）：后台跑乐鑫官方安装方式，这里每 0.8 秒问一次；点"保存"回首页也照样在装
+let instPoll=null;
+const INSTV=()=>inst.version||'v6.1',instPath=()=>(inst.path||INSTALL[setOS].path).replace(/^\/Users\/[^/]+/,'~');
+function instApply(j){inst.step=j.step||0;inst.pct=j.pct||0;inst.log=j.log||'';inst.version=j.version;inst.path=j.path;inst.msg=j.message;
+ if(j.state==='done'){inst.st=2;clearInterval(instPoll);instPoll=null;if(compPending){applied.comp=true;compPending=false}
+  fetch('/api/env').then(r=>r.json()).then(e=>{IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);render()});toast('✓ 编译工具装好了')}
+ else if(j.state==='failed'){inst.st=3;clearInterval(instPoll);instPoll=null}
+ const b=document.getElementById('instbox');if(page==='settings'&&b)b.innerHTML=installBox();
+ const lt=document.querySelector('.lights');if(lt&&page==='home')lt.outerHTML=envStatus();
+ if(j.state!=='running'&&page==='settings')render()}
+async function instStart(retry){instStop();inst={st:1,step:0,pct:0,log:'',timer:null,version:inst.version,path:inst.path};render();
+ const r=await fetch(retry?'/api/install/retry':'/api/install/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idf_min:REAL?REAL.idf_min:null})});
+ const j=await r.json();if(!r.ok){inst.st=3;inst.msg=j.detail;render();return}
+ instApply(j);instPoll=setInterval(async()=>{try{instApply(await (await fetch('/api/install')).json())}catch(e){}},800)}
 function installBox(){const I=INSTALL[setOS],S=I.steps,n=S.length;
  const list=S.map(([t,d],i)=>{const done=inst.st===2||i<inst.step,cur=inst.st!==2&&i===inst.step,bad=inst.st===3&&cur;
-  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'✕':i+1}</b><span>${t}<small>${d}</small>${cur&&inst.st===1&&S[i][2].includes('{p}')?`<span class="pbar"><i style="width:${inst.pct}%"></i></span>`:''}</span></li>`}).join('');
- if(inst.st===0)return `<div class="status"><span><i class="dot" style="background:var(--warn)"></i>没找到乐鑫编译工具。这个项目要 6.0.1 或更新，码表帮你装 v6.1</span></div>
-  <div class="acts" style="justify-content:flex-start;margin:10px 0"><button class="btn pri" data-inst="go">帮我安装 v6.1</button><button class="pill">手动指定安装位置</button></div>
-  <p class="note">调用乐鑫官方的安装方式，装到 <span class="code">${I.path}</span>。要下载约 3 GB，一般 10～30 分钟（估算，看网速）。装的时候可以先去做别的，码表开着就行。</p>`;
- const head=inst.st===1?`正在装：第 ${inst.step+1} 步 / 共 ${n} 步`:inst.st===2?`装好了：v6.1，在 <span class="code">${I.path}</span>`:`第 ${inst.step+1} 步"${S[inst.step][0]}"没装成：连乐鑫服务器超时了`;
+  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'✕':i+1}</b><span>${t.replace('v6.1',INSTV())}<small>${d}</small>${cur&&inst.st===1&&S[i][2].includes('{p}')?`<span class="pbar"><i style="width:${inst.pct}%"></i></span>`:''}</span></li>`}).join('');
+ if(inst.st===0)return `<div class="status"><span><i class="dot" style="background:var(--warn)"></i>没找到乐鑫编译工具。这个项目要 ${IDF()}，码表帮你装 ${INSTV()}</span></div>
+  <div class="acts" style="justify-content:flex-start;margin:10px 0"><button class="btn pri" data-inst="go">帮我安装 ${INSTV()}</button><button class="pill">手动指定安装位置</button></div>
+  <p class="note">调用乐鑫官方的安装方式，装到 <span class="code">${instPath()}</span>。要下载约 3 GB，一般 10～30 分钟（估算，看网速）。装的时候可以先去做别的，码表开着就行。</p>`;
+ const head=inst.st===1?`正在装：第 ${inst.step+1} 步 / 共 ${n} 步`:inst.st===2?`装好了：${INSTV()}，在 <span class="code">${instPath()}</span>`:(inst.msg||`第 ${inst.step+1} 步"${S[inst.step][0]}"没装成`);
  const color=inst.st===1?'var(--speak)':inst.st===2?'var(--ok)':'var(--bad)';
  return `<div class="status"><span><i class="dot" style="background:${color}"></i>${head}</span></div>
   <ol class="isteps">${list}</ol>
-  ${inst.st!==2?`<div class="ilog"><span class="note">最新一行</span><code>${inst.log||'…'}</code><button class="pill">完整日志</button></div>`:''}
-  ${inst.st===3?`<p class="note">已下载的部分留着，重试会从断的地方接着装。多次失败可以换网络，或照手动步骤自己装，装好这里也会自动变绿。</p><div class="acts" style="justify-content:flex-start;margin:6px 0 10px"><button class="btn pri" data-inst="go">重试</button><button class="btn" data-inst="manual">看手动安装步骤</button></div>`:''}
+  ${inst.st!==2?`<div class="ilog"><span class="note">最新一行</span><code>${htmlEsc(inst.log)||'…'}</code><button class="pill">完整日志</button></div>`:''}
+  ${inst.st===3?`<p class="note">已下载的部分留着，重试会从断的地方接着装。多次失败可以换网络，或照手动步骤自己装，装好这里也会自动变绿。</p><div class="acts" style="justify-content:flex-start;margin:6px 0 10px"><button class="btn pri" data-inst="retry">重试</button><button class="btn" data-inst="manual">看手动安装步骤</button></div>`:''}
   ${inst.st===1?`<p class="note">关掉这页没关系，安装在后台继续；关掉码表会停，下次打开从断的地方接着装。</p>`:''}`}
 function settingsPage(){
   const first=setFirst;
@@ -289,7 +298,6 @@ function settingsPage(){
   </section>
   <section class="panel ${page==='settings'&&envMark&&hSrc&&!compOK()&&inst.st!==1?'miss':''}" id="set-idf"><h2>${first?(done[1]?'✓ ':'② '):''}乐鑫编译工具（ESP-IDF）</h2>
    <p class="note" style="margin-top:0">码表打开时自动在电脑上找：常见安装位置、系统里记下的安装路径、乐鑫安装器留下的记录。只是按位置找文件，不用大模型。</p>
-   ${first?`<div class="tabs seg" role="group" aria-label="样子演示：电脑系统" style="margin-bottom:10px"><span class="note" style="align-self:center;margin-right:6px">样子演示，看哪台电脑：</span><button data-os="mac" aria-pressed="${setOS==='mac'}">Mac</button><button data-os="win" aria-pressed="${setOS==='win'}">Windows</button>${inst.st===0?'<button class="pill" data-inst="fail" style="margin-left:8px">演示：安装失败</button>':''}</div>`:''}
    ${compiler}
    <details class="manual" id="manual" ${inst.st===3&&inst.manual?'open':''}><summary>手动安装步骤</summary><p class="note" style="margin:4px 0">自己装、或帮装失败时用。</p>
    ${first?'':`<div class="tabs seg" role="group" aria-label="电脑系统"><button data-os="mac" aria-pressed="${setOS==='mac'}">Mac</button><button data-os="win" aria-pressed="${setOS==='win'}">Windows</button></div>`}
@@ -1010,7 +1018,7 @@ document.addEventListener('click',e=>{
   const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-board');b&&b.focus();return}const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
   const sv=e.target.closest('[data-setvar]');if(sv){setFirst=sv.dataset.setvar==='first';applied={key:false,comp:false};keyTested=false;instStop();inst={st:0,step:0,pct:0,log:'',timer:null};render();return}
   const os=e.target.closest('[data-os]');if(os){setOS=os.dataset.os;if(inst.st!==2){instStop();inst={st:0,step:0,pct:0,log:'',timer:null}}render();return}
-  const ins=e.target.closest('[data-inst]');if(ins){const a=ins.dataset.inst;if(a==='manual'){inst.manual=true;render();const m=document.getElementById('manual');m&&m.scrollIntoView({block:'center'});return}instStart(a==='fail');render();return}
+  const ins=e.target.closest('[data-inst]');if(ins){const a=ins.dataset.inst;if(a==='manual'){inst.manual=true;render();const m=document.getElementById('manual');m&&m.scrollIntoView({block:'center'});return}instStart(a==='retry');render();return}
   const svr=e.target.closest('[data-stepvar]');if(svr){stepsVar=svr.dataset.stepvar;render();return}
   const fc=e.target.closest('[data-face]');if(fc){const a=fc.dataset.face;if(a!=='reset')stepsChanged();alsoFace=a==='reset'?null:a==='yes';render();return}
   const mp=e.target.closest('[data-map]');if(mp){mapSel=mp.dataset.map;mapOpen=true;render();return}
