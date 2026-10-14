@@ -1,4 +1,20 @@
+# Python 环境和缓存
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# 编译产物
+build/
+dist/
+*.egg-info/
+
+# 本机设置和密钥（只放 ~/.config/firmware-stopwatch/，不进仓库）
+.env
+.env.*
+config.toml
+*_key.txt
+key.txt
+
+# 日志（测试用的模拟日志在 tests/ 下，以 .txt 存，不受影响）
+*.log
