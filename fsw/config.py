@@ -34,6 +34,7 @@ class Config:
     idf_path: str | None = None
     serial_port: str | None = None
     data_dir: Path = field(default_factory=lambda: Path.home() / "firmware-stopwatch-data")
+    reuse_last: bool = True  # 源码没变时，直接用上次的识别结果，不再调用大模型
     file_error: str | None = None
 
     def api_key(self, provider):
@@ -95,6 +96,7 @@ def load_config(config_dir=None, env=None):
     cfg.llm_provider = env.get("FSW_LLM_PROVIDER") or setting("llm", "provider")
     cfg.idf_path = env.get("IDF_PATH") or setting("toolchain", "idf_path")
     cfg.serial_port = env.get("FSW_SERIAL_PORT") or setting("device", "serial_port")
+    cfg.reuse_last = setting("llm", "reuse_last") != "no"
     data_dir = env.get("FSW_DATA_DIR") or setting("output", "data_dir")
     if data_dir:
         cfg.data_dir = Path(data_dir).expanduser()
@@ -108,7 +110,7 @@ def load_config(config_dir=None, env=None):
     return cfg
 
 
-SECTIONS = {"provider": ("llm", "provider"), "idf_path": ("toolchain", "idf_path"),
+SECTIONS = {"provider": ("llm", "provider"), "reuse_last": ("llm", "reuse_last"), "idf_path": ("toolchain", "idf_path"),
             "serial_port": ("device", "serial_port"), "data_dir": ("output", "data_dir")}
 
 
@@ -116,7 +118,7 @@ def _toml_str(s):
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def save_config(config_dir, *, provider=None, key=None, idf_path=None, serial_port=None, data_dir=None):
+def save_config(config_dir, *, provider=None, key=None, idf_path=None, serial_port=None, data_dir=None, reuse_last=None):
     """设置页的"保存"：没传的项保持原样。密钥单独写成只有自己能读的文件，不进 config.toml。"""
     config_dir = Path(config_dir).expanduser()
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -126,7 +128,8 @@ def save_config(config_dir, *, provider=None, key=None, idf_path=None, serial_po
         data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
         data = {}
-    given = {"provider": provider, "idf_path": idf_path, "serial_port": serial_port, "data_dir": data_dir}
+    given = {"provider": provider, "idf_path": idf_path, "serial_port": serial_port, "data_dir": data_dir,
+             "reuse_last": None if reuse_last is None else ("yes" if reuse_last else "no")}
     for name, value in given.items():
         if value is not None:
             sec, k = SECTIONS[name]

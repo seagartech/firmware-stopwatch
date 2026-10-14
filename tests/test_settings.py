@@ -151,3 +151,11 @@ def test_quick_env_check_skips_claude_code(make):
     env = c.get("/api/env?cc=0").json()
     assert env == {"idf": [{"path": "/x/esp-idf", "version": "6.1.0"}], "claude_code": None, "ports": ["COM3"]}
     assert calls == []
+
+
+def test_reuse_last_result_choice_is_saved(make, tmp_path):
+    c = make()
+    assert c.get("/api/state").json()["settings"]["reuse_last"] is True
+    c.post("/api/settings", json={"reuse": False})
+    assert load_config(config_dir=tmp_path / "cfg", env={}).reuse_last is False
+    assert make().get("/api/state").json()["settings"]["reuse_last"] is False

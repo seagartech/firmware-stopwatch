@@ -194,8 +194,11 @@ async function realPick(body,label,board){hErr='';envBack='home';hBoardNeed=fals
  let r;try{r=await api('/api/source/inspect',{...body,board:board||null})}catch(e){r={ok:false,message:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
  hReading=false;
  if(!r.ok){REAL=null;hSrc='';hStage=0;hErr=r.kind==='multiple'?`<b>${r.message}</b><div class="acts" style="margin:8px 0 0">${r.projects.map(p=>`<button class="btn" data-pickroot="${p.root.replace(/"/g,'&quot;')}">${p.name}<span class="note">　${p.root}</span></button>`).join('')}</div>`:r.message;render();return}
- REAL={...r.info,body,label:hSrc,work:r.work};pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');
- hScan=1;if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);hScanT=setTimeout(()=>{hScan=2;if(page==='home')render()},2500)}
+ REAL={...r.info,body,label:hSrc,work:r.work,project_dir:r.project_dir,fingerprint:r.fingerprint,ai:null};pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');IDENT=null;
+ hScan=1;if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);
+ // AI 推荐：只给大模型项目概况（目录、说明文件），一般十几秒；没设置大模型就不扫
+ if(r.status!=='needs_board'&&envKey()){const me=REAL;fetch('/api/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:r.work,name:REAL.name,chip:REAL.chip})}).then(x=>x.ok?x.json():{phrases:[]}).catch(()=>({phrases:[]})).then(j=>{if(REAL!==me)return;REAL.ai=j.phrases||[];hScan=2;if(page==='home')render()})}
+ else{REAL.ai=[];hScan=2;render()}}
 function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
  const q=hBoardQ.trim().toLowerCase(),list=REAL.boards.filter(b=>!q||b.id.toLowerCase().includes(q)||(b.chip||'').toLowerCase().includes(q));
  const groups={};list.forEach(b=>{const g=b.id.includes('/')?b.id.split('/')[0]:'其他';(groups[g]=groups[g]||[]).push(b)});
@@ -214,9 +217,9 @@ async function uploadDrop(items){const tok=Math.random().toString(36).slice(2,12
  await Promise.all([...Array(8)].map(put));
  realPick({upload:tok},label)}
 function chips(){const C=(t,x)=>`<button class="pill" data-fill="${x}">${x}</button>`;
- const hist=PROJ.filter(p=>p.path===hSrc).map(p=>p.what),ai=FF[scene].ai,gen=['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'];
+ const hist=PROJ.filter(p=>p.path===hSrc).map(p=>p.what),ai=REAL&&REAL.ai?REAL.ai:FF[scene].ai,gen=['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'];
  const row=(lbl,arr)=>`<div class="chiprow"><span class="note">${lbl}</span><div class="pills">${arr.map(x=>C(0,x)).join('')}</div></div>`;
- return (hist.length?row('这个项目测过的',hist):'')+(hScan===2?row('AI 推荐',ai):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note"><span class="spin"></span> 正在扫这个固件有哪些流程，约 10～20 秒（估算）。不用等，可以直接写。</span></div>`)+row('通用例子',gen)+`<p class="note" style="margin:8px 0 0">不知道测什么，就从「AI 推荐」里挑一个。</p>`}
+ return (hist.length?row('这个项目测过的',hist):'')+(hScan===2?(ai.length?row('AI 推荐',ai):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note">${REAL&&REAL.needs_board?'选好板子后，AI 会扫一遍这个固件。':envKey()?'这次没扫出来，直接写就行。':'设置好大模型后，选完固件会自动扫一遍。'}</span></div>`):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note"><span class="spin"></span> 正在扫这个固件有哪些流程，约 10～20 秒（估算）。不用等，可以直接写。</span></div>`)+row('通用例子',gen)+`<p class="note" style="margin:8px 0 0">不知道测什么，就从「AI 推荐」里挑一个。</p>`}
 const examples=`<div class="pills"><span class="note">比如：</span>${['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'].map(x=>`<button class="pill" data-fill="${x}">${x}</button>`).join('')}</div>`;
 
 const HOME={
@@ -304,7 +307,7 @@ function settingsPage(){
    ${setLLM==='claude'?`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 Claude 开发者平台 console.anthropic.com，用邮箱注册登录</li><li>先在"账单"里充值（最少 5 美元）</li><li>左边点"API Keys"→"Create Key"，起个名字比如"码表"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`:`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 DeepSeek 开放平台 platform.deepseek.com，用手机号注册登录</li><li>先在"充值"里充一点（10 元就够试用）</li><li>左边点"API keys"→"创建 API key"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`}
    <p class="note" style="margin:6px 0 0">已经有 Claude 会员、电脑上装了 Claude Code？选上面第三项"本机已登录的 Claude Code"，不用密钥。</p></details>`}
    <span class="note">${keyTested?'<span style="color:var(--ok)">✓ 能用</span>　':''}只存在这台电脑的 <span class="code">~/.config/firmware-stopwatch/</span>，不上传、不进代码。</span></div>`}
-   <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px"><input type="checkbox" id="set-reuse" checked>源码没变时，直接用上次的识别结果，不再调用大模型（省钱、省时间）</label>
+   <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px"><input type="checkbox" id="set-reuse" ${reuseLast?'checked':''}>源码没变时，直接用上次的识别结果，不再调用大模型（省钱、省时间）</label>
   </section>
   <section class="panel ${page==='settings'&&envMark&&hSrc&&!compOK()&&inst.st!==1?'miss':''}" id="set-idf"><h2>${first?(done[1]?'✓ ':'② '):''}乐鑫编译工具（ESP-IDF）</h2>
    <p class="note" style="margin-top:0">码表打开时自动在电脑上找：常见安装位置、系统里记下的安装路径、乐鑫安装器留下的记录。只是按位置找文件，不用大模型。</p>
@@ -431,11 +434,25 @@ function bgStart(){if(REAL&&REAL.work)return bgStartReal();clearInterval(bgT);bg
  bgT=setInterval(()=>{if(!envComp())return;bgSec+=7;const done=bgDone();
   bgPill();if(pop==='bg')document.getElementById('popdlg').innerHTML=popHTML();
   if(done){clearInterval(bgT);bgT=null;bgShownDone=Date.now();setTimeout(bgPill,5100);if(page==='flash'||page==='steps'||(page==='home'&&hStage===3))render()}},400)}
-function readStart(){clearInterval(readT);stepsRead=1;readSec=0;readFound=0;if(bgSrc!==hSrc)bgStart();
+// 真找：后台调用大模型只读源码，这里每秒问一次进度（已等多少秒、读了几处代码、已找到哪几个）
+let IDENT=null,reuseLast=true;
+const LLMN={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code','claude-api':'Claude','claude-code':'本机 Claude Code'};
+const usedLLM=()=>LLMN[(IDENT&&IDENT.provider)||SAVED.llm_provider||setLLM];
+const mmss=x=>{x=Math.round(x||0);return x<60?`${x} 秒`:`${Math.floor(x/60)} 分 ${x%60} 秒`};
+function identApply(j){IDENT=j;readSec=Math.round(j.seconds||0);readFound=(j.found||[]).length;
+ if(j.state==='done'){clearInterval(readT);readT=null;FF[scene]={...FF[scene],...j.page};mapSel=j.page.mapSel;dropped=new Set();edits={};added=[];alsoFace=true;applyScene();readFound=STEPS.length;stepsRead=2;render();return}
+ if(j.state==='failed'){clearInterval(readT);readT=null;stepsRead=3;render();return}
+ const b=document.getElementById('readbox');if(b)b.innerHTML=readBox()}
+async function identStart(retry){clearInterval(readT);stepsRead=1;readSec=0;readFound=0;IDENT=null;if(bgSrc!==hSrc)bgStart();
+ const r=await fetch(retry?'/api/identify/retry':'/api/identify/start',{method:'POST',headers:{'Content-Type':'application/json'},body:retry?'{}':JSON.stringify({work:REAL.work,what:hSay,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint,chip:CHIP(),reuse:reuseLast})});
+ const j=await r.json();if(!r.ok){IDENT={state:'failed',kind:'start',message:j.detail,found:[]};stepsRead=3;render();return}
+ identApply(j);if(stepsRead===1)readT=setInterval(async()=>{try{identApply(await (await fetch('/api/identify')).json())}catch(e){}},1000)}
+function readStart(){if(REAL&&REAL.work)return identStart();clearInterval(readT);stepsRead=1;readSec=0;readFound=0;if(bgSrc!==hSrc)bgStart();
  readT=setInterval(()=>{readSec+=7;if(readSec>=42)readFound=Math.min(STEPS.length,readFound+2);
   if(readFound>=STEPS.length&&readSec>=70){clearInterval(readT);readT=null;stepsRead=2;if(page==='home'&&hStage===3){render()}else if(page==='steps')render();return}
   const b=document.getElementById('readbox');if(b)b.innerHTML=readBox()},400)}
-function readBox(){const llm={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
+function readBox(){const llm=usedLLM();
+ if(REAL&&IDENT)return readBoxReal(llm);
  const st=stepsRead===2?3:readSec<6?0:readFound===0?1:2;
  const row=(i,t,d)=>`<li class="istep ${i<st?'ok':i===st?'cur':''}"><b>${i<st?'✓':i+1}</b><span>${t}<small>${d}</small></span></li>`;
  return `<ol class="isteps">
@@ -444,10 +461,21 @@ function readBox(){const llm={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Cla
   ${row(2,'它边回答，这里边列出找到的步骤',`${stepsRead===2?'找完了，共':'已找到'} ${readFound} 个`)}</ol>
   ${stepsRead===2?foundList():`${readFound?`<div class="list">${STEPS.slice(0,readFound).map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} 第 ${x.l} 行</span></div>`).join('')}</div>`:''}
   <p class="note">只发了代码，没发任何"标准答案"；结果先存在本机，源码没变下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}`}
+function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,found=J.found||[];
+ const st=done?3:fail?(found.length?2:1):!found.length&&readSec<6?0:found.length?2:1;
+ const row=(i,t,d)=>`<li class="istep ${i<st?'ok':i===st?(fail?'bad':'cur'):''}"><b>${i<st?'✓':fail&&i===st?'!':i+1}</b><span>${t}<small>${d}</small></span></li>`;
+ if(J.reused)return `<ol class="isteps">${row(0,'挑出要读的代码','码表自己做，不用大模型')}${row(1,'源码和要测的都没变，直接用上次的结果','没有调用大模型，不花钱（设置页可以关掉这个）')}${row(2,'列出找到的步骤',`共 ${STEPS.length} 个`)}</ol>${foundList()}`;
+ return `<ol class="isteps">
+  ${row(0,'挑出要读的代码',`码表自己做，不用大模型：${htmlEsc(REAL.name)} 复制好的那份源码，大模型只能读、改不了任何文件`)}
+  ${row(1,`交给 ${llm}，等它读完`,`已等 ${mmss(readSec)}。大模型要边读代码边想，这一步没有百分比，一般 1～3 分钟（估算）`)}
+  ${row(2,'它边回答，这里边列出找到的步骤',`${done?'找完了，共':'已找到'} ${done?STEPS.length:found.length} 个`)}</ol>
+  ${done?foundList():`${found.length?`<div class="list">${found.map((n,k)=>{const at=((J.at||[])[k]||'').match(/([^/\s]+):(\d+)$/);return `<div class="srow"><b>${htmlEsc(n)}</b>${at?`<span class="note">${htmlEsc(at[1])} 第 ${at[2]} 行</span>`:''}</div>`}).join('')}</div>`:''}`}
+  ${fail?`<p class="note" style="color:var(--bad)">✕ ${J.message||'没找完'}</p><div class="acts" style="justify-content:flex-start;margin:6px 0"><button class="btn pri" data-idretry="1">重试</button><button class="btn" data-go="settings">到设置页换大模型</button>${/no_start|no_end/.test(J.kind||'')?'<button class="btn" data-mclose="1">换个说法写</button>':''}</div>`:''}
+  <p class="note">只给它读代码，没给任何"标准答案"；结果存在本机，源码和要测的都没变，下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}
 function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
  return `<p style="margin:12px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
    <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
-   <p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>`}
+   ${F.sideAsk?`<p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>`:''}`}
 let bgShownDone=0;
 const BGTIP='原始代码：你选的那份源码，码表复制一份，一个字没改、没插计时点。<br>点「开始找关键步骤」时开始编，这时源码和要测的内容都定了。插完计时点后的「编译」要用它，只重编改过的几个文件（验证期实测：从头编 119 秒，只重编 80 秒）。<br>没编完，只有「编译」那一步会先等它，其他步骤照常做。你原来的文件夹不动。';
 function bgPill(){const el=document.getElementById('bgpill');if(!el)return;let h='';
@@ -477,15 +505,16 @@ const sureChip=x=>x.sure==='高'?'<span class="chip c-ok">可信度高</span>':x
 function editBox(x){return `<div class="edit"><div class="inrow"><label for="ed-f">文件</label><input type="text" id="ed-f" value="${x.f}"><label for="ed-l">行号</label><input type="text" id="ed-l" value="${x.l}" style="max-width:6em"></div>
  <p class="note" style="margin:4px 0">在你的代码编辑器里找到要计时的那一行，把文件名和行号填这里。改动会记下来：谁、什么时候、从哪改到哪。</p>
  <div class="acts" style="justify-content:flex-start;margin:4px 0 0"><button class="btn" data-edsave="${x.p}">保存位置</button><button class="btn" data-edcancel="1">取消</button></div></div>`}
-function addBox(){const F=FF[scene],A=F.sideAsk;
+let addGuess=null,addErr='';
+function addBox(){const F=FF[scene],A=F.sideAsk||{addEx:'收到服务器回复',addGuess:null};
  if(addSt===0)return `<button class="btn" data-add="open" style="margin-top:12px">＋ 添加步骤</button>`;
  const lines=[['talk',F.ln.talk]].concat(useFace()?[['face',F.ln.face]]:[]);
  const head=`<b>添加一个漏掉的步骤</b>`;
  if(addSt===2)return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 0"><span class="spin"></span> AI 正在读代码，找"${addName}"在哪一行……（调用一次大模型，一般几秒到十几秒）</p></div>`;
- if(addSt===3){const g=A.addGuess;return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 4px">AI 找到的位置：<span class="code">${g.f}</span> 第 ${g.l} 行</p><p class="note" style="margin:0 0 6px">${g.why}。AI 推测的，请核对。</p>
+ if(addSt===3){const g=REAL&&addGuess?addGuess:A.addGuess;return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 4px">AI 找到的位置：<span class="code">${g.f}</span> 第 ${g.l} 行</p><p class="note" style="margin:0 0 6px">${g.why}。AI 推测的，请核对。</p>
   <div class="acts" style="justify-content:flex-start;margin:4px 0 0"><button class="btn" data-add="ok">加上这一步</button><button class="btn" data-add="open">不对，重新描述</button><button class="btn" data-add="cancel">取消</button></div></div>`}
  return `<div class="edit" style="margin-left:0">${head}
-  <div class="inrow"><input type="text" id="add-n" value="${addName}" placeholder="用一句话说这一步是什么，比如：${A.addEx}"></div>
+  <div class="inrow"><input type="text" id="add-n" value="${addName}" placeholder="用一句话说这一步是什么，比如：${A.addEx||'收到服务器回复'}"></div>${addErr?`<p class="note" style="color:var(--bad);margin:4px 0">✕ ${addErr}</p>`:''}
   <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0"><span class="note">属于哪条线：</span>${lines.map(([k,t])=>`<button class="pill" data-addline="${k}" aria-pressed="${addLine===k}">${t}</button>`).join('')}</div>
   ${addManual?`<div class="inrow"><label for="add-f">文件</label><input type="text" id="add-f" placeholder="比如 main/xxx.c"><label for="add-l">行号</label><input type="text" id="add-l" style="max-width:6em"></div>`:''}
   <div class="acts" style="justify-content:flex-start;margin:6px 0 0">${addManual?'<button class="btn" data-add="manualok">加上这一步</button>':'<button class="btn" data-add="ai">让 AI 找位置</button><button class="btn" data-add="manual">我知道位置，自己填</button>'}<button class="btn" data-add="cancel">取消</button></div></div>`}
@@ -507,21 +536,23 @@ function stepsA(){const rows=allRows(),all=[...STEPS.filter(x=>x.line==='face'&&
  <p class="note" style="margin:4px 0 6px">你要测的是「${A.main}」。码表读代码时发现：${A.found}。${A.why}也测只多插 ${fc.length} 个计时点，不影响「${A.main}」那条的结果。</p><div class="stable">${fc.map(one).join('')}</div></div>`:''}
  ${addBox()}</section>`}
 function stepsB(){const F=FF[scene],W=760,H=250,main=F.main,n=main.length;
- const pos={};main.forEach((p,i)=>pos[p]=[Math.round(60+i*675/(n-1)),70]);F.branch.nodes.forEach((p,i)=>pos[p]=[pos[F.branch.from][0]+115*(i+1),190]);
+ // 最后一个名字长时（真识别出来的常比演示数据长），右边留出地方，免得被切掉
+ const lastLen=Math.min(9,((S_N[main[n-1]]||{}).n||'').length),span=lastLen>5?W-60-Math.round(lastLen*6.5+4):675;
+ const pos={};main.forEach((p,i)=>pos[p]=[Math.round(60+i*span/(n-1)),70]);F.branch.nodes.forEach((p,i)=>pos[p]=[pos[F.branch.from][0]+115*(i+1),190]);
  const pal=['var(--est)','var(--speak)','var(--face)','var(--ok)','var(--warn)'],fileCol={};STEPS.forEach(x=>{if(!(x.f in fileCol))fileCol[x.f]=pal[Object.keys(fileCol).length%pal.length]});
  const nodes=STEPS.filter(x=>useFace()||x.line!=='face');
  const edge=(a,b,dash)=>{const[x1,y1]=pos[a],[x2,y2]=pos[b];return `<path d="M${x1} ${y1} ${y1===y2?`L${x2} ${y2}`:`C${x1} ${y2} ${x1} ${y2} ${x2} ${y2}`}" fill="none" stroke="var(--line)" stroke-width="2" ${dash?'stroke-dasharray="5 4"':''}/>`};
  const sel=S_N[mapSel]||STEPS[0];
- const sx=(pos[main[F.dash[0]]][0]+pos[main[F.dash[F.dash.length-1]+1]][0])/2;
+ const sx=F.dash.length?(pos[main[F.dash[0]]][0]+pos[main[F.dash[F.dash.length-1]+1]][0])/2:0;
  const br=[F.branch.from,...F.branch.nodes];
  return `<details class="panel mapbox" ${mapOpen?'open':''}><summary data-mapt="1"><b>关键流程地图</b>　<span class="note">点开看${F.mapWhat}在代码里怎么走、经过哪些文件</span></summary><p class="note">圆点是要插计时点的地方，颜色表示在哪个文件；虚线是设备看不见的服务器那段。点圆点看详情。</p>
  <div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:620px" role="img" aria-label="关键流程地图">
-  <rect x="${sx-80}" y="20" width="160" height="22" rx="4" fill="var(--soft)"/><text x="${sx}" y="35" text-anchor="middle" font-size="12" fill="var(--muted)">${F.server}</text>
+  ${F.dash.length&&F.server?`<rect x="${sx-80}" y="20" width="160" height="22" rx="4" fill="var(--soft)"/><text x="${sx}" y="35" text-anchor="middle" font-size="12" fill="var(--muted)">${F.server.length>13?F.server.slice(0,12)+'…':F.server}<title>${F.server}</title></text>`:''}
   ${main.slice(0,-1).map((p,i)=>edge(p,main[i+1],F.dash.includes(i))).join('')}
   ${useFace()?br.slice(0,-1).map((p,i)=>edge(p,br[i+1],i===0&&F.branch.dash)).join(''):''}
   ${nodes.map(x=>{const[cx,cy]=pos[x.p],on=x.p===mapSel,off=dropped.has(x.p);return `<g data-map="${x.p}" style="cursor:pointer;opacity:${off?.35:1}"><circle cx="${cx}" cy="${cy}" r="${on?13:10}" fill="${fileCol[x.f]}" stroke="${on?'var(--fg)':'none'}" stroke-width="2"/>
-   <text x="${cx}" y="${cy+30}" text-anchor="middle" font-size="12.5" fill="var(--fg)">${x.n}</text>${x.sure!=='高'?`<text x="${cx}" y="${cy+46}" text-anchor="middle" font-size="11" fill="var(--warn)">需核对</text>`:''}</g>`}).join('')}
-  ${useFace()?`<text x="${pos[F.branch.from][0]-14}" y="195" text-anchor="end" font-size="12" fill="var(--face)">${F.sideLbl}</text>`:''}
+   <text x="${cx}" y="${cy+30}" text-anchor="middle" font-size="12.5" fill="var(--fg)">${x.n.length>9?x.n.slice(0,8)+'…':x.n}<title>${x.n}</title></text>${x.sure!=='高'?`<text x="${cx}" y="${cy+46}" text-anchor="middle" font-size="11" fill="var(--warn)">需核对</text>`:''}</g>`}).join('')}
+ ${useFace()&&F.branch.nodes.length?`<text x="${pos[F.branch.from][0]-14}" y="195" text-anchor="end" font-size="12" fill="var(--face)">${F.sideLbl}</text>`:''}
  </svg></div>
  <div class="pills" style="margin:4px 0 10px">${Object.entries(fileCol).map(([f,c])=>`<span class="note"><i class="dot" style="background:${c}"></i>${f}</span>`).join('')}</div>
  <div class="detail"><b>${sel.n}</b> ${sureChip(sel)}<div class="note"><span class="code">${sel.f}</span> 第 ${sel.l} 行 · ${sel.why}${sel.note?`<br><span style="color:var(--warn)">要留意：${sel.note}</span>`:''}</div>
@@ -536,11 +567,11 @@ const STEPVAR={a:{label:'A 清单',idea:'A 清单：按发生顺序一条条列�
  c:{label:'C 切成几段',idea:'C 切成几段：不看点，看点之间切出来的段（报告里就按这些段算用时）。不写代码的人也能判断"这样切对不对"。'}};
 function stepsPage(){
  if(stepsRead===0)readStart();
- if(stepsRead<2)return `<div class="stack"><section class="panel"><h1 style="font-size:22px">正在读代码找关键步骤</h1><p class="note" style="margin-top:0">测的是：${hSay?hSay.replace(/^从/,'').replace('到',' → '):FF[scene].measure}　固件：${hSrc||FF[scene].pick.dir}</p><div id="readbox">${readBox()}</div></section></div>`;
- const warn=setLLM==='deepseek'?`<div class="why" style="border-left-color:var(--warn)">这次用的是 DeepSeek，验证期它 9 个只找对 4 个，请每条都仔细核对。</div>`:'';
+ if(stepsRead!==2)return `<div class="stack"><section class="panel"><h1 style="font-size:22px">${stepsRead===3?'没找完':'正在读代码找关键步骤'}</h1><p class="note" style="margin-top:0">测的是：${hSay?hSay.replace(/^从/,'').replace('到',' → '):FF[scene].measure}　固件：${hSrc||FF[scene].pick.dir}</p><div id="readbox">${readBox()}</div></section></div>`;
+ const warn=(REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad)">${htmlEsc(IDENT.page.warn)}</div>`:'')+((REAL&&IDENT?IDENT.provider:setLLM)==='deepseek'?`<div class="why" style="border-left-color:var(--warn)">这次用的是 DeepSeek，验证期它 9 个只找对 4 个，请每条都仔细核对。</div>`:'');
  const body=stepsB()+stepsA();
  const n=live().length,ch=dropped.size;
- return `<div class="stack">${warn}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>读完了，用了 1 分 10 秒，调用 1 次 ${({claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'})[setLLM]}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
+ return `<div class="stack">${warn}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${REAL&&IDENT?(IDENT.reused?'源码和要测的都没变，直接用了上次的结果，没调用大模型':`读完了，用了 ${mmss(IDENT.seconds)}，调用 1 次 ${usedLLM()}`):`读完了，用了 1 分 10 秒，调用 1 次 ${usedLLM()}`}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${REAL?`${htmlEsc(REAL.name)}，${CHIP()}`:FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
  ${body}
  ${flow==='first'&&flowMax>=2?`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">回到插计时点和烧录</button></div></section></div>`:`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch||Object.keys(edits).length||added.length?'；你的删除、修改、添加都会记下来':''}。</span><button class="btn pri" data-goins="1" >确认，插入计时点</button></div></section></div>`}`}
 
@@ -862,24 +893,26 @@ function bgFoundSpan(){return bgFailed()?`<span><i class="dot" style="background
  :!envComp()||bgWaitTool()?`<span><i class="dot" style="background:var(--warn)"></i>${inst.st===1?'编译工具正在后台装，装好就编原版':'编译工具还没装，原版没编：烧录前装好就行'}</span>`
  :!bgDone()?`<span><i class="dot" style="background:var(--warn)"></i>后台还在编原版：${bgPct()}%（不挡下一步，编译那步会等它）</span>`
  :`<span><i class="dot" style="background:var(--ok)"></i>后台已把原版编译通过（${BGTIME()}）</span>`}
-function modalHTML(){const F=FF[scene],llm={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
+const tookTxt=llm=>REAL&&IDENT?(IDENT.reused?'源码和要测的都没变，直接用了上次的结果，没调用大模型':`用时 ${mmss(IDENT.seconds)}，调用 1 次 ${llm}`):`用时 1 分 10 秒，调用 1 次 ${llm}`;
+function modalHTML(){const F=FF[scene],llm=usedLLM();
  const meant=hSay===F.ai[0]?F.measure:hSay.replace(/^从/,'').replace('到',' → ');
  if(hStage===2)return `<h2 id="dlg-t">确认要测的内容</h2>
    <dl class="kv"><dt>项目名称</dt><dd><input type="text" id="h-pname" value="${pName}" style="width:100%;max-width:22em"></dd><dt>固件源码位置</dt><dd class="num">${hSrc}</dd><dt>芯片和板子</dt><dd>${CHIP()}</dd><dt>要测的</dt><dd>${hSay}</dd><dt>码表理解为</dt><dd><b>${meant}</b></dd></dl>
    <p class="note" style="margin:0">接下来码表把代码交给大模型（${llm}），找出中间经过的关键步骤，一般 1～3 分钟。</p>
    <div class="acts"><button class="btn" data-mclose="1" id="dlg-back">关闭</button><button class="btn pri" data-mfind="1">开始找关键步骤</button></div>`;
- if(hStage===3)return `<h2 id="dlg-t">${stepsRead===2?'找完了':'正在找关键步骤'}</h2><p class="note" style="margin-top:0">${pName} · 要测：${meant}</p>${stepsRead===2?`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span>${bgFoundSpan()}</div>`:''}<div id="readbox">${readBox()}</div>
-   <div class="acts" style="justify-content:flex-end"><button class="btn pri" ${stepsRead===2?'data-mnext="1"':blk('','还在找，找完就能点')}>下一步</button></div>`;
+ if(hStage===3)return `<h2 id="dlg-t">${stepsRead===2?'找完了':stepsRead===3?'没找完':'正在找关键步骤'}</h2><p class="note" style="margin-top:0">${pName} · 要测：${meant}</p>${stepsRead===2?`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(llm)}</span>${bgFoundSpan()}</div>`:''}<div id="readbox">${readBox()}</div>
+   <div class="acts" style="justify-content:flex-end"><button class="btn pri" ${stepsRead===2?'data-mnext="1"':blk('',stepsRead===3?'没找完，点「重试」找完后才能点':'还在找，找完就能点')}>下一步</button></div>`;
  const rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
- return `<h2 id="dlg-t">找完了</h2><div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span>${bgFoundSpan()}</div>
+ return `<h2 id="dlg-t">找完了</h2><div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(llm)}</span>${bgFoundSpan()}</div>
    <p style="margin:10px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
    <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
-   <p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>
+   ${F.sideAsk?`<p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>`:''}
    <div class="acts" style="justify-content:flex-end"><button class="btn pri" data-mnext="1">下一步</button></div>`}
 function popHTML(){const F=FF[scene],C=CC();
  const box=(t,body,acts)=>`<h2>${t}</h2>${body}<div class="acts">${acts}</div>`;
+ if(pop==='readlog')return box('读取过程',`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(usedLLM())}</span></div>${readBox()}`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='steps'){const n=live().length,mid=STEPS.filter(x=>x.sure!=='高').length;
-  return box('找完了',`<p>找到 ${STEPS.length} 个关键步骤。接下来按顺序做三件事：</p><ol class="notes" style="font-size:15px;color:var(--fg)"><li>回答一个问题："${F.sideAsk.q}"要不要一起测</li><li>看一眼 ${mid} 个需核对的步骤，对不对</li><li>点「确认，去插计时点」</li></ol>`,
+  return box('找完了',`<p>找到 ${STEPS.length} 个关键步骤。接下来按顺序做三件事：</p><ol class="notes" style="font-size:15px;color:var(--fg)">${F.sideAsk?`<li>回答一个问题："${F.sideAsk.q}"要不要一起测</li>`:''}<li>看一眼 ${mid} 个需核对的步骤，对不对</li><li>点「确认，去插计时点」</li></ol>`,
    `<button class="btn pri" data-pop="close" data-nudge="#sideask" data-msg="先回答这个问题">开始核对</button>`)}
  if(pop==='flash')return box('设备准备好了',`<p>插计时点、编译、烧录都完成了。刚才试的那一次，${live().length} 个计时点都收到了。</p><p>下一步<b>多轮实测</b>：照提示${C.act} ${colN} ${C.unit}，码表记下每一${C.unit}里每一段用了多久，最后出报告。</p>`,
    `<button class="btn" data-pop="close">留在这页</button><button class="btn pri" data-go="collect">开始多轮实测</button>`);
@@ -984,7 +1017,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('#pop button')){pop=null;document.getElementById('pop').hidden=true}
   if(e.target.closest('[data-envgo]')){envBack=page==='flash'?'flash':'home';envMark=true;hStage=Math.min(hStage,1);page='settings';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-save]')){const sb=e.target.closest('[data-save]');const ki=document.getElementById('set-key'),kv=ki?ki.value.trim():'';sb.disabled=true;
-   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({llm_provider:setLLM,key:setLLM!=='cc'&&kv&&!kv.startsWith('•')?kv:null,data_dir:dataDraft})}).then(async r=>{const j=await r.json();if(!r.ok){sb.disabled=false;toast('✕ '+(j.detail||'没保存上'));return}
+   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({llm_provider:setLLM,key:setLLM!=='cc'&&kv&&!kv.startsWith('•')?kv:null,data_dir:dataDraft,reuse:reuseLast})}).then(async r=>{const j=await r.json();if(!r.ok){sb.disabled=false;toast('✕ '+(j.detail||'没保存上'));return}
    SAVED=j.settings;keyDraft='';dataDraft=null;compPending=inst.st===1;envMark=false;toast(compPending?'✓ 已保存。编译工具还在后台装，装好自动变绿':'✓ 保存成功');const back=hSrc?envBack:'home';envBack='home';setTimeout(()=>{page=back;if(hStage>=2)hStage=1;render();window.scrollTo(0,0)},compPending?1800:1000)}).catch(()=>{sb.disabled=false;toast('✕ 码表后台没有回应，看看运行码表的窗口是不是关了')});return}
   if(e.target.closest('[data-cc]')){CCST=null;render();fetch('/api/env').then(r=>r.json()).then(j=>{CCST=j.claude_code;render()});return}
   const ib=e.target.closest('[data-idf]');if(ib){idfErr='';if(ib.dataset.idf==='find'){ib.textContent='正在查找……';fetch('/api/env').then(r=>r.json()).then(j=>{IDFS=(j.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast(IDFS.length?`✓ 找到 ${IDFS.length} 个`:'没找到乐鑫编译工具');render()});return}
@@ -1005,8 +1038,10 @@ document.addEventListener('click',e=>{
   const al=e.target.closest('[data-addline]');if(al){const i=document.getElementById('add-n');if(i)addName=i.value;addLine=al.dataset.addline;render();return}
   const ad=e.target.closest('[data-add]');if(ad){const a=ad.dataset.add,i=document.getElementById('add-n');if(i)addName=i.value.trim().replace(/[<>&"]/g,'');
    if(a==='open'){addSt=1;addManual=false}else if(a==='cancel'){addSt=0;addName=''}else if(a==='manual'){addManual=true}
-   else if(a==='ai'){if(!addName){i&&i.focus();i&&i.classList.add('need');return}addSt=2;setTimeout(()=>{addSt=3;if(page==='steps')render()},1400)}
-   else if(a==='ok'||a==='manualok'){const g=FF[scene].sideAsk.addGuess;let f=g.f,l=g.l;if(a==='manualok'){f=(document.getElementById('add-f').value||'').trim().replace(/[<>&"]/g,'');l=parseInt(document.getElementById('add-l').value,10);if(!addName||!f||!(l>0))return}
+   else if(a==='ai'){if(!addName){i&&i.focus();i&&i.classList.add('need');return}addSt=2;
+    if(REAL&&REAL.work){addErr='';api('/api/identify/add',{work:REAL.work,sentence:addName,what:hSay}).then(j=>{if(j.ok){addGuess={f:j.f,l:j.l,why:j.why,path:j.path};addSt=3}else{addErr=j.message||j.detail||'没找到';addSt=1}if(page==='steps')render()}).catch(()=>{addErr='码表后台没有回应，看看运行码表的窗口是不是关了。';addSt=1;render()})}
+    else setTimeout(()=>{addSt=3;if(page==='steps')render()},1400)}
+   else if(a==='ok'||a==='manualok'){const g=REAL&&addGuess?addGuess:FF[scene].sideAsk.addGuess;let f=g.f,l=g.l;if(a==='manualok'){f=(document.getElementById('add-f').value||'').trim().replace(/[<>&"]/g,'');l=parseInt(document.getElementById('add-l').value,10);if(!addName||!f||!(l>0))return}
     stepsChanged();added.push({p:'U'+(added.length+1),n:addName||'你加的步骤',f,l,line:addLine,why:'你加的步骤',sure:'你加'});addSt=0;addName='';addManual=false}
    render();return}
   if(e.target.closest('[data-bgpop]')){pop='bg';render();return}
@@ -1038,7 +1073,8 @@ document.addEventListener('click',e=>{
   const fc=e.target.closest('[data-face]');if(fc){const a=fc.dataset.face;if(a!=='reset')stepsChanged();alsoFace=a==='reset'?null:a==='yes';render();return}
   const mp=e.target.closest('[data-map]');if(mp){mapSel=mp.dataset.map;mapOpen=true;render();return}
   const mt=e.target.closest('[data-mapt]');if(mt){mapOpen=!mapOpen;return}
-  const rr=e.target.closest('[data-reread]');if(rr){stepsRead=0;render();return}
+  const rr=e.target.closest('[data-reread]');if(rr){if(REAL&&IDENT){pop='readlog';render();return}stepsRead=0;render();return}
+  if(e.target.closest('[data-idretry]')){identStart(true);render();return}
   const fv=e.target.closest('[data-flashvar]');if(fv){flashVar=fv.dataset.flashvar;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';render();return}
   const fa=e.target.closest('[data-fl]');if(fa){const a=fa.dataset.fl;
    let a2=a;if(a==='nodev'){flNoDev=true;a2=flashVar==='b'?'ins':'all'}
@@ -1076,7 +1112,7 @@ document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.clo
 document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(!z)return;e.preventDefault();uploadDrop(e.dataTransfer.items)});
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
-document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
+document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.id==='set-reuse'){reuseLast=e.target.checked;return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
 document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){
@@ -1084,6 +1120,6 @@ document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render
  for(const d of list){const x=await (await fetch('/api/demo/'+encodeURIComponent(d.id))).json();SCENES[d.id]=x.S;FF[d.id]=x.F;COLLECT[d.id]=x.C;RUNS[d.id]=x.R;RANGE[d.id]=x.RG;RT[d.id]=x.RT;PROJ.push({...x.P,scene:d.id})}
  scene=DEMO&&SCENES[DEMO]?DEMO:list[0].id;pName=FF[scene].pname;mapSel=FF[scene].mapSel;
  try{const e=await (await fetch('/api/env')).json();IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);CCST=e.claude_code||null;PORTS=e.ports||[]}catch(e){}
- try{SAVED=(await (await fetch('/api/state')).json()).settings;if(P2UI[SAVED.llm_provider])setLLM=P2UI[SAVED.llm_provider];setFirst=!SAVED.llm_provider}catch(e){}
+ try{SAVED=(await (await fetch('/api/state')).json()).settings;if(P2UI[SAVED.llm_provider])setLLM=P2UI[SAVED.llm_provider];reuseLast=SAVED.reuse_last!==false;setFirst=!SAVED.llm_provider}catch(e){}
  portsWatch(true)
  render()})();

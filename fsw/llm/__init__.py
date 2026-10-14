@@ -4,6 +4,7 @@
   stream(prompt) → 边回答边一段段返回文字
   complete(prompt) → 等它答完，返回整段
   test() → 测试能不能用，不能用时分清是密钥错、没余额、连不上还是别的，说人话
+  investigate(prompt, root) → 让它自己用只读工具读源码目录再回答（找关键步骤用），边读边报进度
 密钥只在内存里用，不打印、不写进日志和返回的说法里。
 """
 
@@ -12,14 +13,20 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
+
+from fsw.llm.tools import SourceTools, anthropic_tools, describe, openai_tools
 
 TEST_PROMPT = "只回一个字：好"
 CLAUDE_MODEL = "claude-opus-5-5"
 DEEPSEEK_MODEL = "deepseek-chat"
+MAX_TOOL_ROUNDS = 80  # 读代码最多来回多少轮；用完就让它按已读的内容给结果
+READ_ONLY = "Read,Grep,Glob"  # Claude Code 只开这三个读代码的工具，改文件、跑命令的都不给
 
 
 class LLMError(Exception):
@@ -48,10 +55,15 @@ class LLM:
             "refused": f"{self.name}拒绝回答这次请求。",
             "not_installed": "这台电脑上没找到 Claude Code。装好并登录后再选这一项，或者改用填密钥的方式。",
             "not_logged_in": "找到了 Claude Code，但还没登录：在终端里运行 claude，按提示登录一次。",
+            "timeout": f"{self.name}太久没读完（超过 {getattr(self, 'timeout', 900) // 60} 分钟），码表先停下了。点重试再来一次。",
         }.get(kind, f"{self.name}返回了错误：{detail[:200]}")
 
     def fail(self, kind, detail=""):
         return LLMError(kind, self._say(kind, detail))
+
+    def investigate(self, prompt, root, on_text=None, on_tool=None):
+        """自己读源码目录（只读）再回答，返回最后的完整回答。on_text 收到一段段文字，on_tool 收到"读了什么"。"""
+        raise NotImplementedError
 
     def test(self):
         t = time.time()
@@ -66,8 +78,9 @@ class FakeLLM(LLM):
     """录好回复的假模型，给自动测试用，不花钱、不联网。"""
     name = "假模型"
 
-    def __init__(self, reply, chunk=8, test_kind=None):
+    def __init__(self, reply, chunk=8, test_kind=None, tool_calls=None):
         self.reply, self.chunk, self.test_kind, self.prompts = reply, chunk, test_kind, []
+        self.tool_calls = tool_calls or []
 
     def stream(self, prompt, system=None):
         self.prompts.append(prompt)
@@ -75,6 +88,17 @@ class FakeLLM(LLM):
             raise self.fail(self.test_kind)
         for i in range(0, len(self.reply), self.chunk):
             yield self.reply[i:i + self.chunk]
+
+    def investigate(self, prompt, root, on_text=None, on_tool=None):
+        tools = SourceTools(root)
+        for name, args in self.tool_calls:
+            tools.call(name, args)
+            on_tool and on_tool(describe(name, args))
+        text = []
+        for piece in self.stream(prompt):
+            text.append(piece)
+            on_text and on_text(piece)
+        return "".join(text)
 
 
 class ClaudeAPI(LLM):
@@ -86,20 +110,11 @@ class ClaudeAPI(LLM):
         self.model = model
         self.client = anthropic.Anthropic(api_key=key, base_url=base_url, max_retries=max_retries, timeout=600)
 
-    def stream(self, prompt, system=None):
+    @contextmanager
+    def _errors(self):
         import anthropic
-        kw = {"system": system} if system else {}
         try:
-            with self.client.beta.messages.stream(
-                model=self.model, max_tokens=64000,
-                messages=[{"role": "user", "content": prompt}],
-                betas=["server-side-fallback-2026-07-01"],
-                extra_body={"fallbacks": "default"},  # 被安全规则拦下时，服务器换推荐的模型接着答
-                **kw,
-            ) as s:
-                yield from s.text_stream
-                if s.get_final_message().stop_reason == "refusal":
-                    raise self.fail("refused")
+            yield
         except anthropic.AuthenticationError as e:
             raise self.fail("bad_key") from e
         except anthropic.PermissionDeniedError as e:
@@ -116,6 +131,45 @@ class ClaudeAPI(LLM):
         except anthropic.APIConnectionError as e:
             raise self.fail("offline") from e
 
+    def investigate(self, prompt, root, on_text=None, on_tool=None):
+        tools, messages, final = SourceTools(root), [{"role": "user", "content": prompt}], []
+        for rnd in range(MAX_TOOL_ROUNDS + 1):
+            kw = {"tools": anthropic_tools()} if rnd < MAX_TOOL_ROUNDS else {}
+            if rnd == MAX_TOOL_ROUNDS:
+                messages.append({"role": "user", "content": "读代码的次数用完了，请按已读的内容直接给出最终结果。"})
+            with self._errors():
+                msg = self.client.messages.create(model=self.model, max_tokens=16000, messages=messages, **kw)
+            if msg.stop_reason == "refusal":
+                raise self.fail("refused")
+            texts = [b.text for b in msg.content if b.type == "text"]
+            for t in texts:
+                on_text and on_text(t)
+            uses = [b for b in msg.content if b.type == "tool_use"]
+            if not uses:
+                final = texts
+                break
+            messages.append({"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in msg.content]})
+            results = []
+            for u in uses:
+                on_tool and on_tool(describe(u.name, u.input))
+                results.append({"type": "tool_result", "tool_use_id": u.id, "content": tools.call(u.name, u.input)})
+            messages.append({"role": "user", "content": results})
+        return "".join(final)
+
+    def stream(self, prompt, system=None):
+        kw = {"system": system} if system else {}
+        with self._errors():
+            with self.client.beta.messages.stream(
+                model=self.model, max_tokens=64000,
+                messages=[{"role": "user", "content": prompt}],
+                betas=["server-side-fallback-2026-07-01"],
+                extra_body={"fallbacks": "default"},  # 被安全规则拦下时，服务器换推荐的模型接着答
+                **kw,
+            ) as s:
+                yield from s.text_stream
+                if s.get_final_message().stop_reason == "refusal":
+                    raise self.fail("refused")
+
     def test(self):
         self.client = self.client.with_options(max_retries=0, timeout=30)
         return super().test()
@@ -128,20 +182,50 @@ class DeepSeek(LLM):
     def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=600):
         self.key, self.model, self.base_url, self.timeout = key, model, base_url.rstrip("/"), timeout
 
-    def stream(self, prompt, system=None):
-        msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+    def _post(self, body):
         req = urllib.request.Request(
-            self.base_url + "/chat/completions",
-            data=json.dumps({"model": self.model, "messages": msgs, "stream": True}).encode(),
+            self.base_url + "/chat/completions", data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"},
         )
         try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout)
+            return urllib.request.urlopen(req, timeout=self.timeout)
         except urllib.error.HTTPError as e:
             kind = {401: "bad_key", 403: "bad_key", 402: "no_balance", 429: "busy"}.get(e.code, "busy" if e.code >= 500 else "other")
             raise self.fail(kind, f"{e.code}") from e
         except (urllib.error.URLError, OSError) as e:
             raise self.fail("offline") from e
+
+    def investigate(self, prompt, root, on_text=None, on_tool=None):
+        tools, messages = SourceTools(root), [{"role": "user", "content": prompt}]
+        for rnd in range(MAX_TOOL_ROUNDS + 1):
+            body = {"model": self.model, "messages": messages}
+            if rnd < MAX_TOOL_ROUNDS:
+                body["tools"] = openai_tools()
+            else:
+                messages.append({"role": "user", "content": "读代码的次数用完了，请按已读的内容直接给出最终结果。"})
+            with self._post(body) as resp:
+                try:
+                    msg = json.loads(resp.read())["choices"][0]["message"]
+                except (ValueError, KeyError, IndexError) as e:
+                    raise self.fail("other", "回复的格式不对") from e
+            if msg.get("content"):
+                on_text and on_text(msg["content"])
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                return msg.get("content") or ""
+            messages.append({k: v for k, v in msg.items() if v is not None})
+            for tc in calls:
+                try:
+                    args = json.loads(tc["function"].get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                on_tool and on_tool(describe(tc["function"]["name"], args))
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": tools.call(tc["function"]["name"], args)})
+        return ""
+
+    def stream(self, prompt, system=None):
+        msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+        resp = self._post({"model": self.model, "messages": msgs, "stream": True})
         with resp:
             for raw in resp:
                 line = raw.decode("utf-8", "replace").strip()
@@ -201,17 +285,19 @@ class ClaudeCode(LLM):
         self.exe = find_claude() if exe == "auto" else exe
         self.timeout = timeout
 
-    def stream(self, prompt, system=None):
+    def _run(self, cmd, cwd=None, on_tool=None, root=None):
+        """跑 claude 命令，一段段交出文字；读了什么文件交给 on_tool。最后检查有没有出错。"""
         if not self.exe:
             raise self.fail("not_installed")
-        cmd = [str(self.exe), "-p", prompt, "--output-format", "stream-json", "--verbose",
-               "--include-partial-messages", "--no-session-persistence"]
-        if system:
-            cmd += ["--system-prompt", system]
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    stdin=subprocess.DEVNULL, cwd=cwd, start_new_session=os.name != "nt")
         except OSError as e:
             raise self.fail("not_installed") from e
+        killed = []
+        watchdog = threading.Timer(self.timeout, lambda: (killed.append(1), _kill_all(proc)))
+        watchdog.daemon = True
+        watchdog.start()  # 太久没读完就停下，不让网页一直转圈
         got, result = False, None
         for line in proc.stdout:
             try:
@@ -224,10 +310,17 @@ class ClaudeCode(LLM):
                 if ev.get("type") == "content_block_delta" and d.get("type") == "text_delta":
                     got = True
                     yield d["text"]
+            elif msg.get("type") == "assistant" and on_tool:
+                for b in (msg.get("message") or {}).get("content") or []:
+                    if b.get("type") == "tool_use":
+                        on_tool(f"{b.get('name')} {_short(b.get('input') or {}, root)}".strip())
             elif msg.get("type") == "result":
                 result = msg
         err = proc.stderr.read()
-        proc.wait(timeout=self.timeout)
+        proc.wait()
+        watchdog.cancel()
+        if killed:
+            raise self.fail("timeout")
         text = (result or {}).get("result") or err or ""
         if (result and result.get("is_error")) or proc.returncode:
             low = text.lower()
@@ -238,6 +331,48 @@ class ClaudeCode(LLM):
             raise self.fail("other", text)
         if not got and result and result.get("result"):
             yield result["result"]
+
+    def stream(self, prompt, system=None):
+        cmd = [str(self.exe), "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--include-partial-messages", "--no-session-persistence"]
+        if system:
+            cmd += ["--system-prompt", system]
+        yield from self._run(cmd)
+
+    def investigate(self, prompt, root, on_text=None, on_tool=None):
+        """在源码目录里跑 Claude Code，只给读代码的三个工具（--restricted 还会关掉跑命令的工具、不读本机设置），
+        改不了任何文件；会话不留在电脑上。"""
+        root = Path(root).resolve()
+        cmd = [str(self.exe), "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--include-partial-messages", "--no-session-persistence", "--restricted",
+               "--tools", READ_ONLY, "--allowedTools", READ_ONLY, "--strict-mcp-config"]
+        text = []
+        for piece in self._run(cmd, cwd=str(root), on_tool=on_tool, root=root):
+            text.append(piece)
+            on_text and on_text(piece)
+        return "".join(text)
+
+
+def _kill_all(proc):
+    """连它带起来的子进程一起停掉（只停一个，子进程还占着输出，读不到结尾）。"""
+    try:
+        if os.name != "nt":
+            os.killpg(proc.pid, 9)
+        else:
+            proc.kill()
+    except OSError:
+        pass
+
+
+def _short(inp, root):
+    """Claude Code 读的是哪个文件 / 搜的什么：换成相对源码目录的路径。"""
+    v = inp.get("file_path") or inp.get("path") or inp.get("pattern") or ""
+    if root and v.startswith("/"):
+        try:
+            return Path(v).resolve().relative_to(root).as_posix()
+        except ValueError:
+            return Path(v).name
+    return v
 
 
 def make(provider, key=None, cfg=None):
