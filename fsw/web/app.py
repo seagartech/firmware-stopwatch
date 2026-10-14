@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from fsw.config import load_config, save_config
 from fsw.scenario import to_page
+from fsw import identify as idf
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, find_idf, find_ports, pick_idf
@@ -126,6 +127,28 @@ class SettingsBody(BaseModel):
     key: str | None = None  # 只在这次保存时用，写进密钥文件后不回传
     idf_path: str | None = None
     data_dir: str | None = None
+    reuse: bool | None = None  # 源码没变时直接用上次的识别结果
+
+
+class IdentifyBody(BaseModel):
+    work: str
+    what: str
+    project_dir: str | None = None
+    fingerprint: str | None = None
+    chip: str | None = None
+    reuse: bool = True  # 设置页"源码没变时，直接用上次的识别结果"
+
+
+class SuggestBody(BaseModel):
+    work: str
+    name: str | None = None
+    chip: str | None = None
+
+
+class AddStepBody(BaseModel):
+    work: str
+    sentence: str
+    what: str | None = None
 
 
 class PickBody(BaseModel):
@@ -175,6 +198,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             "idf_path": c.idf_path or "",
             "serial_port": c.serial_port or "",
             "data_dir": str(live["data"]),
+            "reuse_last": c.reuse_last,
         }
 
     def snapshot():
@@ -276,7 +300,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if not any(Path(i["path"]) == want for i in find_idf(home="/nonexistent", env={}, extra=[idf_path])):
                 raise HTTPException(400, f"这个文件夹里没找到乐鑫编译工具（没有 tools/idf.py）：{idf_path}。请选 esp-idf 那一层文件夹。")
         save_config(config_dir or load_config().config_dir, provider=provider, key=(body.key or "").strip() or None,
-                    idf_path=idf_path, data_dir=body.data_dir or None)
+                    idf_path=idf_path, data_dir=body.data_dir or None, reuse_last=body.reuse)
         if body.data_dir:
             live["data"] = Path(body.data_dir).expanduser()
         return snapshot()
@@ -375,6 +399,77 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.get("/api/install")
     def install_status():
         return inst["job"] or {"state": "idle"}
+
+    # ---- 找关键步骤：后台调用大模型读代码（只读），网页每秒问一次进度 ----
+    ident = {"job": None, "args": None, "lock": threading.Lock()}
+
+    def _model():
+        """按已保存的设置挑大模型；没设置好就说去设置页。"""
+        c = cfg()
+        if not c.llm_provider:
+            raise HTTPException(409, "还没设置大模型：到设置页选一个，点保存。")
+        try:
+            return c.llm_provider, llm_factory(c.llm_provider, None)
+        except llms.LLMError as e:
+            raise HTTPException(409, e.message)
+
+    def _identify(body, known=None):
+        provider, model = _model()
+        job = {"state": "running", "what": body.what, "provider": provider, "found": list(known or []), "read": 0,
+               "last": "", "seconds": 0, "started": time.time()}
+        with ident["lock"]:
+            ident["job"], ident["args"] = job, body
+
+        def progress(p):
+            job.update(found=p["found"], at=p["at"], read=p["read"], last=p["last"], seconds=p["seconds"])
+
+        def run():
+            try:
+                r = idf.identify_cached(model, body.work, body.what, body.project_dir, body.fingerprint, provider,
+                                        reuse=body.reuse and not known, chip=body.chip or "", known=known,
+                                        on_progress=progress)
+            except Exception as e:  # 码表自己出错也要说清楚，不能一直转圈
+                r = {"ok": False, "kind": "other", "message": f"找关键步骤时码表出错了：{e}", "found": job["found"]}
+            r.pop("reply", None)
+            job.update({k: v for k, v in r.items() if k in ("page", "found", "kind", "message", "reused", "summary", "doubts")})
+            job["seconds"] = r.get("seconds", round(time.time() - job["started"], 1))
+            job["state"] = "done" if r.get("ok") else "failed"
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @app.post("/api/identify/start")
+    def identify_start(body: IdentifyBody):
+        if not Path(body.work).is_dir():
+            raise HTTPException(400, "找不到复制好的源码，请回首页重新选一次固件源码。")
+        if not body.what.strip():
+            raise HTTPException(400, "先写要测从什么到什么。")
+        return _identify(body)
+
+    @app.post("/api/identify/retry")
+    def identify_retry():
+        job = ident["job"]
+        if not job or not ident["args"]:
+            raise HTTPException(409, "还没开始找")
+        if job["state"] == "running":
+            return job
+        return _identify(ident["args"], known=job.get("found"))  # 已找到的告诉大模型，接着找
+
+    @app.get("/api/identify")
+    def identify_status():
+        return ident["job"] or {"state": "idle"}
+
+    @app.post("/api/suggest")
+    def suggest(body: SuggestBody):
+        """选好固件后的"AI 推荐"常用语：只给项目概况，一般十几秒。"""
+        _, model = _model()
+        return {"phrases": idf.suggest(model, body.work, {"name": body.name, "chip": body.chip})}
+
+    @app.post("/api/identify/add")
+    def identify_add(body: AddStepBody):
+        """结果页"添加步骤 → 让 AI 找位置"。"""
+        _, model = _model()
+        return idf.add_step(model, body.work, body.sentence.strip(), what=body.what or "")
 
     @app.get("/api/env")
     def env_status(cc: bool = True):

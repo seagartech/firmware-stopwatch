@@ -184,3 +184,12 @@ def test_settings_page_uses_real_checks_not_prototype_fakes():
     assert "fetch('/api/settings'" in js          # 保存真写
     assert "applied" not in js                    # 灯不再看"点过保存"的假标记
     assert "REAL?'':'<button class=\"pill\" data-fl=\"plug\">演示：设备已插上</button>'" in js
+
+
+def test_find_steps_page_uses_real_identification():
+    """任务 13：选了真源码时，AI 推荐、找关键步骤、添加步骤都调后台真做；演示数据只在没选真源码时用。"""
+    js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
+    for api in ("/api/suggest", "/api/identify/start", "/api/identify/retry", "/api/identify/add", "fetch('/api/identify')"):
+        assert api in js, api
+    assert "data-idretry" in js
+    assert "mmss(IDENT.seconds)" in js  # 选了真源码时，用时写真实的
