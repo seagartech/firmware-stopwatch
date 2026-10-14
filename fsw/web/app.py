@@ -14,11 +14,12 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fsw.config import load_config, save_config
 from fsw.scenario import to_page
 from fsw import identify as idf
+from fsw import instrument as ins
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, find_idf, find_ports, pick_idf
@@ -106,6 +107,42 @@ def _default_builder(work, target, board, idf_path, on_progress):
     return EspIdf(idf_path).build(work, target=target, board=board, on_progress=on_progress)
 
 
+class EspDevice:
+    """真设备：烧存下的固件、读调试口一段时间（乐鑫官方 esptool 和串口）。"""
+
+    def __init__(self, idf_finder):
+        self.idf_finder = idf_finder
+
+    def flash(self, fw, port, on_progress):
+        found = pick_idf(self.idf_finder(), None)
+        if not found:
+            return {"ok": False, "error": "没找到乐鑫编译工具，烧录要用它带的 esptool。"}
+        return EspIdf(found["path"]).flash_saved(fw, port, on_progress=on_progress)
+
+    def read(self, port, seconds, on_line):
+        ser = EspIdf.open_port(port)
+        try:
+            return EspIdf.read_for(ser, seconds, on_line)
+        finally:
+            ser.close()
+
+
+class FswInsertBody(BaseModel):
+    work: str
+    project_dir: str
+    steps: list[dict]
+    chip: str | None = None
+    board: str | None = None
+
+
+class FswRunBody(BaseModel):
+    from_: str = Field("build", alias="from")
+
+
+class FswDropBody(BaseModel):
+    step: str
+
+
 class InstallBody(BaseModel):
     idf_min: str | None = None
     dest: str | None = None
@@ -166,7 +203,7 @@ class SyncBody(BaseModel):
 
 
 def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
-               config_dir=None, cc_status=None, port_finder=None):
+               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     cfg = lambda: load_config(config_dir)  # 设置文件夹默认 ~/.config/firmware-stopwatch/，测试时换成临时文件夹
@@ -321,7 +358,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                              "message": "等编译工具装好就开始编；不挡找关键步骤，烧录前装好就行。"}
                 return bg["job"]
             job = {"work": body.work, "state": "running", "pct": 0, "message": "准备编译", "started": time.time(),
-                   "seconds": None, "error": None, "idf": idf["version"]}
+                   "seconds": None, "error": None, "idf": idf["version"], "idf_path": idf["path"],
+                   "board": body.board, "target": re.sub(r"[^a-z0-9]", "", (body.chip or "esp32").lower())}
             bg["job"] = job
         target = re.sub(r"[^a-z0-9]", "", (body.chip or "esp32").lower())
 
@@ -347,6 +385,197 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.get("/api/bgbuild")
     def bgbuild_status():
         return bg["job"] or {"state": "idle", "pct": 0}
+
+    # ---- 插计时点 → 确认 → 编译（只重编改过的）→ 烧录（没插就等）→ 试一次；撤掉一处；还原 ----
+    device = device or EspDevice(idf_finder)
+    fsw = {"job": None, "args": None, "plan": None}
+
+    def _fsw_dirs(a):
+        pd = Path(a.project_dir)
+        return pd / "fsw-backup", pd / "firmware" / "orig", pd / "firmware" / "fsw"
+
+    def _fail(job, kind, message, **extra):
+        job.update(status="failed", err={"kind": kind, "message": message, **extra})
+
+    def _wait_bg(job, work):
+        """插之前等后台把原始代码编完：原版编好的固件要先存下来，还原时烧它。"""
+        while True:
+            b = bg["job"]
+            if not b or b.get("work") != work or b["state"] != "running":
+                return b
+            job["log"] = f"等后台把原始代码编完再插（{b.get('pct', 0)}%），原版要先存一份"
+            time.sleep(wait_step / 4)
+
+    @app.post("/api/fsw/insert")
+    def fsw_insert(body: FswInsertBody):
+        _, model = _model()
+        job = {"phase": "insert", "status": "running", "pct": 0, "log": "AI 在读代码，确定每个计时点插在哪一行",
+               "started": time.time(), "seconds": {}, "view": None, "err": None, "got": [], "total": 0, "port": None}
+        fsw.update(job=job, args=body)
+        backup, orig_fw, _ = _fsw_dirs(body)
+        steps = body.steps
+
+        def run():
+            ins.restore(body.work, backup)  # 上次插过的先还原
+            plan_text = {}
+
+            class Tap:  # 先拿到插入清单（大模型只读），等原版编完存好，再真正插
+                def investigate(self, prompt, root, on_text=None, on_tool=None):
+                    plan_text["t"] = model.investigate(prompt, root, on_text=on_text, on_tool=on_tool)
+                    return plan_text["t"]
+            try:
+                t0 = time.time()
+                text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work)), body.work,
+                                         on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
+            except llms.LLMError as e:
+                return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。")
+            Path(body.project_dir).mkdir(parents=True, exist_ok=True)
+            (Path(body.project_dir) / "fsw-plan-reply.txt").write_text(text, encoding="utf-8")  # AI 的原话留一份，出错时好查
+            plan = ins.parse_plan(text, body.work, steps)
+            job["seconds"]["insert"] = round(time.time() - t0, 1)
+            if not plan["ok"]:
+                return _fail(job, "insert", plan["message"])
+            if not bg["job"] or bg["job"].get("work") != body.work:  # 码表重开过：原版再编一次（只是检查，很快）
+                bgbuild_start(BgBuildBody(work=body.work, chip=body.chip, board=body.board))
+            b = _wait_bg(job, body.work)
+            if b and b["state"] == "done" and not orig_fw.exists():
+                EspIdf.save_firmware(body.work, orig_fw)
+            rec = ins.apply(body.work, plan, backup)
+            if not rec["ok"]:
+                return _fail(job, "insert", rec["message"])
+            fsw["plan"] = plan
+            job.update(status="inserted", view=ins.diff_view(rec, steps), notes=plan["notes"], log="插好了，先看改动",
+                       total=len(rec["steps"]))
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    def _run_from(start):
+        job, a = fsw["job"], fsw["args"]
+        _, orig_fw, fsw_fw = _fsw_dirs(a)
+        job.update(status="running", err=None, cancel=False)
+
+        def build():
+            job.update(phase="build", pct=0, log="准备编译")
+            b = _wait_bg(job, a.work)
+            if b and b["state"] == "failed":
+                return _fail(job, "orig", b.get("message") or "原版编译没通过", error=b.get("error"))
+            if not b or b["state"] != "done":
+                return _fail(job, "orig", "原始代码还没编好，没法编计时版。回首页重新选一次源码。")
+            if not orig_fw.exists():
+                EspIdf.save_firmware(a.work, orig_fw)
+            t0 = time.time()
+            try:
+                r = bg_builder(a.work, b["target"], b.get("board"), b["idf_path"],
+                               lambda pct, msg: job.update(pct=pct, log=msg))
+            except Exception as e:
+                r = {"ok": False, "error": str(e)}
+            job["seconds"]["build"] = r.get("seconds", round(time.time() - t0, 1))
+            if not r.get("ok"):
+                rec = ins.current(_fsw_dirs(a)[0]) or {"steps": {}}
+                step = ins.locate_error(r.get("error"), rec, a.work)
+                s = next((x for x in a.steps if f"P{ins.number(x['p'], a.steps)}" == step), None)
+                where = f"{rec['steps'][step]['file']} 第 {rec['steps'][step]['at']} 行" if step else ""
+                short = (r.get("error") or "").replace(str(Path(a.work).resolve()) + "/", "").replace(str(a.work) + "/", "")
+                return _fail(job, "build", "编译没通过：是码表插的计时点引起的" if step else "编译没通过",
+                             error=short, step=step, step_name=s["n"] if s else None, where=where)
+            if not EspIdf.save_firmware(a.work, fsw_fw):
+                return _fail(job, "build", "编译说通过了，但没找到编出来的固件文件（build/flasher_args.json）。点\"重新编译\"再试一次。")
+            return True
+
+        def flash():
+            job.update(phase="flash", pct=0, log="查设备")
+            while not port_finder():
+                if job.get("cancel"):  # 等设备的时候点了还原：不烧了
+                    return None
+                job.update(status="waiting_device", log="没看到设备")
+                time.sleep(wait_step)
+            if job.get("cancel"):
+                return None
+            port = port_finder()[0]
+            job.update(status="running", port=port, log=f"设备已连上 {port}")
+            r = device.flash(fsw_fw, port, lambda pct, msg: job.update(pct=pct, log=msg))
+            job["seconds"]["flash"] = r.get("seconds")
+            if not r.get("ok"):
+                return _fail(job, "burn", "烧录中断", error=r.get("error"))
+            return True
+
+        def try_once():
+            job.update(phase="try", pct=0, got=[], log="等计时点")
+            want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
+            seen = set()
+
+            def on_line(line):
+                seen.update(ins.count_marks([line]) & want)
+                job.update(got=sorted(seen), log=line[:200])
+            try:
+                lines = device.read(job["port"] or port_finder()[0], 15, on_line)
+            except Exception as e:
+                return _fail(job, "try", "试一次没收到计时点", error=f"打不开调试口：{e}")
+            got = ins.count_marks(lines) & want
+            job["got"] = sorted(got)
+            if not got:
+                return _fail(job, "try", "试一次没收到计时点", error="（15 秒内没有计时点输出）")
+            job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
+            return True
+
+        order = ["build", "flash", "try"]
+
+        def run():
+            for name in order[order.index(start):]:
+                if {"build": build, "flash": flash, "try": try_once}[name]() is not True:
+                    return
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @app.post("/api/fsw/run")
+    def fsw_run(body: FswRunBody):
+        job = fsw["job"]
+        if not job or job["status"] in ("running", "waiting_device") or (job["status"] == "failed" and job["err"]["kind"] == "insert"):
+            raise HTTPException(409, "还没插好计时点，或者正在做")
+        return _run_from(body.from_ if body.from_ in ("build", "flash", "try") else "build")
+
+    @app.post("/api/fsw/drop")
+    def fsw_drop(body: FswDropBody):
+        """编译出错时"撤掉这处计时点，重新编译"：只撤这一处，其他的照样插着。"""
+        job, a = fsw["job"], fsw["args"]
+        if not job or not fsw["plan"]:
+            raise HTTPException(409, "还没插好计时点")
+        backup = _fsw_dirs(a)[0]
+        rec = ins.drop(a.work, fsw["plan"], body.step, backup)
+        fsw["plan"] = {**fsw["plan"], "inserts": [x for x in fsw["plan"]["inserts"] if x["step"] != body.step]}
+        a.steps = [x for x in a.steps if f"P{ins.number(x['p'], a.steps)}" != body.step]
+        job.update(view=ins.diff_view(rec, a.steps), total=len(rec["steps"]), dropped=(job.get("dropped") or []) + [body.step])
+        return _run_from("build")
+
+    @app.get("/api/fsw")
+    def fsw_status():
+        return fsw["job"] or {"status": "idle"}
+
+    @app.post("/api/fsw/restore")
+    def fsw_restore():
+        """还原成原版：源码放回去（和你原来的源码逐字节比对），设备插着就把后台编好的原版烧回去。"""
+        a = fsw["args"]
+        if not a:
+            raise HTTPException(409, "还没插过计时点，不用还原")
+        backup, orig_fw, _ = _fsw_dirs(a)
+        if fsw["job"]:
+            fsw["job"]["cancel"] = True  # 还在等设备烧计时版的，不烧了
+        ins.restore(a.work, backup)
+        try:
+            source = json.loads((Path(a.project_dir) / "project.json").read_text(encoding="utf-8"))["source"]
+        except (OSError, ValueError, KeyError):
+            source = None
+        cmp = ins.compare(a.work, source) if source and Path(source).is_dir() else {"same": None, "diff": [], "files": 0}
+        out = {"same": cmp["same"], "diff": cmp["diff"][:10], "files": cmp["files"], "flashed": False, "port": None}
+        ports = port_finder()
+        if ports and orig_fw.exists():
+            r = device.flash(orig_fw, ports[0], lambda pct, msg: None)
+            out.update(flashed=bool(r.get("ok")), port=ports[0], error=r.get("error"))
+        if fsw["job"]:
+            fsw["job"].update(status="restored", restore=out)
+        return out
 
     # ---- 编译工具帮装（决策 48）：后台跑乐鑫官方安装方式，点"保存"回首页也照样在装 ----
     inst = {"job": None, "args": None}

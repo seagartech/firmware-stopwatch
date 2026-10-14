@@ -164,7 +164,7 @@ const ccOK=()=>!!(CCST&&CCST.logged_in),hasKey=ui=>!!SAVED.has_key[UI2P[ui]];
 const keyOK=()=>setLLM==='cc'?ccOK():keyTested||hasKey(setLLM);
 const tilde=p=>String(p||'').replace(/^\/Users\/[^/]+|^\/home\/[^/]+/,'~');
 // 每 2 秒查一次设备和编译工具（不跑 claude 命令）：插上设备、自己装好编译工具，灯和设置页都自动变
-async function portsPoll(){try{const e=await (await fetch('/api/env?cc=0')).json(),n=e.ports||[],idf=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);const ch=n.join()!==PORTS.join()||idf.map(i=>i.path).join()!==IDFS.map(i=>i.path).join();PORTS=n;IDFS=idf;if(!ch)return;if(page==='flash'&&fl.st===4&&PORTS.length){fl.st=1;flRun(3,fl.to);return}
+async function portsPoll(){try{const e=await (await fetch('/api/env?cc=0')).json(),n=e.ports||[],idf=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);const ch=n.join()!==PORTS.join()||idf.map(i=>i.path).join()!==IDFS.map(i=>i.path).join();PORTS=n;IDFS=idf;if(!ch)return;if(page==='flash'&&fl.st===4&&PORTS.length&&!realFlash()){fl.st=1;flRun(3,fl.to);return}  // 真插计时点时后台自己接着烧
  if(page==='home'){const lt=document.querySelector('.lights');if(lt)lt.outerHTML=envStatus();return}  // 首页只换灯，不打断正在输入的
  if(page==='settings'){const k=document.getElementById('set-key');if(k&&k.value.trim()&&!k.value.startsWith('•'))keyDraft=k.value.trim();render()}else if(page==='flash')render()}catch(e){}}
 function portsWatch(on){if(on&&!portT)portT=setInterval(portsPoll,2000);if(!on&&portT){clearInterval(portT);portT=null}}
@@ -578,12 +578,31 @@ function stepsPage(){
 // ===== 插计时点和烧录 =====（数字来自验证 02：4 个文件 +154 −0；编译 119 秒/增量 80 秒；程序多 784 字节）
 const FST=()=>{const F=FF[scene];return [
  ['复制一份源码',`开始找关键步骤时已经复制好${bgDone()?'、原始代码也编好了':''}；在这份上改，你原来的文件夹一个字都不动`,`已复制 ${F.files} 个文件到 ~/firmware-stopwatch-data/${F.slug}/work`],
- ['让 AI 插计时点',`按你确认的步骤插入计时语句，再调用一次大模型；码表自己检查"只加不删"`,F.ins],
+ ['让 AI 插计时点',`按你确认的步骤插入计时语句，再调用一次大模型；码表自己检查"只加不删"`,FSWJ&&FSWJ.view?`改了 ${FSWJ.view.files} 个文件：新增 ${FSWJ.view.added} 行，删除 ${FSWJ.view.deleted} 行 ✓`:F.ins],
  ['编译',`${bgDone()?'原始代码已经编过':'等后台把原始代码编完后'}，只重编改过的文件，一般 1 分钟左右（按改动的文件数估算）`,F.build],
  ['烧录到设备','通过 USB 线写进设备','Writing at 0x0012c000... ({p} %)'],
  ['试一次：确认计时点有输出',`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
 let demoErr=FAIL==='nodev'?'':FAIL,justFlashed=false,flashVar='b',fl={st:0,step:0,pct:0,log:''},flT=null,flNoDev=false,diffOk=false,diffFile=0,swOn=true,onDev='orig';
 function flStop(){clearInterval(flT);flT=null}
+// 真插计时点（选了真源码、真找完步骤时）：后台做"插 → 等你确认 → 编译 → 烧录 → 试一次"，这里每 0.7 秒问一次
+let FSWJ=null,fswT=null;
+const realFlash=()=>!!(REAL&&REAL.work&&IDENT&&IDENT.page);
+// 计时点编号和后台一样：P3 → P3；你自己加的 U1、U2 → P21、P22
+const fswId=p=>{if(/^P\d+$/.test(p))return p;const u=live().filter(x=>!/^P\d+$/.test(x.p)).map(x=>x.p);return 'P'+(20+u.indexOf(p)+1)};
+const fswSteps=()=>live().map(x=>({p:x.p,n:x.n,path:x.path||x.f,l:x.l,line:x.line,why:x.why||'',where:x.where||'',once:x.once||''}));
+function fswApply(j){FSWJ=j;const PH={insert:1,build:2,flash:3,try:4};
+ fl.step=PH[j.phase]||1;fl.pct=j.pct||0;fl.log=j.log||'';fl.wait=false;fl.to=4;
+ if(j.status==='running')fl.st=1;else if(j.status==='waiting_device'){fl.st=4;fl.log='没看到设备'}
+ else if(j.status==='inserted'){fl.st=3;fl.step=2}
+ else if(j.status==='failed'){fl.st=5;fl.err=j.err.kind}
+ else if(j.status==='done'&&fl.st!==2){fl.st=2;fl.step=5;onDev='fsw';clearInterval(fswT);fswT=null;
+  if(page==='flash')setTimeout(()=>{if(page==='flash'&&fl.st===2){page='collect';justFlashed=true;render();window.scrollTo(0,0)}},1200)}
+ if(j.status!=='running'&&j.status!=='waiting_device'){clearInterval(fswT);fswT=null}
+ if(page==='flash')render()}
+function fswPoll(){clearInterval(fswT);fswT=setInterval(async()=>{try{fswApply(await (await fetch('/api/fsw')).json())}catch(e){}},700)}
+async function fswPost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const j=await r.json();if(!r.ok){toast('✕ '+(j.detail||'没做成'));return null}fswApply(j);fswPoll();return j}
+function fswInsert(){diffOk=false;diffOpen=new Set();fl={st:1,step:1,pct:0,log:'AI 在读代码，确定每个计时点插在哪一行'};FSWJ=null;
+ fswPost('/api/fsw/insert',{work:REAL.work,project_dir:REAL.project_dir,steps:fswSteps(),chip:REAL.chip,board:REAL.board})}
 function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
  flT=setInterval(()=>{const S=FST()[fl.step];
   const fe=demoErr==='build'&&fl.step===2&&fl.pct>=60?'build':demoErr==='burn'&&fl.step===3&&fl.pct>=48?'burn':demoErr==='try'&&fl.step===4&&fl.pct>=70?'try':'';
@@ -595,7 +614,15 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
   if(fl.pct>=100){fl.step++;fl.pct=0;if(fl.step>to){flStop();fl.st=fl.step>4?2:3;if(fl.st===2){onDev='fsw';if(page==='flash')setTimeout(()=>{if(page==='flash'&&fl.st===2){page='collect';justFlashed=true;render();window.scrollTo(0,0)}},1200)}if(page==='flash')render();return}}
   fl.log=FST()[fl.step][2].replace('{n}',Math.round(fl.pct*16.3)).replace('{p}',Math.min(fl.pct,99));
   if(page==='flash')render()},350)}
-function flErr(){const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
+function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
+ const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code><button class="pill">完整日志</button></div>`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
+ if(E.kind==='insert')return box('计时点没插上',E.message,'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
+ if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(E.message||'')}`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
+ if(E.kind==='build')return E.step?box('编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点：「${htmlEsc(E.step_name||E.step)}」那一处（${htmlEsc(E.where)}）。<br>码表自己的问题，不用你改代码。`,E.error,`<button class="btn pri" data-flx="drop">撤掉这处计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`)
+  :box('编译没通过',`${htmlEsc(E.message)}${E.error?'。报错里没对上是哪一处计时点，看下面的报错，或者重新插入。':''}`,E.error,`<button class="btn pri" data-flx="rebuild">重新编译</button><button class="btn" data-fl="redo">重新插入</button>`);
+ if(E.kind==='burn')return box('烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。',E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`);
+ return box('试一次没收到计时点',`烧录成功，设备也重启了，但${F.trig}后 15 秒内没收到计时点。常见原因：<br>1. 没触发到：再${C.act}一次试试。<br>2. 串口被别的软件占着（比如别的串口监视器）：关掉它。<br>3. 设备在反复重启：点「完整日志」看。`,E.error,`<button class="btn pri" data-flx="retry">再试一次</button>`)}
+function flErr(){if(realFlash()&&FSWJ&&FSWJ.err)return flErrReal();const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
  const E={orig:['原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(BG&&BG.message)}`,htmlEsc(BG&&BG.error),`<button class="btn" data-bgpop="1">看详情</button>`],build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} 第 ${p.l} 行）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
   burn:['烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。','A fatal error occurred: The chip stopped responding.',`<button class="btn pri" data-flx="reburn">重新烧录</button>`],
   try:['试一次没收到计时点',`烧录成功，设备也重启了，但${F.trig}后 15 秒内没收到计时点。常见原因：<br>1. 没触发到：再${C.act}一次试试。<br>2. 串口被别的软件占着（比如别的串口监视器）：关掉它。<br>3. 设备在反复重启：点「完整日志」看。`,'（15 秒内没有新输出）',`<button class="btn pri" data-flx="retry">再试一次</button>`]}[fl.err];
@@ -604,12 +631,22 @@ function flList(from=0,to=4){const n=to-from+1;
  const li=FST().slice(from,to+1).map(([t,d],j)=>{const i=from+j,done=fl.st===2||(fl.st>=1&&i<fl.step)||(fl.st===3&&i<=fl.step-1),cur=(fl.st===1||fl.st===4||fl.st===5)&&i===fl.step,bad=(fl.st===4||fl.st===5)&&cur;
   return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small>${REAL?'':'<button class="pill" data-fl="plug">演示：设备已插上</button>'}`:''}</span></li>`}).join('');
  const say=FF[scene].big;
- const N=live().length,got=Math.min(N,Math.round(fl.pct/100*N));
- const big=fl.st===1&&fl.step===4&&to>=4?`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`:fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${N} 个计时点都收到了，设备准备好了。</span></div>`:'';
+ const N=realFlash()&&FSWJ?FSWJ.total||live().length:live().length,got=realFlash()&&FSWJ?(FSWJ.got||[]).length:Math.min(N,Math.round(fl.pct/100*N));
+ const big=fl.st===1&&fl.step===4&&to>=4?`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`:fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点（有的这一次没走到，不影响多轮实测）`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
  return `<ol class="isteps">${li}</ol>${big}${fl.st===1&&fl.step!==4?`<div class="ilog"><span class="note">最新一行</span><code>${fl.log||'…'}</code><button class="pill">完整日志</button></div>`:''}`}
 
 let diffOpen=new Set();
-function diffView(){const rows=live(),F=FF[scene];const num=p=>p.replace(/\D/g,'')||'0';
+function diffViewReal(){const V=FSWJ.view;
+ const one=(k,i,t,sub,lines)=>`<div class="drow"><span class="num">${i}</span><div><b>${htmlEsc(t)}</b> <span class="note">${sub}</span></div><button class="pill" data-dopen="${k}">${diffOpen.has(k)?'收起代码':'看代码'}</button>${diffOpen.has(k)?`<pre class="diff">${lines.map(([k2,t2])=>`<span class="${k2==='+'?'add':k2==='…'?'more':''}">${k2==='…'?'':k2} ${htmlEsc(t2)}</span>`).join('\n')}</pre>`:''}</div>`;
+ const order=live().map(x=>fswId(x.p)),mine=V.places.filter(x=>/^P\d+$/.test(x.step)).sort((a,b)=>order.indexOf(a.step)-order.indexOf(b.step)),help=V.places.filter(x=>!/^P\d+$/.test(x.step));
+ return `<div class="status" style="margin-bottom:8px"><span><i class="dot" style="background:var(--ok)"></i>只加不删：${V.files} 个文件，新增 ${V.added} 行，删除 ${V.deleted} 行（码表逐行核对）</span><span><i class="dot" style="background:var(--ok)"></i>${V.steps.length} 个计时点都插上了，和你确认的一一对应</span></div>
+ <p class="note" style="margin:0 0 4px">每处只加两行：一行说明、一行记时间。"+"开头的是新加的。</p>
+ <div class="dlist">${one('hdr','＋',`新文件 ${V.header.split('/').pop()}`,`计时点工具，+${V.header_lines} 行；总开关也在这里`,[['+',`// 总开关：FW_STOPWATCH_ENABLE 改成 0，所有计时点变成空语句`],['+','#define FW_STOPWATCH_ENABLE 1'],['…',`（共 ${V.header_lines} 行）`]])}
+ ${mine.map((x,i)=>one('m'+i,i+1,x.n,`${x.file.split('/').pop()} 第 ${x.at} 行 · +${x.added} 行`,x.lines)).join('')}
+ ${help.length?one('help','＋',`辅助的 ${help.length} 处`,'加上计时点工具、每轮开始清零等',help.flatMap(x=>[['…',`${x.file.split('/').pop()} 第 ${x.at} 行后：${x.n}`],...x.lines.filter(l=>l[0]==='+')])):''}</div>
+ ${FSWJ.notes&&FSWJ.notes.length?`<details style="margin-top:8px"><summary class="note">AI 插的时候提醒的 ${FSWJ.notes.length} 件事</summary><ol class="notes" style="font-size:14px">${FSWJ.notes.map(n=>`<li>${htmlEsc(n)}</li>`).join('')}</ol></details>`:''}
+ <p class="note">总开关在 <span class="code">${V.header.split('/').pop()}</span>：关掉后固件和原版大小相同、逻辑相同。要完全回到原版，用"还原"，会逐字节比对。</p>`}
+function diffView(){if(realFlash()&&FSWJ&&FSWJ.view)return diffViewReal();const rows=live(),F=FF[scene];const num=p=>p.replace(/\D/g,'')||'0';
  const one=(k,i,t,sub,lines)=>`<div class="drow"><span class="num">${i}</span><div><b>${t}</b> <span class="note">${sub}</span></div><button class="pill" data-dopen="${k}">${diffOpen.has(k)?'收起代码':'看代码'}</button>${diffOpen.has(k)?`<pre class="diff">${lines.map(([k2,t2])=>`<span class="${k2==='+'?'add':k2==='…'?'more':''}">${k2==='…'?'':k2} ${t2.replace(/</g,'&lt;')}</span>`).join('\n')}</pre>`:''}</div>`;
  return `<div class="status" style="margin-bottom:8px"><span><i class="dot" style="background:var(--ok)"></i>只加不删：${F.diffSum}，删除 0 行（码表逐行核对）</span><span><i class="dot" style="background:var(--ok)"></i>${rows.length} 个计时点都插上了，和你确认的一一对应</span></div>
  <p class="note" style="margin:0 0 4px">每处只加两行：一行说明、一行记时间。"+"开头的是新加的。</p>
@@ -699,7 +736,7 @@ function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,a
 const okRounds=()=>col.got.filter(x=>!x.bad);
 function issues(x){if(x.bad)return `<span class="chip c-gray">${CC().miss}，不计入，自动补收一轮</span>`;
  return x.probs.map(p=>`<span class="chip c-${p.c}">${p.t}</span>`).join(' ')||'<span class="note">正常</span>'}
-function colSetup(){const C=CC(),D=build(SCENES[scene]);return `${justFlashed?`<div class="okbar">✓ 计时版已烧进设备，试的那一次 ${live().length} 个计时点都收到了。下面开始多轮实测。</div>`:''}<section class="panel"><h1 style="font-size:22px">多轮实测：${C.cnt} ${colN} ${C.unit}</h1>
+function colSetup(){const C=CC(),D=build(SCENES[scene]);return `${justFlashed?`<div class="okbar">✓ 计时版已烧进设备，试的那一次 ${realFlash()&&FSWJ&&(FSWJ.got||[]).length<FSWJ.total?`收到了 ${(FSWJ.got||[]).length} / ${FSWJ.total} 个计时点`:`${realFlash()&&FSWJ?FSWJ.total:live().length} 个计时点都收到了`}。下面开始多轮实测。</div>`:''}<section class="panel"><h1 style="font-size:22px">多轮实测：${C.cnt} ${colN} ${C.unit}</h1>
  <p style="margin:4px 0 0">同样的事做很多轮，码表从设备输出里记下每一轮各段用了多久。刚才试的那一次不算。</p>
  <div class="status" style="margin:6px 0 4px"><span><i class="dot" style="background:var(--ok)"></i>${C.dev}已连上，计时点输出正常</span><span><i class="dot" style="background:var(--ok)"></i>${C.mode}</span><span><i class="dot" style="background:var(--ok)"></i>量 ${D.lines.length} 条线：${D.lines.map(l=>D.S.startShort+' → '+l.end).join('；')}</span></div>
  <dl class="cform">
@@ -933,7 +970,9 @@ function flowBar(){if(!flow&&page!=='home')return '';let st;
  else{const C0=rtC(),pre=page==='retest'&&rtSrc<2,C={steps:C0.steps.map(x=>pre?[x[0],1]:x)};const ids=['retest','steps','flash','collect','compare'];if(!ids.includes(page))return '';st=[['retest','查改了什么',0],['steps','找关键步骤',!C.steps[0][1]],['flash','插计时点和烧录',!C.steps[1][1]],['collect','多轮实测',0],['compare','前后对比',!C.steps[3][1]]]}
  const ci=st.findIndex(x=>x[0]===page);if(flow&&ci>flowMax)flowMax=ci;const mx=flow?flowMax:ci;
  return `<ol class="flow" aria-label="测量步骤"><span class="note" style="margin-right:4px">${flow==='retest'?'改完再测':'第一次测'}：</span>${st.map(([id,n,sk],i)=>`<li>${sk?`<span class="fs skip">${n}（跳过）</span>`:i===ci?`<span class="fs cur ${page==='flash'&&(fl.st===5||fl.st===4)?'bad':''}">${page==='flash'&&(fl.st===5||fl.st===4)?'! ':i<mx?'✓ ':''}${n}</span>`:i<mx?`<button class="fs done" data-go="${id}" data-keepflow="1" title="回去看看，已做的不会清掉">✓ ${n}</button>`:i===mx?`<button class="fs goon" data-go="${id}" data-keepflow="1" title="回到做到一半的这一步">${n}（做到这里）</button>`:`<span class="fs">${n}</span>`}</li>`).join('')}</ol>${flow&&ci<mx?`<p class="note" style="margin:-4px 0 10px">在回看已做完的「${st[ci][1]}」，后面已做的都留着。只有在这里改了东西，后面的步骤才要重做。</p>`:''}`}
-function restoreBox(sc){const r=restored[sc];return `<section class="panel"><h2>设备上现在是：${r?'原版':'计时版'}</h2>${r?'<p class="note" style="margin:0">✓ 已还原成原版，和你的原版逐字节比对一致。</p>':`<p class="note" style="margin:0 0 8px">计时版每过一个计时点会多打印一行，交货、演示前请还原。<br>还原是直接烧读代码时编好的那份原版，烧完逐字节比对。还要接着测就先别还原。</p><div class="acts" style="margin:0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
+let RESTORE=null;
+function restoreBox(sc){const r=restored[sc];if(r&&RESTORE&&realFlash()){const R=RESTORE;return `<section class="panel"><h2>设备上现在是：${R.flashed?'原版':'计时版（源码已还原）'}</h2><p class="note" style="margin:0">${R.same?`✓ 源码已还原，和你原来的源码逐字节比对一致（${R.files} 个文件）。`:R.same===false?`✕ 源码还原后和你原来的源码有 ${R.diff.length} 个文件不一样：${R.diff.map(htmlEsc).join('、')}。`:'源码已还原。'}${R.flashed?`<br>✓ 已把原版烧回设备（${htmlEsc(R.port)}）。`:R.error?`<br>✕ 原版没烧上：${htmlEsc(R.error)}`:'<br>设备没插，原版还没烧回去：插上设备后再点一次「还原成原版」。'}</p>${R.flashed?'':`<div class="acts" style="margin:8px 0 0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
+ return `<section class="panel"><h2>设备上现在是：${r?'原版':'计时版'}</h2>${r?'<p class="note" style="margin:0">✓ 已还原成原版，和你的原版逐字节比对一致。</p>':`<p class="note" style="margin:0 0 8px">计时版每过一个计时点会多打印一行，交货、演示前请还原。<br>还原是直接烧读代码时编好的那份原版，烧完逐字节比对。还要接着测就先别还原。</p><div class="acts" style="margin:0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
 function retestEntry(){return `<section class="panel"><h2>改完以后</h2><p class="note" style="margin:0 0 8px">照上面的建议改完代码、换了模型或升级了版本，点这里再测一次。<br>码表先查改了什么，能跳过的步骤自动跳过，测完直接和这次比。</p><div class="acts" style="margin:0"><button class="btn pri" data-retest="${scene}">改完了，再测一次</button></div></section>`}
 
 function rtExtra(sc,k){const P=PROJ.find(p=>p.scene===sc),R=RT[sc],u=COLLECT[sc];const same=R.same;
@@ -1028,6 +1067,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}
   if(e.target.closest('[data-cdskip]')){clearInterval(cdT);cdT=null;cd=0;hStage=4;render();return}
   if(e.target.closest('[data-mnext]')){clearInterval(cdT);cdT=null;cd=0;hStage=1;page='steps';mode='boss';render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-goins]')&&realFlash()){page='flash';flashVar='b';flStop();flNoDev=false;fswInsert();render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-goins]')){page='flash';flashVar='b';flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1);render();window.scrollTo(0,0);return}
   const dop=e.target.closest('[data-dopen]');if(dop){const k=dop.dataset.dopen;diffOpen.has(k)?diffOpen.delete(k):diffOpen.add(k);render();return}
   const del=e.target.closest('[data-del]');if(del){stepsChanged();dropped.add(del.dataset.del);if(editP===del.dataset.del)editP=null;render();return}
@@ -1064,7 +1104,9 @@ document.addEventListener('click',e=>{
    if(a==='paste'){const v=(document.getElementById('h-paste').value||'').trim();if(!v){hErr='先粘贴一个路径。';render();return}realPick({path:v});return}
    api('/api/source/pick',{kind:a==='zip'?'zip':'dir'}).then(r=>{if(r.path)realPick({path:r.path})}).catch(()=>{hErr='打不开选择窗口，可以把路径粘贴到下面的框里。';render()});return}
   const pr=e.target.closest('[data-pickroot]');if(pr){realPick({path:pr.dataset.pickroot});return}
-  const rs=e.target.closest('[data-restore]');if(rs){restored[rs.dataset.restore]=true;render();return}
+  const rs=e.target.closest('[data-restore]');if(rs&&realFlash()&&FSWJ&&rs.closest('#main')&&page==='report'){rs.disabled=true;rs.textContent='正在还原……';
+   api('/api/fsw/restore',{}).then(j=>{RESTORE=j;restored[rs.dataset.restore]=true;onDev=j.flashed?'orig':onDev;render()}).catch(()=>{toast('✕ 码表后台没有回应');render()});return}
+  if(rs){restored[rs.dataset.restore]=true;render();return}
   const sgo=e.target.closest('[data-setgo]');if(sgo){page='settings';render();setTimeout(()=>{const el=document.getElementById(sgo.dataset.setgo);if(el){el.scrollIntoView({block:'start'});el.classList.add('flash')}},30);return}
   const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-board');b&&b.focus();return}const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
   const os=e.target.closest('[data-os]');if(os){setOS=os.dataset.os;if(inst.st!==2){instStop();inst={st:0,step:0,pct:0,log:'',timer:null}}render();return}
@@ -1077,11 +1119,17 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-idretry]')){identStart(true);render();return}
   const fv=e.target.closest('[data-flashvar]');if(fv){flashVar=fv.dataset.flashvar;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';render();return}
   const fa=e.target.closest('[data-fl]');if(fa){const a=fa.dataset.fl;
+   if(realFlash()){if(a==='ok'){if(!envComp()){envBack='flash';pop='env';render();return}diffOk=true;fswPost('/api/fsw/run',{from:'build'})}else if(a==='redo'||a==='ins'){if(flow==='first'&&flowMax>2){flowMax=2;colStop();col={st:0,att:0,got:[],phase:0}}fswInsert()}render();return}
    let a2=a;if(a==='nodev'){flNoDev=true;a2=flashVar==='b'?'ins':'all'}
    if(a2==='all'&&!envComp()){envBack='flash';pop='env';render();return}if(a2==='all')flRun(0,4);else if(a2==='ins')flRun(0,1);else if(a2==='ok'){if(!envComp()){envBack='flash';pop='env';render();return}diffOk=true;flRun(2,4)}else if(a2==='redo'){if(flow==='first'&&flowMax>2){flowMax=2;colStop();col={st:0,att:0,got:[],phase:0}}diffOk=false;diffOpen=new Set();flRun(0,1)}else if(a2==='plug'){flNoDev=false;flRun(3,flashVar==='c'?3:4)}
    render();return}
   const de=e.target.closest('[data-demoerr]');if(de){const k=de.dataset.demoerr;flNoDev=k==='nodev';demoErr=k==='nodev'?'':k;if(page==='home'&&k){hErr=''}render();return}
-  const fx=e.target.closest('[data-flx]');if(fx){const a=fx.dataset.flx;demoErr='';
+  const fx=e.target.closest('[data-flx]');if(fx&&realFlash()&&FSWJ){const a=fx.dataset.flx;
+   if(a==='drop'){const sid=FSWJ.err.step,x=live().find(r=>fswId(r.p)===sid);stepsChanged();diffOk=true;if(x)dropped.add(x.p);flowMax=Math.max(flowMax,2);toast('已撤掉这处计时点，重新编译');fswPost('/api/fsw/drop',{step:sid})}
+   else if(a==='move'){const sid=FSWJ.err.step,x=live().find(r=>fswId(r.p)===sid);editP=x?x.p:null;fl={st:0,step:0,pct:0,log:''};diffOk=false;page='steps';render();window.scrollTo(0,0);setTimeout(()=>{const el=document.getElementById('ed-f');if(el){el.scrollIntoView({block:'center'});el.focus()}},50);return}
+   else if(a==='rebuild')fswPost('/api/fsw/run',{from:'build'});else if(a==='reburn')fswPost('/api/fsw/run',{from:'flash'});else if(a==='retry')fswPost('/api/fsw/run',{from:'try'});
+   render();return}
+  if(fx){const a=fx.dataset.flx;demoErr='';
    if(a==='drop'){const L=live();stepsChanged();diffOk=true;dropped.add(L[Math.min(2,L.length-1)].p);flowMax=Math.max(flowMax,2);toast('已撤掉这个计时点，重新编译');flRun(2,4)}
    else if(a==='move'){const L=live();editP=L[Math.min(2,L.length-1)].p;fl={st:0,step:0,pct:0,log:''};diffOk=false;page='steps';render();window.scrollTo(0,0);setTimeout(()=>{const el=document.getElementById('ed-f');if(el){el.scrollIntoView({block:'center'});el.focus()}},50);return}
    else if(a==='reburn')flRun(3,4);else if(a==='retry')flRun(4,4);

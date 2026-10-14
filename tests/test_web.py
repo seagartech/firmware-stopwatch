@@ -193,3 +193,11 @@ def test_find_steps_page_uses_real_identification():
         assert api in js, api
     assert "data-idretry" in js
     assert "mmss(IDENT.seconds)" in js  # 选了真源码时，用时写真实的
+
+
+def test_flash_page_uses_real_insert_build_flash():
+    """任务 14：选了真源码时，插计时点、编译、烧录、试一次、撤掉一处、还原都调后台真做。"""
+    js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
+    for api in ("/api/fsw/insert", "/api/fsw/run", "/api/fsw/drop", "/api/fsw/restore", "fetch('/api/fsw')"):
+        assert api in js, api
+    assert "diffViewReal" in js and "flErrReal" in js

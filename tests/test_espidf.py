@@ -193,3 +193,47 @@ def test_build_failure_shows_the_compiler_error_not_the_command_line(tmp_path):
     r = EspIdf(tmp_path / "idf", runner=fake_runner(out, code=1), env={}).build(src, target="esp32s3")
     assert r["error"].startswith("../main/application.cc:2101:1: error:")
     assert "-Werror" not in r["error"]
+
+
+# ---------- 任务 14：存下编好的固件、烧存下的那份、读调试口一段时间 ----------
+FLASHER = {"write_flash_args": ["--flash-mode", "dio", "--flash-size", "16MB", "--flash-freq", "80m"],
+           "flash_files": {"0x0": "bootloader/bootloader.bin", "0x20000": "app.bin"},
+           "extra_esptool_args": {"after": "hard-reset", "before": "default-reset", "chip": "esp32s3"}}
+
+
+def built(tmp_path):
+    b = write(tmp_path / "src", {"build/bootloader/bootloader.bin": "B", "build/app.bin": "APP!",
+                                 "build/flasher_args.json": json.dumps(FLASHER), "build/other.o": "x"})
+    return b
+
+
+def test_save_firmware_copies_only_what_flashing_needs(tmp_path):
+    src = built(tmp_path)
+    info = EspIdf.save_firmware(src, tmp_path / "fw/orig")
+    assert info["files"] == 2 and info["app_bytes"] == 4
+    assert (tmp_path / "fw/orig/bootloader/bootloader.bin").read_text() == "B"
+    assert not (tmp_path / "fw/orig/other.o").exists()
+    assert EspIdf.save_firmware(tmp_path / "nothing", tmp_path / "fw/x") is None
+
+
+def test_flash_saved_firmware_with_esptool(tmp_path):
+    src = built(tmp_path)
+    EspIdf.save_firmware(src, tmp_path / "fw")
+    calls, seen = [], []
+    out = ["Writing at 0x00020000 [====>     ] 48.2% 49152/101998 bytes...", "Hard resetting via RTS pin..."]
+    idf = EspIdf(tmp_path / "idf", runner=fake_runner(out, calls=calls), env={})
+    r = idf.flash_saved(tmp_path / "fw", "/dev/cu.usbmodem1101", on_progress=lambda p, m: seen.append(p))
+    assert r["ok"] and seen == [48, 100]
+    cmd = calls[0]
+    assert cmd[1:3] == ["-m", "esptool"] and "--chip" in cmd and "esp32s3" in cmd and "write-flash" in cmd
+    assert cmd[-4:] == ["0x0", "bootloader/bootloader.bin", "0x20000", "app.bin"]
+    assert cmd[cmd.index("-p") + 1] == "/dev/cu.usbmodem1101"
+
+
+def test_read_for_a_while():
+    import serial
+    s = serial.serial_for_url("loop://", timeout=0.05)
+    s.write(b"I (1) x\r\nFSW,P2,10,0\r\nFSW,P5,20,0\r\n")
+    got = []
+    lines = EspIdf.read_for(s, 0.5, on_line=got.append)
+    assert lines == ["I (1) x", "FSW,P2,10,0", "FSW,P5,20,0"] and got == lines

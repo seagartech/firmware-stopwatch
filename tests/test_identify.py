@@ -243,3 +243,15 @@ def test_claude_code_hanging_is_stopped_with_plain_message(tmp_path, door):
     with pytest.raises(LLMError) as e:
         ClaudeCode(exe, timeout=1).investigate("找步骤", door)
     assert e.value.kind == "timeout" and "重试" in e.value.message
+
+
+def test_reused_result_rebuilds_page_with_new_fields(tmp_path, door):
+    proj = tmp_path / "proj"
+    idf.identify_cached(FakeLLM(DOOR_REPLY), door, "从刷卡到开门", proj, fingerprint="f", provider="cc")
+    f = next((proj / "identify").glob("*.json"))
+    old = json.loads(f.read_text(encoding="utf-8"))
+    for s in old["page"]["steps"]:  # 像旧版本存下的结果：页面数据里没有"一轮记哪一次"
+        s.pop("once", None)
+    f.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+    r = idf.identify_cached(FakeLLM(""), door, "从刷卡到开门", proj, fingerprint="f", provider="cc")
+    assert r["reused"] and "once" in r["page"]["steps"][0]

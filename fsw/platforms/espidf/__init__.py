@@ -269,6 +269,66 @@ class EspIdf:
         errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-6:]
         return {"ok": False, "port": port, "error": "\n".join(errs[-6:])}
 
+    # ---- 任务 14：两份固件（原版、计时版）各存一份，随时烧哪个 ----
+    @staticmethod
+    def save_firmware(src, dest):
+        """编好后把烧录要用的几个文件存一份（按 build/flasher_args.json）。没编好返回 None。"""
+        build = Path(src) / "build"
+        try:
+            args = json.loads((build / "flasher_args.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        dest = Path(dest)
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True)
+        for rel in args["flash_files"].values():
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(build / rel, dest / rel)
+        (dest / "flasher_args.json").write_text(json.dumps(args, ensure_ascii=False, indent=1), encoding="utf-8")
+        app = (args.get("app") or {}).get("file") or list(args["flash_files"].values())[-1]
+        return {"files": len(args["flash_files"]), "app_bytes": (dest / app).stat().st_size}
+
+    def flash_saved(self, fw, port, on_progress=lambda pct, msg: None):
+        """烧存下的那份固件（乐鑫官方 esptool，和 idf.py flash 用同样的参数）。"""
+        fw = Path(fw)
+        args = json.loads((fw / "flasher_args.json").read_text(encoding="utf-8"))
+        extra = args.get("extra_esptool_args") or {}
+        cmd = [self._idf_py()[0], "-m", "esptool", "--chip", extra.get("chip", "auto"), "-p", port, "-b", "460800",
+               "--before", extra.get("before", "default-reset"), "--after", extra.get("after", "hard-reset"),
+               "write-flash", *args.get("write_flash_args", [])]
+        for off, rel in args["flash_files"].items():
+            cmd += [off, rel]
+
+        def line_cb(line):
+            pct = flash_progress(line)
+            if pct is not None:
+                on_progress(pct, line.strip()[:200])
+
+        t = time.time()
+        code, tail = self._run(cmd, fw, line_cb)
+        if code == 0:
+            on_progress(100, "烧录完成")
+            return {"ok": True, "port": port, "seconds": round(time.time() - t, 1), "error": None}
+        errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-6:]
+        return {"ok": False, "port": port, "error": "\n".join(errs[-6:])}
+
+    @staticmethod
+    def read_for(ser, seconds, on_line=lambda line: None):
+        """读调试口一段时间，一行行交出来（试一次用）。"""
+        end, buf, out = time.time() + seconds, b"", []
+        while time.time() < end:
+            chunk = ser.read(ser.in_waiting or 1)
+            if not chunk:
+                continue
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                text = line.rstrip(b"\r").decode("utf-8", "replace")
+                out.append(text)
+                on_line(text)
+        return out
+
     @staticmethod
     def open_port(port, baud=115200):
         import serial

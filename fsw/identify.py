@@ -181,6 +181,7 @@ def to_page(r, what):
     """换成网页"找关键步骤"那页要的样子（和演示数据同样的字段）。"""
     steps = [{"p": s["id"], "n": s["name"], "f": Path(s["file"]).name or s["file"], "path": s["file"], "l": s["line"],
               "line": LINE_OF[s["line_of"]], "why": s["why"], "sure": s["sure"], "code": s["code"], "loc_ok": s["loc_ok"],
+              "where": s["where"], "once": s["once"], "func": s["func"],
               **({"note": s["doubt"]} if s["doubt"] else {})} for s in r["steps"]]
     ids = {s["p"] for s in steps}
     start, main, side = r.get("start") or {}, r.get("main") or {}, r.get("side")
@@ -264,7 +265,8 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
     if reuse and f and f.exists():
         try:
             r = json.loads(f.read_text(encoding="utf-8"))
-            return {**r, "reused": True, "seconds": 0}
+            # 页面数据按存下的步骤重新算一遍：码表升级后页面要的新字段（比如"一轮记哪一次"）也有
+            return {**r, "page": to_page(r, what), "reused": True, "seconds": 0}
         except (OSError, ValueError):
             pass
     r = identify(llm, root, what, **kw)
