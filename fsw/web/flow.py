@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 
 KINDS = {
     "first": [
+        ("pick", "选固件"),
         ("identify", "找关键步骤"),
         ("probes", "插计时点和烧录"),
         ("measure", "多轮实测"),
@@ -125,6 +126,23 @@ class Flow:
             raise FlowError(f"「{step.name}」没有出错")
         step.status = "doing"
         self.error = None
+
+    def sync(self, reached, viewing=None, error=None, skipped=()):
+        """按网页上的步骤条同步：第 reached 步（从 0 数）正在做，前面的做完，后面的没做。"""
+        for i, s in enumerate(self.steps):
+            if s.key in skipped:
+                s.status = "skipped"
+            elif i < reached:
+                s.status = "done"
+            elif i == reached:
+                s.status = "error" if error else "doing"
+            else:
+                s.status = "todo"
+        self.error = error
+        self.notice = None
+        if viewing:
+            self._step(viewing)
+            self.viewing = viewing
 
     def to_dict(self):
         d = asdict(self)

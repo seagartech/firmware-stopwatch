@@ -21,7 +21,8 @@ DEMO = HERE / "demo"
 
 
 def load_demos():
-    return {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(DEMO.glob("*.json"))}
+    demos = [json.loads(p.read_text(encoding="utf-8")) for p in DEMO.glob("*.json")]
+    return {d["id"]: d for d in sorted(demos, key=lambda d: d.get("order", 99))}
 
 
 class StartBody(BaseModel):
@@ -35,28 +36,50 @@ class StepBody(BaseModel):
     skip: list[str] = []
 
 
-def device_lines(demo, rounds, start=0):
-    """按演示数据生成设备调试口会打出来的计时点行。"""
-    points = []
-    for line in demo["lines"]:
-        t, chain = 0.0, []
-        for key in line["segments"]:
-            seg = demo["segments"][key]
-            a, b = [p.strip() for p in seg["points"].split("→")]
+def device_lines(demo, rounds, start=0, drop_at=0):
+    """按演示数据生成设备调试口会打出来的计时点行。
+
+    drop_at=k：在第 k 个完整轮之前插一轮只收到第一个计时点的（模拟没收全）。
+    """
+    S = demo["S"]
+    chains = []
+    for line in S["lines"]:
+        chain = []
+        for key in line["segs"]:
+            a, b = [p.strip() for p in S["segs"][key]["code"].split("→")]
             chain.append((a, b, key))
-        points.append(chain)
-    for r in range(start, start + rounds):
+        chains.append(chain)
+    n = len(next(iter(S["segs"].values()))["v"])
+    for i, r in enumerate(range(start, start + rounds)):
         base = 5_000_000 + r * 7_000_000
-        yield "FSW,RESET"
         marks = {}
-        for chain in points:
+        for chain in chains:
             t = 0.0
             marks.setdefault(chain[0][0], 0.0)
             for a, b, key in chain:
-                t += demo["segments"][key]["values"][r % 20]
+                t += S["segs"][key]["v"][r % n]
                 marks.setdefault(b, t)
-        for p, t in sorted(marks.items(), key=lambda x: x[1]):
+        ordered = sorted(marks.items(), key=lambda x: x[1])
+        if drop_at and i + 1 == drop_at:
+            yield "FSW,RESET"
+            p, t = ordered[0]
+            yield f"FSW,{p},{base - 3_000_000 + round(t * 1_000_000)},0"
+        yield "FSW,RESET"
+        for p, t in ordered:
             yield f"FSW,{p},{base + round(t * 1_000_000)},0"
+
+
+PAGE_TO_STEP = {
+    "home": "pick", "retest": "diff", "steps": "identify", "flash": "probes",
+    "collect": "measure", "report": "report", "compare": "compare",
+}
+
+
+class SyncBody(BaseModel):
+    reached: int
+    viewing: str | None = None
+    error: str | None = None
+    skipped: list[str] = []
 
 
 def create_app():
@@ -121,6 +144,24 @@ def create_app():
         state["demo"] = body.demo
         return snapshot()
 
+    @app.post("/api/flow/sync")
+    def flow_sync(body: SyncBody):
+        flow = state["flow"]
+        if flow is None:
+            raise HTTPException(409, "还没开始测量")
+        viewing = PAGE_TO_STEP.get(body.viewing, body.viewing)
+        keys = [s.key for s in flow.steps]
+        try:
+            flow.sync(
+                min(body.reached, len(keys) - 1),
+                viewing=viewing if viewing in keys else None,
+                error=body.error,
+                skipped=[PAGE_TO_STEP.get(k, k) for k in body.skipped],
+            )
+        except FlowError as e:
+            raise HTTPException(409, str(e))
+        return snapshot()
+
     @app.post("/api/flow/{action}")
     def flow_action(action: str, body: StepBody):
         flow = state["flow"]
@@ -154,12 +195,14 @@ def create_app():
         return snapshot()
 
     @app.get("/api/device/stream")
-    async def device_stream(demo: str, rounds: int = 1, start: int = 0, interval: float = 0.05):
+    async def device_stream(
+        demo: str, rounds: int = 1, start: int = 0, drop_at: int = 0, interval: float = 0.05
+    ):
         if demo not in demos:
             raise HTTPException(404, "没有这套演示数据")
 
         async def gen():
-            for line in device_lines(demos[demo], rounds, start):
+            for line in device_lines(demos[demo], rounds, start, drop_at):
                 yield f"data: {line}\n\n"
                 if interval:
                     await asyncio.sleep(interval)

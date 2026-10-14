@@ -1,473 +1,1009 @@
-// 固件码表网页。只认通用数据：一个起点 + 几条线，每条线按顺序几段。
-// 这一版用演示数据走通流程；真读源码、真编译、真串口按任务逐个接进来。
-'use strict';
+// 演示数据（一个起点 + 几条线 + 每条线的段等）从后台 /api/demo 读，代码里不写死任何场景
+let SCENES={},FF={},COLLECT={},RUNS={},RANGE={},RT={},PROJ=[];
+// 原型底部"演示栏"的开关，真软件里改用网址参数：?demo= 选演示数据，?fail= 演示出错，?retest= 改完再测的情况，?settings=first|done 设置页状态
+const QS=new URLSearchParams(location.search);
+const FAIL=QS.get('fail')||'',DEMO=QS.get('demo')||'',RTCASE=QS.get('retest')||'same',SETTINGS=QS.get('settings')||'';
+// ===== 通用计算 =====
+const sorted=a=>[...a].sort((x,y)=>x-y);
+const med=a=>{const s=sorted(a),m=s.length/2;return s.length%2?s[m|0]:(s[m-1]+s[m])/2};
+const p90=a=>sorted(a)[Math.ceil(a.length*.9)-1];
+const mx=a=>Math.max(...a);
+const f=(x,d=2)=>x.toFixed(d);
+const LCOL=['var(--face)','var(--speak)','var(--warn)','var(--muted)'];
+const LSOFT=['var(--face-soft)','var(--speak-soft)','var(--soft)','var(--soft)'];
+function build(S){
+  const n=Object.values(S.segs)[0].v.length;
+  const use={};S.lines.forEach(l=>l.segs.forEach(k=>use[k]=(use[k]||0)+1));
+  const lines=S.lines.map((l,i)=>{const ends=[...Array(n)].map((_,r)=>l.segs.reduce((t,k)=>t+S.segs[k].v[r],0));
+    return {...l,i,col:LCOL[i],soft:LSOFT[i],ends,med:med(ends),p90:p90(ends),max:mx(ends),segMed:l.segs.map(k=>med(S.segs[k].v))}});
+  const rounds=[...Array(n)].map((_,r)=>({n:r+1,ends:lines.map(l=>l.ends[r])}));
+  let reversed=[];
+  if(S.firstBeforeSecond&&lines.length>1)reversed=rounds.filter(r=>r.ends[0]>r.ends[1]);
+  const slowRounds=rounds.filter(r=>lines.some((l,i)=>r.ends[i]>l.slow));
+  const allSegs=Object.entries(S.segs).map(([k,s])=>({k,...s,med:med(s.v),max:mx(s.v)}));
+  const biggest=[...allSegs].sort((a,b)=>b.med-a.med)[0];
+  const spiky=allSegs.filter(s=>s.max>s.med*2.5&&s.max-s.med>.3).sort((a,b)=>(b.max-b.med)-(a.max-a.med))[0];
+  const main=lines[lines.length-1];
+  const verdict=l=>l.med>l.slow?['慢','c-bad']:l.med>l.ok[1]?['偏慢','c-warn']:['正常','c-ok'];
+  const exp=S.exp?(main.med>S.exp.fair?['差','c-bad']:['可以','c-ok']):null;
+  // 计时图画"真实的一轮"：选各条线都最接近中位数的那一轮（2026-10-13 用户问"是某一次还是平均值"后改）
+  const rep=[...rounds].map(r=>({r,d:r.ends.reduce((t,e,i)=>t+Math.abs(e-lines[i].med)/lines[i].med,0)})).sort((a,b)=>a.d-b.d)[0].r;
+  return {S,n,use,lines,rounds,reversed,slowRounds,allSegs,biggest,spiky,main,verdict,exp,rep};
+}
+const roundList=a=>'第 '+a.map(r=>r.n).join('、')+' 轮';
+function headline(D){
+  const L=D.lines;
+  if(L.length===1)return `${D.S.startShort} ${f(L[0].med,1)} 秒${L[0].phrase}`;
+  return `${D.S.startShort} ${f(L[0].med,1)} 秒${L[0].phrase}，${f(L[1].med,1)} 秒${L[1].phrase}`;
+}
 
-const $ = s => document.querySelector(s);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const f2 = x => x.toFixed(2);
-const sum = a => a.reduce((x, y) => x + y, 0);
-const sorted = a => [...a].sort((x, y) => x - y);
-const median = a => { const s = sorted(a), m = s.length / 2; return s.length % 2 ? s[m | 0] : (s[m - 1] + s[m]) / 2; };
-const p90 = a => sorted(a)[Math.ceil(a.length * 0.9) - 1];
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const failDemo = new URLSearchParams(location.search).get('fail');
+const LV=[['必须改','lv-must'],['建议改','lv-should'],['可以不改','lv-ok']];
+const lvTag=lv=>`<span class="lvtag ${LV[lv][1]}">${LV[lv][0]}</span>`;
+const jump=(id,t)=>`<button class="lnk" data-jump="${id}">${t}</button>`;
+function decisions(D){
+  const out=[];
+  if(D.reversed.length)out.push({k:'reversed',tag:['要查','c-bad'],t:`${D.reversed.length} 轮${D.lines[0].end}反而比${D.lines[1].end}晚`,d:`${roundList(D.reversed)}。"先给反应"这个设计在这几轮白做了。`,who:'先查是哪一段变慢'});
+  if(D.spiky)out.push({k:'spiky',tag:['偶发','c-warn'],t:`"${D.spiky.name}"偶尔特别慢`,d:`平时 ${f(D.spiky.med)} 秒，最慢 ${f(D.spiky.max)} 秒（${roundList(D.allSegs.find(s=>s.k===D.spiky.k).v.map((x,i)=>({x,n:i+1})).filter(o=>o.x>D.spiky.med*2.5))}）。`,who:`找${D.spiky.owner}`});
+  const b=D.biggest,share=Math.round(b.med/D.main.med*100);
+  const mv=D.verdict(D.main)[0],mainOk=!(D.exp&&D.exp[0]==='差')&&mv==='正常';
+  out.push({k:'main',tag:D.exp?[`体验${D.exp[0]}`,D.exp[1]]:D.verdict(D.main),t:`${D.main.end}要 ${f(D.main.med,1)} 秒，大头是"${b.name}"`,d:`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`,who:mainOk?'在合理范围里，不用改':`找${b.owner}`});
+  // 等级按固定规则算，不由 AI 判断（2026-10-13 用户提出加标签）
+  const L=out.map(x=>{let lv;
+    if(x.k==='main')lv=(D.exp&&D.exp[0]==='差')||mv==='慢'?0:mv==='偏慢'?1:2;
+    else if(x.k==='spiky')lv=D.lines.filter(l=>l.segs.includes(D.spiky.k)).some(l=>l.p90>l.slow)?0:1;
+    else lv=D.reversed.length/D.n>.1?0:1;
+    const src=x.k==='main'?['tiers','「三档用时」里“一般”那一列；各段占多少见「一次的计时图」']:x.k==='spiky'?['rounds',`「${D.n} 轮逐轮」图里红底的几轮`]:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1].end}晚"的几轮`];
+    return {...x,lv,src}});
+  return L.sort((a,b)=>a.lv-b.lv);
+}
 
-const S = {
-  state: null, demos: [], demo: null, page: 'home', back: 'home',
-  home: { demo: null, data: null, ask: '', confirm: false },
-  ui: {},
+// ===== 计时图：同一起点、多条横线（按数据画）=====
+function niceT(x){return Math.max(.5,Math.ceil(x*1.2/.5)*.5)}
+function step(T){return T<=1?.1:T<=2?.25:T<=4?.5:1}
+function timeline(D){
+  const R=D.rep.n-1,T=niceT(Math.max(...D.rep.ends));const W=900,X0=150,X1=820,sx=t=>X0+(X1-X0)*t/T,h=22,gap=64,top=60;
+  const H=top+D.lines.length*gap+30;
+  let g='';const st=step(T);
+  for(let t=0;t<=T+1e-9;t+=st){g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="30" y2="${H-30}" stroke="var(--soft)"/><text x="${sx(t)}" y="${H-10}" text-anchor="middle" font-size="12" fill="var(--muted)" class="num">${+t.toFixed(2)} 秒</text>`}
+  if(D.S.exp&&D.S.exp.fair<=T)g+=`<line x1="${sx(D.S.exp.fair)}" x2="${sx(D.S.exp.fair)}" y1="30" y2="${H-30}" stroke="var(--warn)" stroke-dasharray="3 4"/><text x="${sx(D.S.exp.fair)+4}" y="40" font-size="11.5" fill="var(--warn)">${D.S.exp.label}</text>`;
+  g+=`<text x="${sx(0)}" y="22" text-anchor="middle" font-size="12" fill="var(--muted)">${D.S.start}</text>`;
+  g+=`<line x1="${sx(0)-60}" x2="${sx(0)}" y1="${top+h/2}" y2="${top+h/2}" stroke="var(--est)" stroke-dasharray="4 4" stroke-width="2"/><text x="${sx(0)-64}" y="${top-6}" font-size="11.5" fill="var(--est)">推算段</text>`;
+  D.lines.forEach((l,i)=>{const y=top+i*gap;let t0=0;
+    g+=`<text x="${X0-14}" y="${y+h/2+5}" text-anchor="end" font-size="14" font-weight="700" fill="${l.col}">${l.name}</text>`;
+    l.segs.forEach((k,j)=>{const d=D.S.segs[k].v[R],a=t0,b=t0+d;t0=b;const last=j===l.segs.length-1;const shared=D.use[k]>1;
+      const c=last?l.col:shared?'var(--soft)':l.soft;
+      g+=`<rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" rx="2"><title>${D.S.segs[k].name} ${f(d)} 秒</title></rect>`;
+      if(sx(b)-sx(a)>90&&!last)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${D.S.segs[k].name} ${f(d)}</text>`;});
+    g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num">${l.end} ${f(D.rep.ends[i])} 秒</text>`;});
+  if(D.lines.length>1){const a=D.rep.ends[0],b=D.rep.ends[1],y=top+gap-12;
+    g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)">早 ${f(b-a,2)} 秒</text>`;}
+  const segLegend=Object.entries(D.S.segs).filter(([k])=>D.lines.some(l=>l.segs.slice(0,-1).includes(k))).map(([k,s])=>{const c=D.use[k]>1?'var(--soft)':D.lines.find(l=>l.segs.includes(k)).soft;return `<span><i class="sw" style="background:${c}"></i>${s.name}${D.use[k]>1?'（共用）':''}</span>`}).join('');
+  return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
+  <div class="legend">${segLegend}<span><i class="sw" style="background:none;border-top:2px dashed var(--est);height:0"></i>${D.S.est.label}（${D.S.est.note}）</span></div>`;
+}
+function roundsChart(D){
+  const T=niceT(Math.max(...D.rounds.flatMap(r=>r.ends))/1.2);const W=900,X0=70,X1=820,sx=t=>X0+(X1-X0)*t/T,rh=20,top=34,st=step(T);
+  const bad=new Set([...D.reversed,...D.slowRounds].map(r=>r.n));
+  let g='';
+  for(let t=0;t<=T+1e-9;t+=st){g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="${top-8}" y2="${top+D.n*rh}" stroke="var(--soft)"/><text x="${sx(t)}" y="${top-14}" text-anchor="middle" font-size="12" fill="var(--muted)" class="num">${+t.toFixed(2)}</text>`}
+  D.rounds.forEach((r,i)=>{const y=top+i*rh;const isBad=bad.has(r.n);
+    if(isBad)g+=`<rect x="0" y="${y}" width="${W}" height="${rh}" fill="var(--bad-soft)"/>`;
+    g+=`<text x="${X0-12}" y="${y+14}" text-anchor="end" font-size="12" fill="${isBad?'var(--bad)':'var(--muted)'}" class="num">第 ${r.n} 轮</text>`;
+    g+=`<line x1="${sx(0)}" x2="${sx(Math.max(...r.ends))}" y1="${y+10}" y2="${y+10}" stroke="var(--line)" stroke-width="2"/>`;
+    r.ends.forEach((e,j)=>{g+=j===0?`<circle cx="${sx(e)}" cy="${y+10}" r="5" fill="${D.lines[j].col}"/>`:`<rect x="${sx(e)-5}" y="${y+5}" width="10" height="10" fill="${D.lines[j].col}"/>`});
+    const why=D.reversed.some(x=>x.n===r.n)?`${D.lines[0].end}比${D.lines[1].end}晚`:D.slowRounds.some(x=>x.n===r.n)?'超过算慢线':'';
+    if(why)g+=`<text x="${sx(Math.max(...r.ends))+10}" y="${y+14}" font-size="12" font-weight="700" fill="var(--bad)">${why}</text>`;});
+  D.lines.forEach(l=>{g+=`<line x1="${sx(l.med)}" x2="${sx(l.med)}" y1="${top-8}" y2="${top+D.n*rh}" stroke="${l.col}" stroke-dasharray="3 3"/>`});
+  return `<div class="scroll"><svg viewBox="0 0 ${W} ${top+D.n*rh+6}" style="min-width:640px;width:100%" role="img" aria-label="逐轮计时">${g}</svg></div>
+  <div class="legend">${D.lines.map((l,j)=>`<span><i class="sw" style="background:${l.col};width:10px;height:10px;${j===0?'border-radius:50%':''}"></i>${l.end}</span>`).join('')}<span>竖虚线是中位数</span><span style="color:var(--bad)">红底：有问题的轮</span></div>`;
+}
+function tiers(D){
+  return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">10 次里最慢</span><span class="h">最差</span>
+  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.p90)} 秒</span><span>${f(l.max)} 秒</span>`).join('')}</div>`;
+}
+// 两把尺子（2026-10-13）：体验标准问"用户等得了吗"（看结果，给负责人）；合理范围问"这套做法有没有做坏"（看实现，给研发）。
+// 体验标准只挂在有公认标准的那条线上，没有就只用合理范围。
+function lineCards(D){
+  return D.lines.map(l=>{const [v,c]=D.verdict(l),isMain=l===D.main,ex=isMain&&D.exp?D.exp:null,inR=v==='正常';
+    const concl=!ex?(inR?'这个场景没有体验标准，只按合理范围判：正常。':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。')
+      :ex[0]==='差'?(inR?'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。')
+      :(inR?'用户等得了，技术上也正常。':'用户还等得了，但比这套做法该有的慢，可能有隐患。');
+    const head=ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:`<span class="chip ${c}">${v}</span>`;
+    return `<div class="panel card"><h3>${l.name} ${head}</h3><p class="num" style="color:var(--fg)">一般 ${f(l.med)} 秒</p>
+     ${ex?`<p>体验标准：超过 ${D.S.exp.fair} 秒算差 → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>`:''}
+     <p>合理范围：${l.ok[0]}～${l.ok[1]} 秒 → <b class="${inR?'down':'up'}">${inR?'在范围内':v}</b></p>
+     <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
+}
+function decideList(D){const FX=activeFixes(D);
+  return `<ul class="decide">${decisions(D).map(x=>{const n=FX.findIndex(F=>F.when.includes(x.k));return `<li>${lvTag(x.lv)}<span><b>${x.t}</b>　${x.d}${x.who}。<br><span class="src">出处：${jump('sec-'+x.src[0],'见下方'+x.src[1])}${n>=0?`　为什么、怎么改：${jump('fix-'+n,'问题 '+(n+1))}`:''}</span></span></li>`}).join('')}</ul>
+  <ul class="notes"><li>这里的数字都是码表按这次 ${D.n} 轮数据直接算出来的，不经过 AI。</li><li>"为什么、怎么改"的文字是 AI 读代码写的。</li><li>要做哪些方案：在下方每个问题的方案表里勾选，结果汇总在 ${jump('my-pick','你的决定')}。</li></ul>
+  <details class="lvwhy"><summary>标签规则</summary><ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
+  <li><b class="lvtag lv-must">必须改</b>一般用时（中位数）超过"算慢"线，或体验标准判"差"，或"10 次里最慢"超过"算慢"线（每 10 次就有 1 次让人等太久）。</li>
+  <li><b class="lvtag lv-should">建议改</b>偶尔特别慢、先后顺序反了，但不到每 10 次一次；或一般用时超出合理范围、没到"算慢"。</li>
+  <li><b class="lvtag lv-ok">可以不改</b>在合理范围里，只是占时最多。</li></ul></details>`}
+function subline(D){
+  const bits=[];
+  if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med,1)} 秒`);
+  if(D.exp)bits.push(`按体验标准算<span class="chip ${D.exp[1]}">${D.exp[0]}</span>`);else bits.push('这个场景还没有体验标准');
+  if(D.reversed.length)bits.push(`${roundList(D.reversed)}${D.lines[0].end}反而晚了`);
+  if(D.spiky)bits.push(`"${D.spiky.name}"偶尔特别慢`);
+  return bits.join('；')+'。';
+}
+
+function dev(D){const T=D.S.tech;
+  const segRows=D.allSegs.map(s=>{const over=s.max>s.med*2.5&&s.max-s.med>.3;return `<tr><td style="font-family:var(--sans)">${s.name}（${s.code}）</td><td><span class="code">${T.loc[s.k]}</span></td><td style="font-family:var(--sans)">${s.owner}</td><td class="r">${f(s.med)}</td><td class="r">${f(Math.min(...s.v))}～${f(s.max)}</td><td class="r">${s.ok}</td><td style="font-family:var(--sans)">${over?'<span class="chip c-warn">偶发特别慢</span>':'<span class="chip c-ok">正常</span>'}</td></tr>`}).join('');
+  const lineRows=D.lines.map(l=>{const [v,c]=D.verdict(l);return `<tr><td style="font-family:var(--sans)"><b>${l.name}合计</b>：${l.segs.map(k=>D.S.segs[k].name).join(' → ')}</td><td></td><td></td><td class="r">${f(l.med)}</td><td class="r">${f(Math.min(...l.ends))}～${f(l.max)}</td><td class="r">${l.ok[0]}～${l.ok[1]}</td><td style="font-family:var(--sans)"><span class="chip ${c}">${v}</span>${l===D.main&&D.exp?` <span class="chip ${D.exp[1]}">体验${D.exp[0]}</span>`:''}</td></tr>`}).join('');
+  const bad=[...new Set([...D.reversed,...D.slowRounds])].sort((a,b)=>a.n-b.n);
+  const ovLo=(T.pts*.002).toFixed(3),ovHi=(T.pts*.003).toFixed(3);
+  return `<div class="stack">${staleBar()}<div><h1>技术细节</h1><p class="sub">在代码哪里、具体怎么改、怎么验证。单位秒。<br>段名、代码位置和合理范围来自 AI 识别结果和这个设备的标准文件；这里只演示样子。</p></div>
+  <section class="panel"><h2>测量条件</h2><dl class="kv" style="grid-template-columns:6em 1fr">${T.cond.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('')}
+   <dt>计时点开销</dt><dd>每个计时点往调试口打印一行，约 0.002～0.003 秒（按调试口速度推算，未实测）。<br>一轮最多经过 ${T.pts} 个计时点，设备那几段的数字最多偏大约 ${ovLo}～${ovHi} 秒；服务器、网络那几段不受影响。<br>想确认开销，可以在"插计时点和烧录"页切回原版，各收一次比较。</dd></dl></section>
+  <section class="panel scroll"><h2 style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">分段用时<button class="pill" data-go="range">合理范围依据</button></h2><table class="num"><thead><tr><th>段（计时点）</th><th>代码位置${T.locNote||''}</th><th>谁负责</th><th class="r">中位数</th><th class="r">最小～最大</th><th class="r">合理</th><th>判断</th></tr></thead><tbody>${segRows}${lineRows}</tbody></table></section>
+  <section class="panel scroll"><h2>有问题的轮</h2>${bad.length?`<table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}</tr></thead><tbody>${bad.map(r=>`<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${f(e)}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<p class="note">没有。</p>'}</section>${fixDev(D)}
+  <section class="panel"><h2>原始日志</h2><p style="margin:0 0 8px"><span class="code">${T.log}</span></p><ul class="notes" style="margin:0 0 8px"><li>设备调试口输出的原样记录，没有删改：固件原有的日志和码表插的计时点行（FSW 开头）都在里面。</li><li>报告里所有数字都从这份文件算出来。</li><li>合理范围改过以后，报告顶上会提示用新范围更新，不用重测。</li></ul><div class="acts"><button class="pill">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
+}
+
+
+// ===== 页面 =====
+const PAGES=[
+ {id:'home',name:'首页',done:'已定'},
+ {id:'settings',name:'设置',done:'已定'},
+ {id:'steps',name:'找关键步骤',done:'已定'},
+ {id:'flash',name:'插计时点和烧录',done:'已定'},
+ {id:'collect',name:'多轮实测',done:'已定'},
+ {id:'report',name:'报告',done:'补充中'},
+ {id:'retest',name:'改完再测',done:'新加'},
+ {id:'compare',name:'前后对比',done:'已定'},
+ {id:'range',name:'合理范围',done:'已定'}];
+
+const arrow=(now,prev)=>{const d=now-prev;if(Math.abs(d)<.02)return '<span class="note">持平</span>';return d<0?`<span class="down">↓ 快了 ${f(-d)} 秒</span>`:`<span class="up">↑ 慢了 ${f(d)} 秒</span>`};
+let applied={key:false,comp:false};
+const keyOK=()=>!setFirst||keyTested||setLLM==='cc';
+const envKey=()=>!setFirst||applied.key,envComp=()=>!setFirst||applied.comp;
+function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm','大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${FF[scene].idf} 或更新`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
+let envBack='home',compPending=false;
+function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="background:var(--${c})"></i>${t}</span>`;
+ const llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
+ const a=[envKey()?L('ok',`大模型：${llmName}，${setLLM==='cc'?'已登录':'密钥已填'}`):L('bad','大模型：还没填密钥'),L('muted','设备：没插上（烧录前插上就行）')];
+ if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${FF[scene].idf} 或更新：正在后台装`):envComp()?L('ok',`乐鑫 ESP-IDF ${FF[scene].idf} 或更新：已装 v6.1`):L('bad',`乐鑫 ESP-IDF ${FF[scene].idf} 或更新：没装`));
+ return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
+let toastT=null;function toast(m){const t=document.getElementById('toast');t.textContent=m;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},1600)}
+const recentList=()=>`<div class="list">${PROJ.map(p=>`<div class="lrow"><button data-open="${p.scene}"><span><b>${p.name}</b>　<span class="note">${p.what} · ${p.last}</span></span><span class="num">${p.metric} ${f(p.now)} 秒　${arrow(p.now,p.prev)}</span></button><button class="pill" data-retest="${p.scene}">改完了，再测一次</button></div>${p.fswOnDevice&&!restored[p.scene]?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-restore="${p.scene}">还原成原版</button></div>`:''}`).join('')}</div>`;
+let pName='',restored={},hNeed=false,hSrc='',hReading=false,hErr='',hScan=0,hScanT=null;
+function pickSrc(src,own){hErr='';envBack='home';if(demoErr==='java'||demoErr==='stm32'){const bad=demoErr;hReading=true;hSrc=src;hStage=1;render();setTimeout(()=>{hReading=false;hSrc='';hStage=0;hErr=bad==='java'?'<b>这不像单片机固件源码，测不了。</b><br>里面是一个 Java 项目：找到 pom.xml 和 312 个 .java 文件；<br>没找到编译固件用的配置（CMakeLists.txt、Makefile、platformio.ini 都没有）。<br>码表测的是烧进单片机里的程序，请换一个文件夹。':'<b>认出是 STM32 固件，第一版还不支持。</b><br>依据：找到 STM32CubeMX 工程文件（.ioc）和 STM32F4 的启动文件。<br>码表第一版只支持乐鑫 ESP32 系列，STM32 在计划里（乐鑫 → STM32 → Pico）。';render()},900);return}hSrc=src;pName=own?src.split('/').filter(Boolean).pop():FF[scene].pname;hReading=true;hStage=1;hSay='';render();setTimeout(()=>{hReading=false;hScan=1;if(missing().length)pop='env';render();clearTimeout(hScanT);hScanT=setTimeout(()=>{hScan=2;if(page==='home')render()},2500)},src.endsWith('.zip')?1500:700)}
+function chips(){const C=(t,x)=>`<button class="pill" data-fill="${x}">${x}</button>`;
+ const hist=PROJ.filter(p=>p.path===hSrc).map(p=>p.what),ai=FF[scene].ai,gen=['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'];
+ const row=(lbl,arr)=>`<div class="chiprow"><span class="note">${lbl}</span><div class="pills">${arr.map(x=>C(0,x)).join('')}</div></div>`;
+ return (hist.length?row('这个项目测过的',hist):'')+(hScan===2?row('AI 推荐',ai):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note"><span class="spin"></span> 正在扫这个固件有哪些流程，约 10～20 秒（估算）。不用等，可以直接写。</span></div>`)+row('通用例子',gen)+`<p class="note" style="margin:8px 0 0">不知道测什么，就从「AI 推荐」里挑一个。</p>`}
+const examples=`<div class="pills"><span class="note">比如：</span>${['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'].map(x=>`<button class="pill" data-fill="${x}">${x}</button>`).join('')}</div>`;
+
+const HOME={
+m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件夹马上显示读到的芯片和编译工具；出发前用一句话复述要测什么，你点"对"再去找关键步骤。',
+ html:()=>{
+  const st=hStage;
+  const busy=hReading;
+  return `<div class="stack"><section class="panel"><h1 style="font-size:22px">开始一次测量</h1>
+  ${envStatus()}
+  ${st===0||busy?`<div class="field"><label for="h-paste">固件源码位置</label>
+    ${busy?`<div class="drop"><span class="spin"></span> 正在读项目……${hSrc.endsWith('.zip')?'先解开压缩包，':''}只看配置文件，不用大模型</div>`:`<div class="drop" id="dropzone"><b>把固件源码文件夹或压缩包拖到这里</b><span class="note">压缩包支持 .zip、.tar.gz；中文路径也可以</span>
+     <div class="acts" style="justify-content:center;margin:8px 0 0"><button class="btn pri" data-pick="dir">选文件夹</button><button class="btn" data-pick="zip">选压缩包</button></div></div>
+     <div class="inrow" style="margin-top:8px"><input type="text" id="h-paste" placeholder="或者粘贴路径，比如 ~/projects/my-firmware"><button class="btn" data-pick="paste">用这个路径</button></div>
+     ${hErr?`<div class="errbox" style="margin-top:10px">${hErr}</div>`:''}`}</div>`
+  :`<div class="field"><label for="h-path">固件源码位置</label><div class="inrow"><input type="text" id="h-path" value="${hSrc}" readonly><button class="btn" data-pick="reset">换一个</button></div></div>
+   <div class="field" style="margin-top:14px"><label for="h-what">你想测从什么时候到什么时候？用一句话说</label>
+    <div class="inrow"><input type="text" id="h-what" placeholder="比如：从按下按键到屏幕亮" value="${hSay}"><button class="btn pri" data-stage="2">下一步</button></div>${hNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先写一句，或者点下面的一个。</p>':''}${chips()}</div>`}
+  </section>
+  <section class="panel"><h2>以前测过的</h2>${recentList()}</section></div>`}}
 };
 
-// ===== 和后台说话 =====
-async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.detail || '出错了');
-  return data;
+let setOS='mac',setLLM='claude',keyTested=false,setFirst=true,envMark=false;
+// 帮装（决策 48）：0 没开始，1 正在装，2 装好，3 装失败；样子里用定时器假装进度
+let inst={st:0,step:0,pct:0,log:'',timer:null};
+const INSTALL={
+ mac:{path:'~/esp/esp-idf-v6.1',steps:[
+  ['检查前提','看 git、Python 在不在；缺"开发者工具"时系统会弹窗，点"安装"就行','$ xcode-select -p → /Library/Developer/CommandLineTools'],
+  ['下载乐鑫编译工具 v6.1','从乐鑫官方 GitHub 下载，约 1.5 GB','Receiving objects: {p}% (412873/…)'],
+  ['下载编译器等工具','共 9 个，用官方脚本 install.sh 装','Downloading xtensa-esp-elf-14.2.0 … {p}%'],
+  ['装 Python 依赖','官方脚本自己建独立环境，不动你电脑上原有的 Python','Installing collected packages: esp-idf-monitor, esptool …'],
+  ['试编译一次','编个官方小例子，确认真的能用','Project build complete.']]},
+ win:{path:'C:\\esp\\v6.1',steps:[
+  ['下载乐鑫官方安装管理器','EIM 命令行版，约 20 MB','eim.exe {p}%'],
+  ['装前提','缺 Git、Python 时安装管理器自己装','Installing prerequisites: git, python …'],
+  ['下载乐鑫编译工具 v6.1','装到纯英文路径 C:\\esp，避开中文用户名','Downloading esp-idf v6.1 … {p}%'],
+  ['下载编译器等工具','共 9 个','Downloading xtensa-esp-elf-14.2.0 … {p}%'],
+  ['试编译一次','编个官方小例子，确认真的能用','Project build complete.']]}};
+function compOK(){return !setFirst||inst.st===2}
+function instStop(){if(inst.timer){clearInterval(inst.timer);inst.timer=null}}
+function instStart(fail){instStop();inst={st:1,step:0,pct:0,log:'',timer:null};const S=INSTALL[setOS].steps;
+ inst.timer=setInterval(()=>{inst.pct+=S[inst.step][2].includes('{p}')?9:34;
+  if(fail&&inst.step===2&&inst.pct>=45){instStop();inst.st=3;inst.log='curl: (28) Connection timed out after 30000 ms';if(page==='settings')render();return}
+  if(inst.pct>=100){inst.step++;inst.pct=0;if(inst.step>=S.length){instStop();inst.st=2;if(compPending){applied.comp=true;compPending=false}toast('✓ 编译工具装好了');if(page==='settings')render();return}}
+  inst.log=S[inst.step][2].replace('{p}',Math.min(inst.pct,99));const b=document.getElementById('instbox');if(page==='settings'&&b)b.innerHTML=installBox()},450)}
+function installBox(){const I=INSTALL[setOS],S=I.steps,n=S.length;
+ const list=S.map(([t,d],i)=>{const done=inst.st===2||i<inst.step,cur=inst.st!==2&&i===inst.step,bad=inst.st===3&&cur;
+  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'✕':i+1}</b><span>${t}<small>${d}</small>${cur&&inst.st===1&&S[i][2].includes('{p}')?`<span class="pbar"><i style="width:${inst.pct}%"></i></span>`:''}</span></li>`}).join('');
+ if(inst.st===0)return `<div class="status"><span><i class="dot" style="background:var(--warn)"></i>没找到乐鑫编译工具。这个项目要 6.0.1 或更新，码表帮你装 v6.1</span></div>
+  <div class="acts" style="justify-content:flex-start;margin:10px 0"><button class="btn pri" data-inst="go">帮我安装 v6.1</button><button class="pill">手动指定安装位置</button></div>
+  <p class="note">调用乐鑫官方的安装方式，装到 <span class="code">${I.path}</span>。要下载约 3 GB，一般 10～30 分钟（估算，看网速）。装的时候可以先去做别的，码表开着就行。</p>`;
+ const head=inst.st===1?`正在装：第 ${inst.step+1} 步 / 共 ${n} 步`:inst.st===2?`装好了：v6.1，在 <span class="code">${I.path}</span>`:`第 ${inst.step+1} 步"${S[inst.step][0]}"没装成：连乐鑫服务器超时了`;
+ const color=inst.st===1?'var(--speak)':inst.st===2?'var(--ok)':'var(--bad)';
+ return `<div class="status"><span><i class="dot" style="background:${color}"></i>${head}</span></div>
+  <ol class="isteps">${list}</ol>
+  ${inst.st!==2?`<div class="ilog"><span class="note">最新一行</span><code>${inst.log||'…'}</code><button class="pill">完整日志</button></div>`:''}
+  ${inst.st===3?`<p class="note">已下载的部分留着，重试会从断的地方接着装。多次失败可以换网络，或照手动步骤自己装，装好这里也会自动变绿。</p><div class="acts" style="justify-content:flex-start;margin:6px 0 10px"><button class="btn pri" data-inst="go">重试</button><button class="btn" data-inst="manual">看手动安装步骤</button></div>`:''}
+  ${inst.st===1?`<p class="note">关掉这页没关系，安装在后台继续；关掉码表会停，下次打开从断的地方接着装。</p>`:''}`}
+function settingsPage(){
+  const first=setFirst;
+  const guide=setOS==='mac'?`<ol class="guide"><li>打开"终端"，复制这一行粘贴回车：<span class="code">mkdir -p ~/esp &amp;&amp; cd ~/esp &amp;&amp; git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git esp-idf-v6.1</span></li><li>再复制这一行：<span class="code">cd esp-idf-v6.1 &amp;&amp; ./install.sh esp32s3</span>，等它装完（十几分钟）</li><li>装完这里会自动变绿</li></ol>`:`<ol class="guide"><li>下载乐鑫官方的 Windows 安装器（ESP-IDF Installer），选 v6.1</li><li>安装路径用纯英文，比如 <span class="code">C:\\esp</span>（不要放在中文用户名的文件夹里）</li><li>装完这里会自动变绿</li></ol>`;
+  const opt=(id,t,sub,extra='')=>`<label><input type="radio" name="llm" value="${id}" ${setLLM===id?'checked':''}><span><b>${t}</b>${extra}<small>${sub}</small></span></label>`;
+  const where=setOS==='mac'?'<span class="code">~/esp</span>、<span class="code">~/.espressif</span>':'<span class="code">C:\\Espressif</span>、<span class="code">C:\\esp</span>';
+  const done=[!first||keyTested, compOK(), false];
+  const cnt=done.filter(Boolean).length;
+  const head=first?`<section class="panel" style="border-color:var(--speak)"><h1 style="font-size:22px">第一次用码表，先准备三样东西</h1><p class="note" style="margin:0">已准备 <b class="num">${cnt}</b> / 3。都准备好后，点最下面的「保存」。</p></section>`:'';
+  const compiler=first?`<div id="instbox">${installBox()}</div>`
+   :`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>找到 v6.1：<span class="code">~/esp/esp-idf-v6.1</span></span><span><i class="dot" style="background:var(--muted)"></i>找到 v5.3：<span class="code">~/esp/esp-idf</span></span><button class="pill">重新查找</button><button class="pill">手动指定位置</button></div><p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`;
+  return `<div class="stack">${head}
+  <section class="panel ${page==='settings'&&envMark&&!keyOK()?'miss':''}" id="set-llm"><h2>${first?(done[0]?'✓ ':'① '):''}大模型（找关键步骤、写报告建议时用）</h2>
+   <div class="radio">${opt('claude','Claude','识别准确率最高（验证期 9 个对 8 个）。需要你自己的 Claude API 密钥，按用量付费。',' <span class="chip c-ok">推荐</span>')}
+   ${opt('deepseek','DeepSeek','便宜，国内访问快。验证期识别 9 个只对 4 个，选它时找关键步骤那页会提醒你仔细核对。')}
+   ${opt('cc','本机已登录的 Claude Code','不用填密钥，用你自己 Claude 会员的额度。属于可选用法，以官方条款为准。')}</div>
+   ${setLLM==='cc'?`<p class="note" style="margin:10px 0 0">${first?'正在本机找 Claude Code……找到了，已登录。':'已找到本机的 Claude Code，已登录。'}</p>`:`<div class="field" style="margin-top:12px"><label for="set-key">${setLLM==='claude'?'Claude':'DeepSeek'} API 密钥</label><div class="inrow"><input type="text" id="set-key" value="${first&&!keyTested?'':'••••••••••••••••a3F9'}" placeholder="粘贴你的密钥" autocomplete="off"><button class="btn" data-test="1">测试密钥</button></div>
+   ${keyTested?'':`<details class="manual" style="margin-top:10px" open><summary>密钥是什么、去哪拿</summary>
+   <p style="margin:6px 0;font-size:14px">密钥是大模型公司给你的一串字符，码表用它替你调用大模型读代码，按用量从你的账户扣钱。一次找关键步骤约几毛钱到一两块钱（估算）。</p>
+   ${setLLM==='claude'?`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 Claude 开发者平台 console.anthropic.com，用邮箱注册登录</li><li>先在"账单"里充值（最少 5 美元）</li><li>左边点"API Keys"→"Create Key"，起个名字比如"码表"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`:`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 DeepSeek 开放平台 platform.deepseek.com，用手机号注册登录</li><li>先在"充值"里充一点（10 元就够试用）</li><li>左边点"API keys"→"创建 API key"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`}
+   <p class="note" style="margin:6px 0 0">已经有 Claude 会员、电脑上装了 Claude Code？选上面第三项"本机已登录的 Claude Code"，不用密钥。</p>
+   <button class="pill" data-demokey="1" style="margin-top:6px">演示：粘贴一个示例密钥</button></details>`}
+   <span class="note">${keyTested?'<span style="color:var(--ok)">✓ 能用</span>　':''}只存在这台电脑的 <span class="code">~/.config/firmware-stopwatch/</span>，不上传、不进代码。</span></div>`}
+   <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px"><input type="checkbox" id="set-reuse" checked>源码没变时，直接用上次的识别结果，不再调用大模型（省钱、省时间）</label>
+  </section>
+  <section class="panel ${page==='settings'&&envMark&&hSrc&&!compOK()&&inst.st!==1?'miss':''}" id="set-idf"><h2>${first?(done[1]?'✓ ':'② '):''}乐鑫编译工具（ESP-IDF）</h2>
+   <p class="note" style="margin-top:0">码表打开时自动在电脑上找：常见安装位置、系统里记下的安装路径、乐鑫安装器留下的记录。只是按位置找文件，不用大模型。</p>
+   ${first?`<div class="tabs seg" role="group" aria-label="样子演示：电脑系统" style="margin-bottom:10px"><span class="note" style="align-self:center;margin-right:6px">样子演示，看哪台电脑：</span><button data-os="mac" aria-pressed="${setOS==='mac'}">Mac</button><button data-os="win" aria-pressed="${setOS==='win'}">Windows</button>${inst.st===0?'<button class="pill" data-inst="fail" style="margin-left:8px">演示：安装失败</button>':''}</div>`:''}
+   ${compiler}
+   <details class="manual" id="manual" ${inst.st===3&&inst.manual?'open':''}><summary>手动安装步骤</summary><p class="note" style="margin:4px 0">自己装、或帮装失败时用。</p>
+   ${first?'':`<div class="tabs seg" role="group" aria-label="电脑系统"><button data-os="mac" aria-pressed="${setOS==='mac'}">Mac</button><button data-os="win" aria-pressed="${setOS==='win'}">Windows</button></div>`}
+   ${guide}<p class="note">码表每隔几秒自己查一次，自己装好的也会自动变绿。</p></details>
+  </section>
+  <section class="panel" id="set-dev"><h2>${first?'③ ':''}设备连接</h2>
+   <div class="status"><span><i class="dot" style="background:var(--warn)"></i>现在没看到设备。用 USB 线插上后这里会自动出现，比如 <span class="code">${setOS==='mac'?'/dev/cu.usbmodem1101':'COM3'}</span></span></div>
+   <p class="note">读设备输出的速度默认 115200，一般不用改。</p>
+  </section>
+  <section class="panel"><h2>测量结果放在哪</h2>
+   <div class="inrow"><input type="text" id="set-data" value="~/firmware-stopwatch-data" readonly><button class="btn">更换位置</button></div>
+   <p class="note">每个项目一个文件夹：识别结果、合理范围、每次的原始日志和报告。都在你电脑上。</p>
+  </section>
+  <div class="acts" style="justify-content:center;margin:4px 0 8px"><button class="btn pri" data-save="1" style="min-width:10em">保存</button></div>
+</div>`;
 }
-async function loadDemo(id) { return id ? api('/api/demo/' + id) : null; }
-async function setState(st) {
-  S.state = st;
-  if (st.demo && (!S.demo || S.demo.id !== st.demo)) S.demo = await loadDemo(st.demo);
-  render();
+const SETVAR={first:{label:'第一次打开',idea:'第一次打开：密钥空着；码表自己先找一遍编译工具，找不到就给"帮我安装"，点了能看到进度（样子里是假进度，可切 Mac/Windows、可演示装失败）。切到这种情况后去首页走一遍，能看到缺东西时在哪一步提示。'},done:{label:'已经设置好',idea:'已经设置好：显示找到的编译工具版本和填好的密钥，以后只有某一步提示缺东西时才回来。'}};
+
+// ===== 为什么、怎么改（2026-10-13 补：需求 9）=====
+// 真产品里：问题从数据算出（反而晚、偶发慢、大头），"为什么、怎么改"由 AI 读代码 + 这次数据写，效果都是估算
+const REPVAR={a:{label:'A 问题卡片',idea:'A 问题卡片：每个问题一张卡，先说为什么、对用户有什么影响，再列可选方案（效果、代价、工作量、找谁），最后一句建议。最接近验证 06 样例报告，从上往下读完就能拍板。'},
+ b:{label:'B 勾方案',idea:'B 勾方案：把所有问题的方案摊在一张表里，负责人直接勾要做的，下面自动汇总预计效果、要找谁、哪些有代价要权衡，还能生成一份待办发给相关的人。重在"拍板"这个动作。'},
+ c:{label:'C 点哪段看哪段',idea:'C 点哪段看哪段：先选一段，旁边说清这段在做什么、用了多久、正不正常；有问题的段再给为什么和方案。适合想弄懂整条链路的人，也能看"这段为什么不用改"。'}};
+let repVar='a',fixPick=null,fixTodo=false,segSel=null,stale=1;
+function staleBar(){return flow?'':stale===1?`<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 10-13 14:20 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`:stale===2?`<p class="note" style="margin:0">✓ 已按 10-13 14:20 改过的合理范围更新。测出来的用时没变。</p>`:''}
+function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[]).find(x=>x.when.includes(d.k));if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv})});return out}
+const ESTNOTE='<ul class="notes"><li><b>工作量</b>只分大、中、小，看的是要改多少、要不要别人配合，不折算成天数（码表不知道你们团队的人手和熟练度）。</li><li><span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护</li><li><b>效果</b>都是估算：依据是这次的实测数据、代码和公开资料，做完要用码表再测一次才算数。</li><li>码表只给建议，不会自动改代码。</li></ul>';
+function optTable(F,fi,pick){
+  return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>`;
 }
-async function flowDo(action, step, extra = {}) {
-  try { await setState(await api('/api/flow/' + action, { step, ...extra })); }
-  catch (e) { toast(e.message); }
+function initPick(FX){if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}}
+let copied=null;
+function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
+  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${o.name}\n   为什么：${F.title}。${F.dev.data}\n   怎么做：${o.how}\n   做完的标准：${F.dev.verify}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+function myPick(D,FX){initPick(FX);
+  const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
+  const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
+  const none=FX.map((F,fi)=>chosen.some(o=>o.fi===fi)?'':`问题 ${fi+1}`).filter(Boolean);
+  const body=chosen.length?`<ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul>
+   <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
+   ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
+   ${none.length?`<p style="margin:6px 0;color:var(--bad)">${none.join('、')}一个方案都没选，等于先不处理。</p>`:''}
+   <div class="acts" style="margin-top:8px"><button class="btn pri" data-todo="1">${fixTodo?'收起待办':'生成待办'}</button></div>
+   ${fixTodo?`<p class="note" style="margin:10px 0 6px">按人分好，每人一块，各自复制后贴到钉钉、微信或邮件里发给对方。</p>${Object.keys(who).map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX)}</pre></div>`).join('')}`:''}`
+   :'<p class="note">还没勾任何方案。</p>';
+  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你的决定：勾了 ${chosen.length} 个方案</h3>${body}</div>`;
 }
-
-// ===== 小工具 =====
-let toastT = null;
-function toast(m) {
-  const t = $('#toast'); t.textContent = m; t.hidden = false;
-  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2600);
+function fixA(D){const FX=activeFixes(D);initPick(FX);
+  return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'}"><h3 style="margin:0 0 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
+   <p style="margin:0 0 6px"><b>为什么：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>
+   ${optTable(F,fi,true)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></div>`).join('')+myPick(D,FX)+
+   `<p class="note" style="margin:0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}`;
 }
-function go(page) { S.page = page; location.hash = page; render(); window.scrollTo(0, 0); }
-function pri(label, act, missing = [], center = false) {
-  return `<div class="pri-row ${center ? 'center' : ''}"><button class="btn pri" data-act="${act}" ${missing.length ? 'disabled' : ''}>${label}</button>${missing.length ? `<span class="lack">还差：${missing.join('、')}</span>` : ''}</div>`;
+function fixB(D){const FX=activeFixes(D);
+  if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}
+  const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
+  const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
+  const rows=FX.map((F,fi)=>`<h3 id="fix-${fi}" style="margin:14px 0 4px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3><p class="note" style="margin:0 0 6px">${F.why}</p>${optTable(F,fi,true)}`).join('');
+  const sum=chosen.length?`<ul style="margin:6px 0">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul>
+   <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
+   ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
+   ${FX.some((F,fi)=>!chosen.some(o=>o.fi===fi))?`<p style="margin:6px 0;color:var(--bad)">还有问题一个方案都没选：${FX.map((F,fi)=>chosen.some(o=>o.fi===fi)?'':`问题 ${fi+1}`).filter(Boolean).join('、')}。不选也可以，等于先不处理。</p>`:''}
+   <div class="acts" style="margin-top:8px"><button class="btn pri" data-todo="1">${fixTodo?'收起待办':'生成待办，发给相关的人'}</button></div>
+   ${fixTodo?`<pre style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13.5px;margin:10px 0 0">${Object.entries(who).map(([w,a])=>`【${w}】\n${chosen.filter(o=>o.who===w).map(o=>`· ${o.name}（问题 ${o.fi+1}：${FX[o.fi].title}）\n  做完的标准：${FX[o.fi].dev.verify}`).join('\n')}`).join('\n\n')}\n\n做完后用码表按同样的条件再测一次，看前后对比。</pre><p class="note">样子里只演示文字；真产品可以复制，或存成文件。</p>`:''}`
+   :'<p class="note">还没勾任何方案。</p>';
+  return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div><p class="note" style="margin:0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}`;
 }
-const flow = () => S.state && S.state.flow;
-const stepOf = key => flow() && flow().steps.find(s => s.key === key);
-const reviewing = key => stepOf(key) && stepOf(key).status === 'done';
-const ui = key => (S.ui[key] = S.ui[key] || {});
-// 改了已经做完的步骤：先告诉后台，让后面的步骤变回未完成
-async function mutate(key, fn) {
-  if (reviewing(key)) {
-    resetAfter(key);
-    await flowDo('change', key);
-  }
-  fn(); render();
+function segJudge(D,s){const [lo,hi]=s.ok.split('～').map(Number);const spk=s.max>s.med*2.5&&s.max-s.med>.3;return spk?['偶发特别慢','c-warn']:s.med>hi?['偏慢','c-warn']:['正常','c-ok']}
+function fixC(D){const FX=activeFixes(D);
+  if(!segSel||!D.S.segs[segSel])segSel=FX.length?FX[0].seg:D.allSegs[0].k;
+  const s=D.allSegs.find(x=>x.k===segSel),[jv,jc]=segJudge(D,s),fi=FX.findIndex(F=>F.seg===segSel),F=FX[fi];
+  const btns=D.allSegs.map(x=>{const [v,c]=segJudge(D,x),hit=FX.some(F=>F.seg===x.k);return `<button class="btn" data-seg="${x.k}" aria-pressed="${x.k===segSel}" style="${x.k===segSel?'border-color:var(--fg);font-weight:600':''}">${x.name} <span class="chip ${hit&&c==='c-ok'?'c-warn':c}">${hit&&c==='c-ok'?'有问题':v}</span></button>`}).join('');
+  return `<div class="panel"><p class="note" style="margin:0 0 8px">按发生顺序，点一段看详情：</p><div class="acts">${btns}</div></div>
+   <div class="panel" id="fix-${fi}" style="border-left:3px solid ${F?(F.lv===0?'var(--bad)':'var(--warn)'):'var(--ok)'}"><h3 style="margin:0 0 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${F?lvTag(F.lv):''}${s.name} <span class="chip ${jc}">${jv}</span> <span class="note">谁负责：${s.owner}</span></h3>
+   <p style="margin:0 0 6px"><b>这段在做什么：</b>${s.what}。</p>
+   <p class="num" style="margin:0 0 10px">一般 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒，合理 ${s.ok} 秒</p>
+   ${F?`<p style="margin:0 0 6px"><b>为什么是问题：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p>`:'<p style="margin:0"><b>不用改。</b>这段在合理范围里，也没有偶发特别慢的轮。</p>'}</div>${ESTNOTE}`;
 }
-function resetAfter(key) {
-  const keys = flow().steps.map(s => s.key);
-  keys.slice(keys.indexOf(key) + 1).forEach(k => { delete S.ui[k]; });
+function fixDev(D){const FX=activeFixes(D);initPick(FX);
+  return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来；"已选"跟着结论建议里的勾选走，改了勾选这里会跟着变。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
+   <table><tbody><tr><th style="width:7em">数据</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table>
+   ${F.opts.map((o,oi)=>{const on=fixPick.has(fi+'-'+oi);return `<div class="optdev ${on?'on':''}"><b>${o.name}</b> <span class="chip ${on?'c-ok':'c-gray'}">${on?'已选':'没选'}</span><ul class="notes"><li>改法：${o.how}</li><li>改动大小：${o.size}</li><li>风险：${o.rk}</li></ul></div>`}).join('')}</div>`).join('')}
+   <p class="note" style="margin:0">改法是 AI 读代码后给的思路，没有实现、没有测过；代码位置按这次识别结果。码表不会自动改代码。</p></section>`;
 }
-
-// ===== 统计（按通用数据算） =====
-function lineTotals(D, line) {
-  return D.segments[line.segments[0]].values.map((_, r) => sum(line.segments.map(k => D.segments[k].values[r])));
-}
-function roundColor(D, r) {
-  let c = 'g';
-  for (const l of D.lines) {
-    const t = sum(l.segments.map(k => D.segments[k].values[r]));
-    if (t > l.slow) return 'r';
-    if (t > l.range[1]) c = 'y';
-  }
-  return c;
-}
-function judge(v, range, slow) {
-  return v > slow ? ['慢', 'c-bad'] : v > range[1] ? ['偏慢', 'c-warn'] : ['正常', 'c-ok'];
-}
-
-// ===== 顶部、步骤条、提示 =====
-function renderChrome() {
-  const inFlow = S.page === 'flow' && flow();
-  $('#nav-home').toggleAttribute('aria-current', S.page === 'home');
-  if (S.page === 'home') $('#nav-home').setAttribute('aria-current', 'page');
-  $('#nav-settings').toggleAttribute('aria-current', S.page === 'settings');
-  if (S.page === 'settings') $('#nav-settings').setAttribute('aria-current', 'page');
-  const bar = $('#flowbar');
-  bar.hidden = !inFlow;
-  $('#notice').innerHTML = '';
-  if (!inFlow) return;
-  const F = flow();
-  bar.innerHTML = F.steps.map((s, i) => {
-    const n = i + 1;
-    let cls = 'fs', dis = '', label = `${n} ${s.name}`;
-    if (s.status === 'done') { cls += ' done'; label += ' ✓'; }
-    else if (s.status === 'skipped') { cls += ' skip'; dis = 'disabled'; }
-    else if (s.status === 'todo') dis = 'disabled';
-    if (s.status === 'doing' || s.status === 'error') {
-      if (F.viewing === s.key) cls += ' cur';
-      else { cls += ' goon'; label += '（做到这里）'; }
-      if (s.status === 'error') cls += ' cur bad';
-    } else if (F.viewing === s.key) cls += ' cur';
-    return `<li><button class="${cls}" data-act="view" data-step="${s.key}" ${dis} aria-current="${F.viewing === s.key ? 'step' : 'false'}" data-status="${s.status}">${label}</button></li>`;
-  }).join('');
-  if (F.notice) $('#notice').innerHTML = `<div class="notice">⚠ ${esc(F.notice)}</div>`;
-}
-
-// ===== 首页 =====
-function lights() {
-  const st = S.state.settings, p = st.llm_provider;
-  const llmOK = p === 'claude-code' || (p && st.has_key[p]);
-  const parts = [
-    `<span class="${llmOK ? 'ok' : 'bad'}">大模型${llmOK ? '' : '（没配好）'}</span>`,
-    `<span class="off">设备（没插）</span>`,
-  ];
-  if (S.home.data) parts.push(`<span class="off">乐鑫 ESP-IDF ${esc(S.home.data.project.idf)} 或更新（还没查）</span>`);
-  return { html: `<div class="lights">${parts.join('<span class="sep">|</span>')}</div>`, llmOK };
-}
-
-const PAGES = {
-  home: () => {
-    const H = S.home, D = H.data, L = lights(), F = flow();
-    const missing = [];
-    if (!D) missing.push('选固件源码');
-    if (!H.ask.trim()) missing.push('写要测从什么到什么');
-    if (!L.llmOK) missing.push('大模型没配好（去设置）');
-    const going = F && !F.finished ? `<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center"><span>接着刚才的测量：<b>${esc(S.demo.project.name)}</b>，做到「${esc(F.steps.find(s => s.key === F.current).name)}」</span><button class="btn" data-act="resume">接着做</button></div></section>` : '';
-    return `<div class="stack">${going}
-    <section class="panel"><h1 style="font-size:22px">开始一次测量</h1>${L.html}
-      <div class="steps" style="margin-top:14px">
-        <div><div class="stepn">第 1 步</div><h2>选固件源码</h2>
-        ${D ? `<dl class="kv"><dt>项目</dt><dd>${esc(D.project.name)}</dd><dt>认出来的</dt><dd>${esc(D.project.chip)}；要乐鑫 ESP-IDF ${esc(D.project.idf)}</dd><dt>源码</dt><dd>${esc(D.project.pick.dir)}</dd></dl><div class="acts" style="margin-top:8px"><button class="pill" data-act="unpick">换一个</button></div>`
-          : `<div class="drop"><span>把固件源码文件夹拖到这里，也可以选文件夹、选压缩包、粘贴路径</span><span class="note">这一版还不能读真源码，先用演示数据走一遍：</span><div class="acts" style="justify-content:center">${S.demos.map(d => `<button class="btn" data-act="pick" data-demo="${d.id}">演示：${esc(d.label)}</button>`).join('')}</div></div>`}</div>
-        <div><div class="stepn">第 2 步</div><h2>要测从什么到什么</h2>
-          <input type="text" id="ask" style="width:100%" placeholder="比如：从说完话到开口" value="${esc(H.ask)}">
-          ${D ? `<div class="pills" style="margin-top:8px">${D.ask_examples.map(a => `<button class="pill" data-act="fill" data-text="${esc(a)}">${esc(a)}</button>`).join('')}</div>` : ''}
-        </div>
-      </div>
-      ${pri('开始找关键步骤', 'confirm', missing)}
-    </section>
-    <section class="panel"><h2>以前测过的</h2><div class="list">${S.demos.map(d => `<div class="lrow"><span style="flex:1;padding:10px 2px">${esc(d.label)}演示项目</span><button class="pill" data-act="retest" data-demo="${d.id}">改完再测</button></div>`).join('')}</div>
-      <p class="note">演示数据。真项目做完测量后会列在这里，还原成原版也在这里。</p></section></div>`;
-  },
-
-  settings: () => {
-    const st = S.state.settings, p = S.ui.set_p !== undefined ? S.ui.set_p : st.llm_provider;
-    const needKey = p === 'claude-api' || p === 'deepseek';
-    const hasKey = needKey && st.has_key[p];
-    const opt = (v, t) => `<label><input type="radio" name="llm" value="${v}" ${p === v ? 'checked' : ''} data-act="setp"> ${t}</label>`;
-    return `<div class="stack">
-    <section class="panel" id="set-llm"><h2>大模型（找关键步骤用）</h2><div class="radio">
-      ${opt('claude-api', 'Claude（填 API 密钥）')}${opt('claude-code', 'Claude（本机已登录的 Claude Code，不用密钥）')}${opt('deepseek', 'DeepSeek（填密钥）')}</div>
-      ${p === 'deepseek' ? '<p class="lack">DeepSeek 识别准确率较低，请仔细核对关键步骤。</p>' : ''}
-      ${needKey ? `<div class="field" style="margin-top:10px"><label for="key">密钥${hasKey ? '（已经填过，不改就留空）' : ''}</label>
-        <div class="inrow"><input type="password" id="key" autocomplete="off"><button class="btn" data-act="testkey">测试密钥</button></div>
-        <details ${hasKey ? '' : 'open'}><summary>密钥是什么、去哪拿</summary><p class="note">密钥是大模型网站给你的一串字符，码表用它代你调用大模型读代码，按用量付费。注册账号 → 充值 → 在"API 密钥"页面新建一个 → 复制粘贴到上面。有 Claude 会员和 Claude Code 的，可以选第二项，不用密钥。</p></details></div>` : ''}
-    </section>
-    <section class="panel" id="set-idf"><h2>乐鑫编译工具</h2><div class="field"><label for="idf">ESP-IDF 位置（空着就自动找；找不到时码表帮你装）</label><input type="text" id="idf" value="${esc(st.idf_path)}"></div></section>
-    <section class="panel" id="set-dev"><h2>设备连接</h2><div class="field"><label for="port">调试口（空着就自动找）</label><input type="text" id="port" value="${esc(st.serial_port)}"></div></section>
-    <section class="panel"><h2>测量结果放在哪</h2><div class="field"><label for="ddir">文件夹</label><input type="text" id="ddir" value="${esc(st.data_dir)}"></div></section>
-    ${pri('保存', 'save', [], true)}</div>`;
-  },
-
-  diff: () => {
-    const D = S.demo, U = ui('diff'), R = D.retest, done = reviewing('diff');
-    if (done) U.phase = 'result';
-    if (!U.phase) U.phase = 'ask';
-    if (U.phase === 'ask') return `<section class="panel"><h1 style="font-size:22px">改好的代码在哪</h1>
-      <div class="field"><label for="newsrc">默认是上次的文件夹；也能拖新文件夹、压缩包进来，或粘贴路径</label><input type="text" id="newsrc" value="${esc(D.project.pick.dir)}"></div>
-      ${pri('查一遍', 'diffcheck')}</section>`;
-    if (U.phase === 'checking') return `<section class="panel"><h1 style="font-size:22px"><span class="spin"></span> 正在查改了什么</h1><p class="note">查源码、计时点、设备……</p></section>`;
-    const skipped = flow().steps.filter(s => R.skip.includes(s.key)).map(s => s.name);
-    return `<section class="panel"><h1 style="font-size:22px">查完了：${esc(R.route)}</h1>
-      <dl class="kv"><dt>改了什么</dt><dd>${esc(R.what)}</dd><dt>源码</dt><dd>${R.route === '固件没改' ? '和上次一样' : '有改动，计时点都接得上'}</dd><dt>设备</dt><dd>已连接（演示）</dd><dt>可以跳过</dt><dd>${skipped.map(esc).join('、') || '无'}</dd></dl>
-      ${done ? '' : pri('下一步', 'diffnext')}</section>`;
-  },
-
-  identify: () => {
-    const D = S.demo, U = ui('identify'), done = reviewing('identify');
-    if (done) U.phase = 'list';
-    if (!U.phase) { U.phase = 'reading'; U.sec = 0; startReading(); }
-    if (U.phase === 'reading') return `<section class="panel"><h1 style="font-size:22px"><span class="spin"></span> 正在读代码找关键步骤</h1><p class="note">已等 ${U.sec} 秒。后台同时在编原始代码。</p></section>`;
-    const steps = D.steps.concat(U.added || []);
-    if (U.phase === 'found') return `<section class="panel"><h1 style="font-size:22px">找完了</h1>
-      <dl class="kv"><dt>用时</dt><dd>${U.sec} 秒</dd><dt>后台编译</dt><dd>✓ 原始代码已编好（${esc(D.background_build)}）</dd><dt>关键步骤</dt><dd>${steps.length} 个，其中 ${steps.filter(s => s.sure !== '高').length} 个需核对</dd></dl>
-      ${pri('下一步', 'idnext')}</section>`;
-    U.dropped = U.dropped || [];
-    const row = s => {
-      const off = U.dropped.includes(s.id);
-      return `<div class="steprow ${off ? 'off' : ''}"><div><b>${esc(s.name)}</b> ${s.sure === '高' ? '<span class="chip c-ok">可信度高</span>' : '<span class="chip c-warn">需核对</span>'}<div class="loc">${esc(s.file)}:${esc(s.line)}</div><div class="note">${esc(s.why)}</div>${s.note ? `<div class="lack">拿不准：${esc(s.note)}</div>` : ''}</div>
-        <div class="acts" style="align-items:start"><button class="pill" data-act="idedit" data-id="${s.id}">修改位置</button><button class="pill" data-act="iddrop" data-id="${s.id}">${off ? '恢复' : '删除'}</button></div></div>`;
-    };
-    const unsure = steps.filter(s => s.sure !== '高'), sure = steps.filter(s => s.sure === '高');
-    const left = steps.filter(s => !U.dropped.includes(s.id)).length;
-    return `<div class="stack">
-      <section class="panel"><h2>需核对（${unsure.length}）</h2>${unsure.map(row).join('') || '<p class="note">没有</p>'}</section>
-      <section class="panel"><details><summary><b>可信度高（${sure.length}）</b>，默认都测</summary>${sure.map(row).join('')}</details></section>
-      <section class="panel"><h2>顺带发现的另一条线</h2><p style="margin:0">${esc(D.side_line.found)}。${esc(D.side_line.why)}</p>
-        <p class="note">你要测的：${esc(D.side_line.main)}；推荐也测：${esc(D.side_line.side)}</p>
-        <button class="pill" data-act="idside">${U.sideOff ? '恢复测这条' : '这条不测'}</button></section>
-      <section class="panel"><h2>添加步骤</h2><div class="inrow"><input type="text" id="addstep" placeholder="用一句话说要加什么，AI 去找位置"><button class="btn" data-act="idadd">添加</button></div></section>
-      ${done ? '' : pri('确认，插入计时点', 'idok', left ? [] : ['至少留一个步骤'])}</div>`;
-  },
-
-  probes: () => {
-    const D = S.demo, U = ui('probes'), st = stepOf('probes'), done = reviewing('probes');
-    if (done) U.phase = 'ok';
-    if (!U.phase) { U.phase = 'inserting'; setTimeout(() => { if (U.phase === 'inserting') { U.phase = 'review'; render(); } }, 900); }
-    const dev = `<p class="note" style="margin:0 0 10px">设备：已连接（演示）</p>`;
-    if (st.status === 'error') return `${dev}<div class="errbox"><b>${esc(S.state.flow.error)}</b><p style="margin:6px 0 0">原始代码在找关键步骤时已经编译通过，所以问题出在插进去的这处计时点。撤掉它，其余计时点照常。</p></div>${pri('撤掉这处，重新编译', 'prretry')}`;
-    if (U.phase === 'inserting') return `${dev}<section class="panel"><h1 style="font-size:22px"><span class="spin"></span> AI 正在插计时点</h1><p class="note">只加不删，码表逐处核对。</p></section>`;
-    if (U.phase === 'review') return `${dev}<section class="panel"><h1 style="font-size:22px">插好了，先看改动</h1><p>${esc(D.changes_summary)}</p>
-      <div class="list">${D.changes.map(c => `<div class="lrow"><span style="flex:1;padding:8px 2px" class="num">${esc(c.file)}</span><span class="chip c-est">${esc(c.tag)}</span></div>`).join('')}</div>
-      <div class="acts" style="margin-top:10px"><button class="btn" data-act="prredo">重新插入</button></div>
-      ${pri('确认改动，编译并烧录', 'prbuild')}</section>`;
-    if (U.phase === 'building') return `${dev}<section class="panel"><h1 style="font-size:22px">${U.pct < 100 ? '正在编译（只重编改过的文件）' : '正在烧录'}</h1>
-      <div class="progress"><i style="width:${U.pct < 100 ? U.pct : U.flash}%"></i></div><p class="note num">${U.pct < 100 ? esc(D.build_line.replace('{n}', Math.round(U.pct * 16))) : `烧录 ${U.flash}%`}</p></section>`;
-    if (U.phase === 'try') return `${dev}<div class="bigask"><b>${esc(D.trigger.big)}</b><span class="note">${esc(D.trigger.note)} 这一次只是试，确认计时点有输出，不算数据。</span><span>收到 <b class="num">${U.got || 0}</b> 个计时点</span></div><div class="log" id="trylog">${esc((U.log || []).join('\n'))}</div>`;
-    return `${dev}<div class="okbar">✓ 计时版已烧进设备，试的那一次 ${U.got || 0} 个计时点都收到了</div>${done ? '' : '<p class="note">马上进入多轮实测……</p>'}`;
-  },
-
-  measure: () => {
-    const D = S.demo, U = ui('measure'), done = reviewing('measure');
-    if (done) U.phase = 'done';
-    if (!U.phase) Object.assign(U, { phase: 'prep', rounds: 20, beep: true, got: [] });
-    const squares = () => `<div class="rsq">${Array.from({ length: U.rounds }, (_, i) => `<i class="${U.got[i] || ''}" title="第 ${i + 1} 轮"></i>`).join('')}</div><p class="note">一格一轮。绿：这轮没问题；黄、红：这轮有一段超出合理范围或偏慢；灰：还没测。</p>`;
-    if (U.phase === 'prep') return `<section class="panel"><h1 style="font-size:22px">准备多轮实测</h1>
-      <dl class="kv"><dt>谁来做</dt><dd>由你${esc(D.trigger.short)}，码表只提示和计时</dd>
-      <dt>测几轮</dt><dd><input type="text" id="rounds" value="${U.rounds}" style="width:6em"> 轮</dd>
-      <dt>清单</dt><dd>码表给的固定清单，改完重测用同一份</dd>
-      <dt>提示音</dt><dd><label><input type="checkbox" id="beep" ${U.beep ? 'checked' : ''}> 收好一轮"叮"一声</label></dd></dl>
-      ${pri('开始实测', 'msstart')}</section>`;
-    if (U.phase === 'run' || U.phase === 'stopped') {
-      const k = U.got.length;
-      return `<section class="panel">${U.phase === 'run' ? `<div class="bigask"><b>第 ${k + 1} 轮：${esc(D.trigger.big)}</b></div>` : `<h1 style="font-size:22px">已停止，测了 ${k} 轮</h1>`}
-        ${squares()}
-        ${U.phase === 'run' ? '<div class="acts"><button class="btn" data-act="msstop">停止实测</button></div>'
-          : `${pri(`接着测（从第 ${k + 1} 轮）`, 'msgoon')}<div class="acts" style="margin-top:8px"><button class="btn" data-act="msreport" ${k >= 10 ? '' : 'disabled'}>${flow().kind === 'retest' ? '查看前后对比' : '查看报告'}</button>${k >= 10 ? '' : '<span class="lack">还差：至少测 10 轮</span>'}</div>`}</section>`;
-    }
-    const L = D.lines.map(l => { const t = lineTotals(D, l).slice(0, U.got.length); const half = t.slice(0, Math.ceil(t.length / 2)); return Math.abs(median(half) - median(t)) < 0.05; });
-    const bad = U.got.filter(c => c !== 'g').length;
-    const nextName = flow().kind === 'retest' ? '查看前后对比' : '查看报告';
-    const few = bad >= 1 && bad <= 3 && U.got.length < 30;  // 偶尔出的问题只看到 1～3 次，测满 30 轮不再催
-    return `<section class="panel"><h1 style="font-size:22px">测完了，${U.got.length} 轮</h1>${squares()}
-      <h2>测的够不够</h2><p style="margin:0">${L.every(x => x) ? '一般用时稳了' : '一般用时还没稳'}；有问题的轮看到 ${bad} 次${bad && bad <= 3 ? '，还偏少' : ''}。</p>
-      ${done ? '' : few ? `${pri('再测 10 轮（建议）', 'msmore')}<div class="acts" style="margin-top:8px"><button class="btn" data-act="msreport">${nextName}</button></div>` : pri(nextName, 'msreport')}</section>`;
-  },
-
-  report: () => {
-    const D = S.demo, U = ui('report'), tab = U.tab || 'a';
-    const tabs = `<div class="seg" role="tablist"><button aria-pressed="${tab === 'a'}" data-act="rtab" data-tab="a">结论建议</button><button aria-pressed="${tab === 'b'}" data-act="rtab" data-tab="b">技术细节</button></div>`;
-    const stats = D.lines.map(l => { const t = lineTotals(D, l); return { l, med: median(t), p90: p90(t), max: Math.max(...t) }; });
-    const head = `${esc(D.start.short)} ` + stats.map(s => `${f2(s.med)} 秒${esc(s.l.phrase)}`).join('，');
-    const bottom = `<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center"><span>设备上现在是：<b>计时版</b></span><span class="acts"><button class="btn" data-act="restore">还原成原版</button><button class="btn" data-act="retest" data-demo="${D.id}">改完再测</button></span></div></section>`;
-    const done = reviewing('report') || flow().finished;
-    const finish = done ? '' : pri('完成，回首页', 'rpdone');
-    if (tab === 'b') return `<div class="stack">${tabs}
-      <section class="panel"><h2>测量条件</h2><dl class="kv">${D.tech.conditions.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></section>
-      <section class="panel scroll"><h2>分段用时</h2><table class="num"><thead><tr><th>段</th><th>谁负责</th><th class="r">一般</th><th>合理范围</th><th>代码位置</th></tr></thead><tbody>
-      ${Object.entries(D.segments).map(([k, s]) => `<tr><td>${esc(s.name)}</td><td>${esc(s.owner)}</td><td class="r">${f2(median(s.values))}</td><td>${s.range.join('～')}</td><td>${esc(D.tech.locations[k] || '')}</td></tr>`).join('')}</tbody></table></section>
-      <section class="panel"><h2>原始日志</h2><button class="btn" data-act="openlog">打开所在文件夹</button></section>${bottom}${finish}</div>`;
-    return `<div class="stack">${tabs}
-      <section class="panel"><h1>${head}</h1>${D.experience ? `<p class="note">体验标准：${esc(D.experience.label)}</p>` : ''}${timeline(D)}</section>
-      <section class="panel"><h2>要你拍板</h2><ul class="plain">${D.fixes.map(x => `<li><b>${esc(D.segments[x.segment].name)}</b>：${esc(x.impact)}<br><span class="note">建议：${esc(x.rec)}</span></li>`).join('')}</ul></section>
-      <section class="panel"><h2>依据</h2><table class="num"><thead><tr><th>线</th><th class="r">一般</th><th class="r">10 次最慢</th><th class="r">最差</th><th>判定</th></tr></thead><tbody>
-      ${stats.map(s => { const [t, c] = judge(s.med, s.l.range, s.l.slow); return `<tr><td>${esc(s.l.name)}</td><td class="r">${f2(s.med)}</td><td class="r">${f2(s.p90)}</td><td class="r">${f2(s.max)}</td><td><span class="chip ${c}">${t}</span></td></tr>`; }).join('')}</tbody></table>
-      <p class="note">${esc(D.fine)}</p></section>${bottom}${finish}</div>`;
-  },
-
-  compare: () => {
-    const D = S.demo, R = D.retest, done = reviewing('compare') || flow().finished;
-    const after = (k, v) => v * (R.factor[k] || 1);
-    const rows = D.lines.map(l => {
-      const before = median(lineTotals(D, l));
-      const now = median(D.segments[l.segments[0]].values.map((_, r) => sum(l.segments.map(k => after(k, D.segments[k].values[r])))));
-      const d = now - before, flat = Math.abs(d) < 0.03 || Math.abs(d) / before < 0.05;
-      const a = flat ? ['→ 持平', 'arrow-flat'] : d < 0 ? ['↓ 快了', 'arrow-down'] : ['↑ 慢了', 'arrow-up'];
-      return `<tr><td>${esc(l.name)}</td><td class="r">${f2(before)}</td><td class="r">${f2(now)}</td><td class="${a[1]}">${a[0]} ${flat ? '' : f2(Math.abs(d)) + ' 秒'}</td></tr>`;
-    });
-    return `<div class="stack"><section class="panel"><h1 style="font-size:22px">前后对比</h1><p class="note">这次改了什么：${esc(R.what)}</p>
-      <table class="num"><thead><tr><th>线</th><th class="r">改前一般</th><th class="r">改后一般</th><th>变化</th></tr></thead><tbody>${rows.join('')}</tbody></table>
-      <p class="note">变化小于 0.03 秒或 5% 算持平，不报假进步。条件一样才比：同一份清单、同样的计时点、同一份合理范围。</p></section>
-      ${done ? '' : pri('完成，回首页', 'cmpdone')}</div>`;
-  },
-};
-
-// 计时图：画最接近中位数的那一轮，几条线从同一个起点出发
-function timeline(D) {
-  const tot = D.lines.map(l => lineTotals(D, l)), meds = tot.map(median);
-  let best = 0, bd = Infinity;
-  tot[0].forEach((_, r) => { const d = sum(tot.map((t, i) => Math.abs(t[r] - meds[i]))); if (d < bd) { bd = d; best = r; } });
-  const T = Math.max(...tot.map(t => t[best])) * 1.15, W = 900, X0 = 150, X1 = 860, sx = t => X0 + (X1 - X0) * t / T, gap = 70, H = 40 + D.lines.length * gap;
-  const cols = ['var(--face)', 'var(--speak)', 'var(--warn)', 'var(--muted)'];
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="计时图"><line x1="${X0}" y1="20" x2="${X0}" y2="${H - 10}" stroke="var(--line)"/><text x="${X0}" y="14" font-size="13" fill="var(--muted)" text-anchor="middle">${esc(D.start.short)}</text>`;
-  D.lines.forEach((l, i) => {
-    let t = 0; const y = 40 + i * gap;
-    svg += `<text x="${X0 - 10}" y="${y + 15}" font-size="14" text-anchor="end" fill="var(--fg)">${esc(l.name)}</text>`;
-    l.segments.forEach((k, j) => {
-      const v = D.segments[k].values[best], x = sx(t), w = Math.max(2, sx(t + v) - x);
-      svg += `<rect x="${x}" y="${y}" width="${w}" height="22" fill="${cols[i]}" opacity="${j % 2 ? 0.55 : 0.9}"><title>${esc(D.segments[k].name)} ${f2(v)} 秒</title></rect>`;
-      t += v;
-    });
-    svg += `<text x="${sx(t) + 6}" y="${y + 15}" font-size="13" fill="var(--fg)">${esc(l.end)} ${f2(t)} 秒</text>`;
-  });
-  return `${svg}</svg><p class="note">画的是真实的一轮：第 ${best + 1} 轮，各条线都最接近一般用时。</p>`;
+function reportPage(D){
+  if(mode==='dev')return dev(D);
+  return `<div class="stack">${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p></div>
+  <section class="panel" id="sec-tl"><h2>一次的计时图</h2><p class="note" style="margin:-4px 0 8px">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、10 次里最慢、最差见「三档用时」。</p>${timeline(D)}</section>
+  <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
+  <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${fixA(D)}</section>
+  <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
+  <section class="grid3" id="sec-lines">${lineCards(D)}</section>
+  <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">三档用时<span class="tiernote"><i class="rdot"></i>"10 次里最慢"：每 10 次大约有 1 次会这么慢或更慢${D.n<20?'（这次只收了 '+D.n+' 轮，这一档只供参考）':''}</span></h2>${tiers(D)}</section>
+  <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
-// ===== 长任务（演示用的假进度） =====
-async function startReading() {
-  const U = ui('identify');
-  for (let i = 0; i < 8; i++) {
-    await sleep(250);
-    if (U.phase !== 'reading') return;
-    U.sec = (i + 1) * 2;
-    if (S.state.flow && S.state.flow.viewing === 'identify') render();
-  }
-  U.phase = 'found'; render();
+let page='home',mode='boss',scene='',homeVar='m',hStage=0,hSay='';
+try{const h=location.hash.slice(1);if(PAGES.some(p=>p.id===h))page=h;const s=localStorage.getItem('fsw-home');}catch(e){}
+const save=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+// ===== 找关键步骤 =====
+
+let edits={},added=[],editP=null,addSt=0,addManual=false,addLine='talk',addName='',mapOpen=false,stepsVar='a',stepsRead=0,readT=null,readSec=0,readFound=0,alsoFace=true,dropped=new Set(),mapSel='';
+const useFace=()=>alsoFace!==false;
+const allRows=()=>[...STEPS,...added].filter(x=>useFace()||x.line!=='face');
+const live=()=>allRows().filter(x=>!dropped.has(x.p));
+let bgSec=0,bgDur=70,bgT=null,bgSrc='';
+const bgDone=()=>bgSec>=bgDur,bgPct=()=>Math.min(100,Math.round(bgSec/bgDur*100));
+function bgStart(){clearInterval(bgT);bgSrc=hSrc;bgSec=0;bgDur=demoErr==='slowbg'?260:70;
+ bgT=setInterval(()=>{if(!envComp())return;bgSec+=7;const done=bgDone();
+  bgPill();if(pop==='bg')document.getElementById('popdlg').innerHTML=popHTML();
+  if(done){clearInterval(bgT);bgT=null;bgShownDone=Date.now();setTimeout(bgPill,5100);if(page==='flash'||page==='steps'||(page==='home'&&hStage===3))render()}},400)}
+function readStart(){clearInterval(readT);stepsRead=1;readSec=0;readFound=0;if(bgSrc!==hSrc)bgStart();
+ readT=setInterval(()=>{readSec+=7;if(readSec>=42)readFound=Math.min(STEPS.length,readFound+2);
+  if(readFound>=STEPS.length&&readSec>=70){clearInterval(readT);readT=null;stepsRead=2;if(page==='home'&&hStage===3){render()}else if(page==='steps')render();return}
+  const b=document.getElementById('readbox');if(b)b.innerHTML=readBox()},400)}
+function readBox(){const llm={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
+ const st=stepsRead===2?3:readSec<6?0:readFound===0?1:2;
+ const row=(i,t,d)=>`<li class="istep ${i<st?'ok':i===st?'cur':''}"><b>${i<st?'✓':i+1}</b><span>${t}<small>${d}</small></span></li>`;
+ return `<ol class="isteps">
+  ${row(0,'挑出要读的代码','码表自己做，不用大模型：'+FF[scene].scope)}
+  ${row(1,`交给 ${llm}，等它读完`,`已等 ${readSec} 秒。大模型要整段读完才开始回答，这一步没有百分比，一般 1～3 分钟（估算；验证期 DeepSeek 实测 53 秒）`)}
+  ${row(2,'它边回答，这里边列出找到的步骤',`${stepsRead===2?'找完了，共':'已找到'} ${readFound} 个`)}</ol>
+  ${stepsRead===2?foundList():`${readFound?`<div class="list">${STEPS.slice(0,readFound).map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} 第 ${x.l} 行</span></div>`).join('')}</div>`:''}
+  <p class="note">只发了代码，没发任何"标准答案"；结果先存在本机，源码没变下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}`}
+function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
+ return `<p style="margin:12px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
+   <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
+   <p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>`}
+let bgShownDone=0;
+const BGTIP='原始代码：你选的那份源码，码表复制一份，一个字没改、没插计时点。<br>点「开始找关键步骤」时开始编，这时源码和要测的内容都定了。插完计时点后的「编译」要用它，只重编改过的几个文件（验证期实测：从头编 119 秒，只重编 80 秒）。<br>没编完，只有「编译」那一步会先等它，其他步骤照常做。你原来的文件夹不动。';
+function bgPill(){const el=document.getElementById('bgpill');if(!el)return;let h='';
+ if(bgSrc&&hSrc){if(!envComp())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
+  else if(!bgDone())h=`<button class="bgp" data-bgpop="1" title="点开看详情"><span class="spin"></span>后台在编原始代码 ${bgPct()}%</button>`;
+  else if(Date.now()-bgShownDone<5000)h=`<span class="bgp ok">✓ 原始代码已编好</span>`}
+ el.innerHTML=h}
+function bgRow(){const done=bgDone(),noTool=!envComp();
+ return `<div class="bgrow">${done?'✓':noTool?'!':'<span class="spin"></span>'} <b>后台在编原始代码（选好源码就开始了）</b>：${done?'编好了，用了 '+FF[scene].bg:noTool?(inst.st===1?'等编译工具装好就开始':'等编译工具装好就开始，烧录前装好就行'):bgPct()+'%（验证期实测约 2 分钟）'}<span class="note">　不用管；插完计时点后编译要用它，没编完不挡「下一步」</span></div>`}
+function bgLight(){return bgDone()?`<span><i class="dot" style="background:var(--ok)"></i>后台：原版编译通过（${FF[scene].bg}）</span>`:`<span><i class="dot" style="background:var(--warn)"></i>后台：原版还在编（${bgPct()}%），不挡核对和插计时点，编译那步会等它</span>`}
+function bgBox(){const pct=bgPct(),done=bgDone(),noTool=!envComp();
+ const row=(i,t,d,st)=>`<li class="istep ${st}"><b>${st==='ok'?'✓':i}</b><span>${t}<small>${d}</small>${st==='cur'&&i===2?`<span class="pbar"><i style="width:${pct}%"></i></span>`:''}</span></li>`;
+ return `<div class="bgjob"><h3 class="h3" style="margin-top:0">${done?'✓ 后台已把原版编好':stepsRead===2?`后台还在编原版：${pct}%（不挡「下一步」）`:'等它读的时候，码表在后台先编一遍原版（不用你管）'}</h3>
+  ${stepsRead===2&&!done?`<p style="margin:0 0 8px;font-size:14px">可以先点「下一步」去核对步骤、看插计时点的改动；<b>只有"编译"那一步要等它编完</b>，到时会自动接着编，不用你点。</p>`:''}
+  <ul class="notes" style="margin:0 0 8px"><li><b>为什么编：</b>先确认这个项目在你电脑上编得过。原版就编不过，是环境问题（编译工具、依赖、板子），和计时点无关，码表会当场说缺什么。</li><li><b>编好有什么用：</b>插完计时点只要重编改过的几个文件，快很多；这份原版也留着，"还原成原版"和比较计时点开销时直接用。</li><li><b>动不动你的文件：</b>编的是码表复制出来的那份，你原来的文件夹不动。</li></ul>
+  <ol class="isteps">${row(1,'复制一份源码','复制到纯英文的工作目录（乐鑫编译器读不了中文路径）','ok')}
+  ${row(2,'编译原版',done?'编译通过，用了 '+FF[scene].bg:noTool?(inst.st===1?'编译工具正在后台装，装好自动开始编':'编译工具还没装，装好后自动开始编'):`已编 ${pct}%。第一次要从头编，一般 1～3 分钟（按项目大小估算）；电脑会忙一点`,done?'ok':noTool?'':'cur')}
+  ${row(3,'查设备','没插上。不急，烧录前插上就行',done?'ok':'')}</ol></div>`}
+function faceAsk(){const A=FF[scene].sideAsk;
+ if(alsoFace!==null)return `<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${alsoFace?`也测「${A.side}」这条线（多 ${A.k} 个计时点）`:A.no}</span><button class="pill" data-face="reset">重新选择</button></div>`;
+ return `<section class="panel" id="sideask"><h2>要不要多测一条线？</h2>
+  <p style="margin:6px 0 4px">码表读代码发现：${A.found}。</p>
+  <p style="margin:0 0 10px">现在只测「${A.main}」。${A.why}要不要把「${A.side}」也测上？</p>
+  <div class="acts" style="justify-content:flex-start"><button class="btn pri" data-face="yes">也测这条（推荐）</button><button class="btn" data-face="no">${A.no}</button></div>
+  <p class="note">也测：多插 ${A.k} 个计时点，报告里多一条线；不影响「${A.main}」那条的结果。</p></section>`}
+const sureChip=x=>x.sure==='高'?'<span class="chip c-ok">可信度高</span>':x.sure==='你加'?'<span class="chip c-gray">你加的</span>':'<span class="chip c-warn">需核对</span>';
+function editBox(x){return `<div class="edit"><div class="inrow"><label for="ed-f">文件</label><input type="text" id="ed-f" value="${x.f}"><label for="ed-l">行号</label><input type="text" id="ed-l" value="${x.l}" style="max-width:6em"></div>
+ <p class="note" style="margin:4px 0">在你的代码编辑器里找到要计时的那一行，把文件名和行号填这里。改动会记下来：谁、什么时候、从哪改到哪。</p>
+ <div class="acts" style="justify-content:flex-start;margin:4px 0 0"><button class="btn" data-edsave="${x.p}">保存位置</button><button class="btn" data-edcancel="1">取消</button></div></div>`}
+function addBox(){const F=FF[scene],A=F.sideAsk;
+ if(addSt===0)return `<button class="btn" data-add="open" style="margin-top:12px">＋ 添加步骤</button>`;
+ const lines=[['talk',F.ln.talk]].concat(useFace()?[['face',F.ln.face]]:[]);
+ const head=`<b>添加一个漏掉的步骤</b>`;
+ if(addSt===2)return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 0"><span class="spin"></span> AI 正在读代码，找"${addName}"在哪一行……（调用一次大模型，一般几秒到十几秒）</p></div>`;
+ if(addSt===3){const g=A.addGuess;return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 4px">AI 找到的位置：<span class="code">${g.f}</span> 第 ${g.l} 行</p><p class="note" style="margin:0 0 6px">${g.why}。AI 推测的，请核对。</p>
+  <div class="acts" style="justify-content:flex-start;margin:4px 0 0"><button class="btn" data-add="ok">加上这一步</button><button class="btn" data-add="open">不对，重新描述</button><button class="btn" data-add="cancel">取消</button></div></div>`}
+ return `<div class="edit" style="margin-left:0">${head}
+  <div class="inrow"><input type="text" id="add-n" value="${addName}" placeholder="用一句话说这一步是什么，比如：${A.addEx}"></div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0"><span class="note">属于哪条线：</span>${lines.map(([k,t])=>`<button class="pill" data-addline="${k}" aria-pressed="${addLine===k}">${t}</button>`).join('')}</div>
+  ${addManual?`<div class="inrow"><label for="add-f">文件</label><input type="text" id="add-f" placeholder="比如 main/xxx.c"><label for="add-l">行号</label><input type="text" id="add-l" style="max-width:6em"></div>`:''}
+  <div class="acts" style="justify-content:flex-start;margin:6px 0 0">${addManual?'<button class="btn" data-add="manualok">加上这一步</button>':'<button class="btn" data-add="ai">让 AI 找位置</button><button class="btn" data-add="manual">我知道位置，自己填</button>'}<button class="btn" data-add="cancel">取消</button></div></div>`}
+function stepsA(){const rows=allRows(),all=[...STEPS.filter(x=>x.line==='face'&&!useFace()),...rows].sort((a,b)=>STEPS.indexOf(a)-STEPS.indexOf(b));const idx=new Map(STEPS.map((x,i)=>[x.p,i]));rows.forEach((x,i)=>{if(!idx.has(x.p))idx.set(x.p,STEPS.length+i)});
+ const A=FF[scene].sideAsk,mine=rows.filter(x=>x.line!=='face'),fc=STEPS.filter(x=>x.line==='face');
+ const mid=mine.filter(x=>x.sure!=='高'),hi=mine.filter(x=>x.sure==='高');
+ const one=x=>{const i=idx.get(x.p),off=dropped.has(x.p);
+  if(x.line==='face'&&!useFace())return `<div class="srow2 off"><span class="num">${i+1}</span><div><s>${x.n}</s> <span class="note">这条不测，不插计时点</span></div></div>`;
+  if(off)return `<div class="srow2 off"><span class="num">${i+1}</span><div><s>${x.n}</s> <span class="note">已删除，这里不插计时点</span></div><button class="pill" data-undel="${x.p}">恢复</button></div>`;
+  return `<div class="srow2"><span class="num">${i+1}</span>
+  <div><b>${x.n}</b> <span class="chip ${x.line==='face'?'c-face':x.line==='start'?'c-gray':'c-speak'}">${lineName[x.line]}</span> ${sureChip(x)}${edits[x.p]?' <span class="chip c-gray">你改过位置</span>':''}
+   <div class="note"><span class="code">${x.f}</span> 第 ${x.l} 行 · ${x.why}${x.note?`<br><span style="color:var(--warn)">要留意：${x.note}</span>`:''}</div></div>
+  <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" data-editp="${x.p}">修改位置</button><button class="pill" data-del="${x.p}">删除</button></span></div>${editP===x.p?editBox(x):''}`};
+ return `<section class="panel"><h2>找到 ${STEPS.length} 个关键步骤${fc.length?`<span class="note" style="font-weight:400">　你要测的这条 ${STEPS.length-fc.length} 个，顺带发现的 ${fc.length} 个</span>`:''}</h2><p class="note" style="margin-top:0">每个关键步骤插一个计时点，量出每一段用了多久。序号是发生的先后顺序。</p>
+ <ul class="notes" style="margin:0 0 8px"><li>位置不对：点「修改位置」，改文件和行号。</li><li>不需要：点「删除」，这里就不插计时点，删了能恢复。</li><li>漏了：点最下面的「添加步骤」。</li></ul>
+ <h3 class="h3">需要你核对（${mid.length} 个）</h3><p class="note" style="margin-top:0">AI 不太确定的，看一下说明和"要留意"。</p><div class="stable">${mid.map(one).join('')}</div>
+ <details class="hiwrap"><summary>可信度高的 ${hi.length} 个：展开查看</summary><div class="stable">${hi.map(one).join('')}</div></details>
+ ${fc.length?`<div id="sideask" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h3 class="h3" style="margin:0">「${A.side}」这条：码表顺带发现的 ${fc.length} 个${useFace()?'（推荐也测）':'（不测）'}</h3><button class="pill" data-face="${useFace()?'no':'yes'}">${useFace()?'这条不测':'恢复测这条'}</button></div>
+ <p class="note" style="margin:4px 0 6px">你要测的是「${A.main}」。码表读代码时发现：${A.found}。${A.why}也测只多插 ${fc.length} 个计时点，不影响「${A.main}」那条的结果。</p><div class="stable">${fc.map(one).join('')}</div></div>`:''}
+ ${addBox()}</section>`}
+function stepsB(){const F=FF[scene],W=760,H=250,main=F.main,n=main.length;
+ const pos={};main.forEach((p,i)=>pos[p]=[Math.round(60+i*675/(n-1)),70]);F.branch.nodes.forEach((p,i)=>pos[p]=[pos[F.branch.from][0]+115*(i+1),190]);
+ const pal=['var(--est)','var(--speak)','var(--face)','var(--ok)','var(--warn)'],fileCol={};STEPS.forEach(x=>{if(!(x.f in fileCol))fileCol[x.f]=pal[Object.keys(fileCol).length%pal.length]});
+ const nodes=STEPS.filter(x=>useFace()||x.line!=='face');
+ const edge=(a,b,dash)=>{const[x1,y1]=pos[a],[x2,y2]=pos[b];return `<path d="M${x1} ${y1} ${y1===y2?`L${x2} ${y2}`:`C${x1} ${y2} ${x1} ${y2} ${x2} ${y2}`}" fill="none" stroke="var(--line)" stroke-width="2" ${dash?'stroke-dasharray="5 4"':''}/>`};
+ const sel=S_N[mapSel]||STEPS[0];
+ const sx=(pos[main[F.dash[0]]][0]+pos[main[F.dash[F.dash.length-1]+1]][0])/2;
+ const br=[F.branch.from,...F.branch.nodes];
+ return `<details class="panel mapbox" ${mapOpen?'open':''}><summary data-mapt="1"><b>关键流程地图</b>　<span class="note">点开看${F.mapWhat}在代码里怎么走、经过哪些文件</span></summary><p class="note">圆点是要插计时点的地方，颜色表示在哪个文件；虚线是设备看不见的服务器那段。点圆点看详情。</p>
+ <div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:620px" role="img" aria-label="关键流程地图">
+  <rect x="${sx-80}" y="20" width="160" height="22" rx="4" fill="var(--soft)"/><text x="${sx}" y="35" text-anchor="middle" font-size="12" fill="var(--muted)">${F.server}</text>
+  ${main.slice(0,-1).map((p,i)=>edge(p,main[i+1],F.dash.includes(i))).join('')}
+  ${useFace()?br.slice(0,-1).map((p,i)=>edge(p,br[i+1],i===0&&F.branch.dash)).join(''):''}
+  ${nodes.map(x=>{const[cx,cy]=pos[x.p],on=x.p===mapSel,off=dropped.has(x.p);return `<g data-map="${x.p}" style="cursor:pointer;opacity:${off?.35:1}"><circle cx="${cx}" cy="${cy}" r="${on?13:10}" fill="${fileCol[x.f]}" stroke="${on?'var(--fg)':'none'}" stroke-width="2"/>
+   <text x="${cx}" y="${cy+30}" text-anchor="middle" font-size="12.5" fill="var(--fg)">${x.n}</text>${x.sure!=='高'?`<text x="${cx}" y="${cy+46}" text-anchor="middle" font-size="11" fill="var(--warn)">需核对</text>`:''}</g>`}).join('')}
+  ${useFace()?`<text x="${pos[F.branch.from][0]-14}" y="195" text-anchor="end" font-size="12" fill="var(--face)">${F.sideLbl}</text>`:''}
+ </svg></div>
+ <div class="pills" style="margin:4px 0 10px">${Object.entries(fileCol).map(([f,c])=>`<span class="note"><i class="dot" style="background:${c}"></i>${f}</span>`).join('')}</div>
+ <div class="detail"><b>${sel.n}</b> ${sureChip(sel)}<div class="note"><span class="code">${sel.f}</span> 第 ${sel.l} 行 · ${sel.why}${sel.note?`<br><span style="color:var(--warn)">要留意：${sel.note}</span>`:''}</div>
+  <div class="pills" style="margin-top:6px">${dropped.has(sel.p)?`<span class="note">已删除</span><button class="pill" data-undel="${sel.p}">恢复</button>`:`<button class="pill" data-editp="${sel.p}">修改位置</button><button class="pill" data-del="${sel.p}">删除</button>`}</div></div></details>`}
+function stepsC(){const segRow=(sg,c)=>{const off=dropped.has(sg.a)||dropped.has(sg.b);return `<div class="cseg ${off?'off':''}"><span class="cbar" style="background:${sg.out?'var(--est)':c}"></span><div><b>${sg.t}</b> <span class="note">${sg.who}${sg.out?' · 设备外':''}</span><div class="note">从"${S_N[sg.a].n}"到"${S_N[sg.b].n}"</div></div></div>`};
+ return `<section class="panel"><h2>按这些步骤，用时会切成这几段</h2><p class="note" style="margin-top:0">报告里就按这几段算用时、判快慢。段切得不对，说明步骤找得不对。灰色是设备以外的段，码表只能量、改不了。</p>
+  <h3 class="h3"><i class="dot" style="background:var(--speak)"></i>${FF[scene].mainTitle}</h3>${SEGS.map(x=>segRow(x,'var(--speak)')).join('')}
+  ${useFace()?`<h3 class="h3"><i class="dot" style="background:var(--face)"></i>${FF[scene].sideTitle}</h3>${FSEGS.map(x=>segRow(x,'var(--face)')).join('')}`:''}
+  <details style="margin-top:10px"><summary class="note" >代码位置（${live().length} 个）</summary>${STEPS.filter(x=>useFace()||x.line!=='face').map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} 第 ${x.l} 行 ${x.sure!=='高'?'· <span style="color:var(--warn)">需核对</span>':''}</span></div>`).join('')}</details></section>`}
+const STEPVAR={a:{label:'A 清单',idea:'A 清单：按发生顺序一条条列，每条有代码位置、为什么在这、可信度高低，研发逐条打勾。最直接，适合研发核对。'},
+ b:{label:'B 流程地图',idea:'B 流程地图：画出一次对话在代码里怎么走、经过哪些文件，点圆点看详情。顺带满足需求 17（关键流程地图），也最适合录视频展示。'},
+ c:{label:'C 切成几段',idea:'C 切成几段：不看点，看点之间切出来的段（报告里就按这些段算用时）。不写代码的人也能判断"这样切对不对"。'}};
+function stepsPage(){
+ if(stepsRead===0)readStart();
+ if(stepsRead<2)return `<div class="stack"><section class="panel"><h1 style="font-size:22px">正在读代码找关键步骤</h1><p class="note" style="margin-top:0">测的是：${hSay?hSay.replace(/^从/,'').replace('到',' → '):FF[scene].measure}　固件：${hSrc||FF[scene].pick.dir}</p><div id="readbox">${readBox()}</div></section></div>`;
+ const warn=setLLM==='deepseek'?`<div class="why" style="border-left-color:var(--warn)">这次用的是 DeepSeek，验证期它 9 个只找对 4 个，请每条都仔细核对。</div>`:'';
+ const body=stepsB()+stepsA();
+ const n=live().length,ch=dropped.size;
+ return `<div class="stack">${warn}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>读完了，用了 1 分 10 秒，调用 1 次 ${({claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'})[setLLM]}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
+ ${body}
+ ${flow==='first'&&flowMax>=2?`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">回到插计时点和烧录</button></div></section></div>`:`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch||Object.keys(edits).length||added.length?'；你的删除、修改、添加都会记下来':''}。</span><button class="btn pri" data-goins="1" >确认，插入计时点</button></div></section></div>`}`}
+
+// ===== 插计时点和烧录 =====（数字来自验证 02：4 个文件 +154 −0；编译 119 秒/增量 80 秒；程序多 784 字节）
+const FST=()=>{const F=FF[scene];return [
+ ['复制一份源码',`开始找关键步骤时已经复制好${bgDone()?'、原始代码也编好了':''}；在这份上改，你原来的文件夹一个字都不动`,`已复制 ${F.files} 个文件到 ~/firmware-stopwatch-data/${F.slug}/work`],
+ ['让 AI 插计时点',`按你确认的步骤插入计时语句，再调用一次大模型；码表自己检查"只加不删"`,F.ins],
+ ['编译',`${bgDone()?'原始代码已经编过':'等后台把原始代码编完后'}，只重编改过的文件，一般 1 分钟左右（按改动的文件数估算）`,F.build],
+ ['烧录到设备','通过 USB 线写进设备','Writing at 0x0012c000... ({p} %)'],
+ ['试一次：确认计时点有输出',`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
+let demoErr=FAIL==='nodev'?'':FAIL,justFlashed=false,flashVar='b',fl={st:0,step:0,pct:0,log:''},flT=null,flNoDev=false,diffOk=false,diffFile=0,swOn=true,onDev='orig';
+function flStop(){clearInterval(flT);flT=null}
+function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:''};
+ flT=setInterval(()=>{const S=FST()[fl.step];
+  const fe=demoErr==='build'&&fl.step===2&&fl.pct>=60?'build':demoErr==='burn'&&fl.step===3&&fl.pct>=48?'burn':demoErr==='try'&&fl.step===4&&fl.pct>=70?'try':'';
+  if(fe){fl.st=5;fl.err=fe;flStop();if(page==='flash')render();return}
+  if(fl.step===3&&flNoDev){fl.st=4;fl.log='没看到设备';flStop();if(page==='flash')render();return}
+  if(fl.step===2&&!bgDone()){fl.wait=true;fl.log=`等后台把原始代码编完（${bgPct()}%）`;if(page==='flash')render();return}fl.wait=false;
+  fl.pct+=fl.step===2||fl.step===3?8:fl.step===4?6:25;
+  if(fl.pct>=100){fl.step++;fl.pct=0;if(fl.step>to){flStop();fl.st=fl.step>4?2:3;if(fl.st===2){onDev='fsw';if(page==='flash')setTimeout(()=>{if(page==='flash'&&fl.st===2){page='collect';justFlashed=true;render();window.scrollTo(0,0)}},1200)}if(page==='flash')render();return}}
+  fl.log=FST()[fl.step][2].replace('{n}',Math.round(fl.pct*16.3)).replace('{p}',Math.min(fl.pct,99));
+  if(page==='flash')render()},350)}
+function flErr(){const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
+ const E={build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} 第 ${p.l} 行）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
+  burn:['烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。','A fatal error occurred: The chip stopped responding.',`<button class="btn pri" data-flx="reburn">重新烧录</button>`],
+  try:['试一次没收到计时点',`烧录成功，设备也重启了，但${F.trig}后 15 秒内没收到计时点。常见原因：<br>1. 没触发到：再${C.act}一次试试。<br>2. 串口被别的软件占着（比如别的串口监视器）：关掉它。<br>3. 设备在反复重启：点「完整日志」看。`,'（15 秒内没有新输出）',`<button class="btn pri" data-flx="retry">再试一次</button>`]}[fl.err];
+ return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code><button class="pill">完整日志</button></div><div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
+function flList(from=0,to=4){const n=to-from+1;
+ const li=FST().slice(from,to+1).map(([t,d],j)=>{const i=from+j,done=fl.st===2||(fl.st>=1&&i<fl.step)||(fl.st===3&&i<=fl.step-1),cur=(fl.st===1||fl.st===4||fl.st===5)&&i===fl.step,bad=(fl.st===4||fl.st===5)&&cur;
+  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small><button class="pill" data-fl="plug">演示：设备已插上</button>`:''}</span></li>`}).join('');
+ const say=FF[scene].big;
+ const N=live().length,got=Math.min(N,Math.round(fl.pct/100*N));
+ const big=fl.st===1&&fl.step===4&&to>=4?`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`:fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${N} 个计时点都收到了，设备准备好了。</span></div>`:'';
+ return `<ol class="isteps">${li}</ol>${big}${fl.st===1&&fl.step!==4?`<div class="ilog"><span class="note">最新一行</span><code>${fl.log||'…'}</code><button class="pill">完整日志</button></div>`:''}`}
+
+let diffOpen=new Set();
+function diffView(){const rows=live(),F=FF[scene];const num=p=>p.replace(/\D/g,'')||'0';
+ const one=(k,i,t,sub,lines)=>`<div class="drow"><span class="num">${i}</span><div><b>${t}</b> <span class="note">${sub}</span></div><button class="pill" data-dopen="${k}">${diffOpen.has(k)?'收起代码':'看代码'}</button>${diffOpen.has(k)?`<pre class="diff">${lines.map(([k2,t2])=>`<span class="${k2==='+'?'add':k2==='…'?'more':''}">${k2==='…'?'':k2} ${t2.replace(/</g,'&lt;')}</span>`).join('\n')}</pre>`:''}</div>`;
+ return `<div class="status" style="margin-bottom:8px"><span><i class="dot" style="background:var(--ok)"></i>只加不删：${F.diffSum}，删除 0 行（码表逐行核对）</span><span><i class="dot" style="background:var(--ok)"></i>${rows.length} 个计时点都插上了，和你确认的一一对应</span></div>
+ <p class="note" style="margin:0 0 4px">每处只加两行：一行说明、一行记时间。"+"开头的是新加的。</p>
+ <div class="dlist">${one('hdr','＋','新文件 fw_stopwatch.h','计时点工具，+120 行；总开关也在这里',DIFF[0].lines)}
+ ${rows.map((x,i)=>one(x.p,i+1,x.n,`${x.f} 第 ${x.l} 行 · +2 行`,[[' ',`    …（第 ${x.l} 行原有代码，不动）`],['+',`    // 计时点 ${x.p}：${x.n}`],['+',`    FSW_MARK(${num(x.p)}, 0);`]])).join('')}</div>
+ <p class="note">总开关在 <span class="code">fw_stopwatch.h</span>：关掉后固件和原版大小相同、逻辑相同。要完全回到原版，用"还原"，会逐字节比对。</p>`}
+function flashA(){return `<section class="panel"><h2>一键插计时点、编译、烧录</h2><p class="note" style="margin-top:0">点一下从头走到尾，中间不停。改动内容装好后可以在"看改动"里查。</p>
+ <div id="flbox">${flList()}</div>
+ ${fl.st===0?`<div class="acts"><button class="btn pri" data-fl="all">开始</button></div>`:''}
+ ${fl.st>=2||fl.step>1?`<details><summary class="note" >改动明细</summary>${diffView()}</details>`:''}</section>`}
+function flashB(){
+ const s1=fl.st===0&&!diffOk?`<div class="acts"><button class="btn pri" data-fl="ins">开始插计时点</button></div>`:'';
+ const insDone=diffOk||(fl.step>=2)||fl.st===2;
+ return `<section class="panel"><h2>第一段：插计时点，插完先给你看改动</h2>
+  <div id="flbox">${flList(0,1)}</div>${s1}
+  ${insDone||fl.st===3?`${diffView()}${diffOk?'':`<div class="acts"><button class="btn pri" data-fl="ok">确认改动，编译并烧录</button><button class="btn" data-fl="redo">重新插入</button></div>`}`:''}</section>
+  <section class="panel" ${diffOk?'':'style="opacity:.45"'}><h2>第二段：编译、烧录、确认</h2>
+  ${diffOk?`<div id="flbox2">${flList(2,4)}</div>`:'<p class="note">改动确认后才开始。烧录时才检查设备插没插。</p>'}</section>`}
+function flashC(){const card=(k,t,sub,size)=>`<div class="vcard ${onDev===k?'on':''}"><h3>${t}${onDev===k?' <span class="chip c-ok">设备上正在跑</span>':''}</h3><p class="note">${sub}</p><p class="num">${size}</p><button class="btn ${onDev===k?'':'pri'}" data-ondev="${k}" ${onDev===k?'disabled':''}>${onDev===k?'正在用':'烧这个'}</button></div>`;
+ return `<section class="panel"><h2>原版和计时版，随时切换</h2><p class="note" style="margin-top:0">码表同时留着两份编译好的固件。测量用计时版；想确认"计时点本身有没有拖慢"，切回原版对比体感。</p>
+ <div class="vcards">${card('orig','原版','你的源码，没改过',FF[scene].sizes[0])}${card('fsw','计时版',live().length+' 个计时点，总开关开着',FF[scene].sizes[1])}</div>
+ <label style="display:flex;gap:8px;align-items:center;margin:12px 0 4px;font-size:14px"><input type="checkbox" data-sw="1" ${swOn?'checked':''}>计时版的总开关（关掉后重新编译，等于原版但保留插好的位置）</label>
+ <div id="flbox">${fl.st?flList(2,3):''}</div>
+ <details style="margin-top:8px"><summary class="note" >计时版改动明细</summary>${diffView()}</details></section>`}
+const FLASHVAR={a:{label:'A 一键到底',idea:'A 一键到底：点一下从复制、插计时点、编译、烧录走到确认，中间不停，改动事后再看。最省事，但研发烧之前没看过改动。'},
+ b:{label:'B 先看改动',idea:'B 先看改动再烧：AI 插完先停下，给研发看改了哪几个文件、每处加了什么、确认只加不删，点"没问题"才编译烧录。'},
+ c:{label:'C 两版切换',idea:'C 两版切换：原版和计时版两张卡，随时烧哪个；带总开关。适合反复对比"计时点有没有拖慢"，但第一次用不直观。'}};
+function flashPage(){
+ const body={a:flashA,b:flashB,c:flashC}[flashVar]();
+ const done=fl.st===2||(flashVar==='c'&&onDev==='fsw'&&fl.st===3);
+ return `<div class="stack"><div class="status"><span><i class="dot" style="background:var(--ok)"></i>要插 ${typeof live==='function'?live().length:9} 个计时点（找关键步骤那页确认的）</span>${envComp()?'<span><i class="dot" style="background:var(--ok)"></i>编译工具 v6.1</span>':'<span><i class="dot" style="background:var(--bad)"></i>编译工具：还没装，编译前要装好</span>'}<span><i class="dot" style="background:${done||(fl.step>=3&&!flNoDev&&fl.st)?'var(--ok)':'var(--warn)'}"></i>设备：${done||(fl.step>=3&&!flNoDev&&fl.st)?'设备已连上 '+(setOS==='mac'?'/dev/cu.usbmodem1101':'COM3'):'没插上，烧录前插上就行（插上会自动变成"已连上"）'}</span></div>
+ ${body}
+ <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">${done?'设备上已经是计时版，计时点输出正常。测完以后可以在报告底部或首页还原成原版。':''}</span><span style="display:flex;gap:8px"><button class="btn pri" data-go="collect" ${done?'':(()=>{const g=guide();return blk(g&&g[1]||'#flbox','烧录和试一次都完成后才能测')})()}>开始多轮实测</button></span></div></section></div>`}
+
+
+let STEPS,SEGS,FSEGS,S_N,DIFF,lineName;
+const FFs=()=>FF[scene];
+function applyScene(){const F=FF[scene];STEPS=F.steps;SEGS=F.segs;FSEGS=F.fsegs;DIFF=F.diff;lineName=F.ln;S_N=Object.fromEntries(STEPS.map(x=>[x.p,x]));if(!S_N[mapSel])mapSel=F.mapSel;if(diffFile>=DIFF.length)diffFile=0}
+function sceneSwitch(k){if(k===scene)return;colStop();col={st:0,att:0,got:[],phase:0};scene=k;rngAsk=0;fixPick=null;segSel=null;fixTodo=false;
+ clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];editP=null;addSt=0;mapSel=FF[k].mapSel;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';diffFile=0;
+ if(page==='home'){hStage=0;hSrc='';hScan=0;hSay='';hErr=''}pName=FF[k].pname;render()}
+
+// ===== 多轮实测 =====（通用：动作、提示语、阶段名、问题怎么判，都来自场景；数据和报告页同一份）
+let beep=true,actx=null;
+function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.06;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
+function beepBtn(){return `<button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>`}
+function beepNote(){return CC().beepNote}
+function needMore(){const g=okRounds(),C=CC(),L=build(SCENES[scene]).lines.length-1;if(g.length<10)return false;const all=g.map(x=>x.e[L]),half=Math.floor(g.length/2),run=all.slice(0,half);const stable=Math.abs(med(run)-med(all))<.05;const few=C.probs.some(p=>{const n=g.filter(x=>x.probs.some(q=>q.k===p.k)).length;return n>0&&n<=3})&&g.length<30;return !stable||few}
+function enough(){const g=okRounds(),C=CC(),D=build(SCENES[scene]),L=D.lines.length-1,ln=D.lines[L];if(g.length<10)return '';
+ const all=g.map(x=>x.e[L]),fin=med(all),run=all.map((_,i)=>med(all.slice(0,i+1))),half=Math.floor(g.length/2);
+ const stable=Math.abs(run[half-1]-fin)<.05,cap=g.length>=30;
+ const rare=C.probs.map(p=>({p,ns:g.filter(x=>x.probs.some(q=>q.k===p.k)).map(x=>x.n)})).filter(o=>o.ns.length>0);
+ const few=rare.filter(o=>o.ns.length<=3&&!cap),more=!stable||few.length>0;
+ const W=940,H=150,l=46,r=10,t=14,b=24,lo=Math.min(...run,fin-.1),hi=Math.max(...run,fin+.1);
+ const X=i=>l+(W-l-r)*i/Math.max(1,g.length-1),Y=v=>t+(H-t-b)*(1-(v-lo)/(hi-lo));
+ const band=`<rect x="${l}" y="${Y(fin+.05)}" width="${W-l-r}" height="${Y(fin-.05)-Y(fin+.05)}" fill="var(--ok)" opacity=".15"/>`;
+ const path=run.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' ');
+ const dots=run.map((v,i)=>`<g class="hit" data-tip="${`前 ${i+1} 轮：一般 &lt;b&gt;${f(v)} 秒&lt;/b&gt;`}"><rect x="${X(i)-8}" y="${t}" width="16" height="${H-t-b}" fill="transparent"/><circle cx="${X(i)}" cy="${Y(v)}" r="${i===g.length-1?4.5:3}" fill="var(--speak)" stroke="var(--panel)" stroke-width="2"/></g>`).join('');
+ const chart1=`<svg viewBox="0 0 ${W} ${H}" style="width:100%" role="img" aria-label="一般用时随轮数的变化">${band}
+  <text x="${l-6}" y="${Y(fin)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${f(fin)}</text>
+  <line x1="${X(half-1)}" x2="${X(half-1)}" y1="${t}" y2="${H-b}" stroke="var(--line)" stroke-dasharray="3 3"/><text x="${X(half-1)+4}" y="${t+10}" font-size="11" fill="var(--muted)">测到一半</text>
+  <path d="${path}" fill="none" stroke="var(--speak)" stroke-width="2"/>${dots}
+  <text x="${l}" y="${H-6}" font-size="11" fill="var(--muted)">第 1 轮</text><text x="${W-r}" y="${H-6}" text-anchor="end" font-size="11" fill="var(--muted)">第 ${g.length} 轮</text></svg>`;
+ const strip=o=>{const cw=Math.min(14,Math.floor(440/g.length));return `<div class="estrip"><span class="elab">${o.p.t}</span><span class="ecells">${g.map(x=>{const on=o.ns.includes(x.n);return `<i class="ecell" style="width:${cw}px;${on?`background:var(--${o.p.c})`:''}" ${on?`data-tip="第 ${x.n} 轮出现"`:''}></i>`}).join('')}</span><span class="ev ${o.ns.length<=3&&!cap?'warn':'ok'}">${o.ns.length} 次${o.ns.length<=3&&!cap?'，太少':''}</span></div>`};
+ const v=(ok,a,b)=>`<span class="ev ${ok?'ok':'warn'}">${ok?'✓ '+a:'… '+b}</span>`;
+ return `<section class="panel" id="enough" style="border-color:${more?'var(--warn)':'var(--ok)'}">
+ <h2 style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">测的够不够<span class="ev ${more?'warn':'ok'}" style="font-size:15px">${more?'建议再测 10 轮':'✓ 够了，可以看结果'}</span></h2>
+ <div class="eblk"><div class="ehead"><b>① 一般用时稳了吗</b>${v(stable,'稳了','还在变')}</div><p class="note" style="margin:2px 0 0">线是"测到第几轮时，${ln.end}的一般用时"。后半段落在绿色带里就是稳了。</p>${chart1}</div>
+ ${rare.length?`<div class="eblk"><div class="ehead"><b>② 偶尔出的问题看清了吗</b>${v(!few.length,'看清了','次数太少')}</div><p class="note" style="margin:2px 0 6px">一格一轮，亮的是出了这个问题的那轮。只出现 1～3 次，还分不清是偶尔还是常态。</p>${rare.map(strip).join('')}</div>`:''}
+ <p class="note" style="margin:6px 0 0">${more?'不再测也能出报告，报告里会注明"次数少，只供参考"。':''}按收到的数算的，不用大模型。</p></section>`}
+let colVar='b',colN=20,col={st:0,att:0,got:[],phase:0},colT=null;
+const CC=()=>COLLECT[scene];
+const PH=()=>CC().ph;
+function colStop(){if(colT){colT.close();colT=null}}
+function colPoints(){const S=SCENES[scene],p=new Set();S.lines.forEach(l=>l.segs.forEach(k=>S.segs[k].code.split('→').forEach(x=>p.add(x.trim()))));return p.size}
+function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,att:0,got:[],phase:0,sc:scene};const D=build(SCENES[scene]);const C=CC();
+ const ok0=col.got.filter(x=>!x.bad).length,need=Math.max(0,colN-ok0),drop=col.att<9?9-col.att:0,want=colPoints();let marks=-1;
+ const finish=()=>{if(marks<0)return;col.att++;
+  if(marks<want){col.got.push({bad:true,att:col.att});ding(true)}
+  else{const r=D.rounds[col.got.filter(x=>!x.bad).length%D.rounds.length];col.got.push({n:col.got.filter(x=>!x.bad).length+1,e:r.ends,probs:C.probs.filter(p=>p.rounds.includes(r.n)),att:col.att});ding(false)}
+  marks=-1;col.phase=0};
+ const es=new EventSource(`/api/device/stream?demo=${encodeURIComponent(scene)}&rounds=${need}&start=${ok0}&drop_at=${drop}&interval=0.12`);colT=es;
+ es.onmessage=e=>{if(e.data==='END'){finish();colStop();col.st=2;if(page==='collect')render();return}
+  if(e.data==='FSW,RESET'){finish();marks=0;col.phase=0}
+  else{marks++;col.last=e.data;col.phase=marks>=want?4:Math.min(3,Math.floor(marks*4/want))}
+  if(page==='collect')render()}}
+const okRounds=()=>col.got.filter(x=>!x.bad);
+function issues(x){if(x.bad)return `<span class="chip c-gray">${CC().miss}，不计入，自动补收一轮</span>`;
+ return x.probs.map(p=>`<span class="chip c-${p.c}">${p.t}</span>`).join(' ')||'<span class="note">正常</span>'}
+function colSetup(){const C=CC(),D=build(SCENES[scene]);return `${justFlashed?`<div class="okbar">✓ 计时版已烧进设备，试的那一次 ${live().length} 个计时点都收到了。下面开始多轮实测。</div>`:''}<section class="panel"><h1 style="font-size:22px">多轮实测：${C.cnt} ${colN} ${C.unit}</h1>
+ <p style="margin:4px 0 0">同样的事做很多轮，码表从设备输出里记下每一轮各段用了多久。刚才试的那一次不算。</p>
+ <div class="status" style="margin:6px 0 4px"><span><i class="dot" style="background:var(--ok)"></i>${C.dev}已连上，计时点输出正常</span><span><i class="dot" style="background:var(--ok)"></i>${C.mode}</span><span><i class="dot" style="background:var(--ok)"></i>量 ${D.lines.length} 条线：${D.lines.map(l=>D.S.startShort+' → '+l.end).join('；')}</span></div>
+ <dl class="cform">
+  <dt>谁来${C.act}</dt><dd><p style="margin:0">${C.who}</p><p class="note" style="margin:4px 0 0">${C.why}</p></dd>
+  <dt>测几轮</dt><dd><div class="seg" role="group" aria-label="测几轮">${[10,20,30].map(n=>`<button data-coln="${n}" aria-pressed="${n===colN}">${n} 轮${n===20?'（推荐）':''}</button>`).join('')}</div>
+   <p class="note" style="margin:4px 0 0">20 轮够看出一般多快、最慢的几次、偶尔出的错。轮数越多越准，也越费时间（${C.per}，估算）。</p></dd>
+  <dt>${C.listName} ${colN} ${C.unit}</dt><dd><details><summary class="pill" style="display:inline-block;list-style:none;cursor:pointer">展开清单</summary><ol class="note" style="columns:2;margin:8px 0 0">${[...Array(colN)].map((_,i)=>`<li>${C.items[i%C.items.length]}</li>`).join('')}</ol></details>
+   <p class="note" style="margin:4px 0 0">AI 读完代码、按"测从什么到什么"生成的，可以改。不用背，每轮页面上会大字提示。</p></dd>
+  <dt>提示音</dt><dd>${beepBtn()}<p class="note" style="margin:4px 0 0">${beepNote()}</p></dd>
+ </dl>
+ <div class="acts"><button class="btn pri" data-col="go" onclick="justFlashed=false">开始实测</button></div>
+ <p class="note">${C.wait}原始日志同时存一份，以后能重新算。</p></section>`}
+function colA(open=true){const g=col.got,L=build(SCENES[scene]).lines,C=CC();
+ const tab=`<table class="rtab"><thead><tr><th>轮</th>${L.map(l=>`<th>${l.end}</th>`).join('')}<th>情况</th></tr></thead><tbody>${[...g].reverse().map(x=>`<tr ${x.bad?'class="off"':''}><td class="num">${x.bad?'—':x.n}</td>${L.map((_,i)=>`<td class="num">${x.bad?'—':f(x.e[i])+' 秒'}</td>`).join('')}<td>${issues(x)}</td></tr>`).join('')}</tbody></table>`;
+ return `<section class="panel"><h2>已测 <span class="num">${okRounds().length}</span> / ${colN} 轮</h2>
+ ${col.st===1?`<p class="note" style="margin-top:0">现在：第 ${col.att+1} 次，${PH()[col.phase]}……　下一${C.unit}："${C.items[okRounds().length%C.items.length]}"</p>`:''}${tab}</section>`}
+function tipOf(x){const C=CC(),L=build(SCENES[scene]).lines,at=t=>t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+ if(x.bad)return at(`<b>第 ${x.att} 次：${C.miss}</b><br>不计入，已自动补测一轮`);
+ return at(`<b>第 ${x.n} 轮</b>　${C.said}“${C.items[(x.n-1)%C.items.length]}”<br>`+L.map((l,i)=>`${l.end}：<b>${f(x.e[i])} 秒</b>${x.e[i]>l.ok[1]?`（超出合理范围 ${l.ok[0]}～${l.ok[1]} 秒）`:''}`).join('<br>')+'<br>'+(x.probs.length?x.probs.map(p=>'⚠ '+p.t).join('　'):'✓ 没出问题'))}
+function colB(){const k=okRounds().length,cur=Math.min(k,colN-1),C=CC();
+ const sq=x=>{const p=x.probs&&x.probs[0];return `<i class="sq" tabindex="0" data-tip="${tipOf(x)}" style="background:${x.bad?'var(--soft)':p?`var(--${p.c})`:'var(--ok)'}"></i>`};
+ return `<section class="panel" style="text-align:center">
+ ${col.st===1?`<p class="note" style="margin:0">第 ${cur+1} 轮 / 共 ${colN} 轮</p><p style="font-size:15px;margin:10px 0 4px">${col.phase===0?C.say:C.said}</p><p style="font-size:26px;font-weight:600;margin:0 0 16px">"${C.items[cur%C.items.length]}"</p>
+ <div class="phs">${PH().map((p,i)=>`<span class="${i<col.phase?'ok':i===col.phase?'cur':''}">${p}</span>`).join('<b>→</b>')}</div>`:col.st===3?`<p style="font-size:20px;font-weight:600">已停止：测了 ${k} / ${colN} 轮</p>`:`<p style="font-size:20px;font-weight:600">测完了</p>`}
+ <div class="sqs">${col.got.map(sq).join('')}${[...Array(Math.max(0,colN-k))].map(()=>'<i class="sq"></i>').join('')}</div>
+ <p class="note" style="margin-bottom:2px">一格是一轮，颜色表示这轮有没有出问题（不是快慢）。鼠标移到格子上看这轮各段用时。</p><p class="note"><i class="dot" style="background:var(--ok)"></i>正常　${C.probs.map(p=>`<i class="dot" style="background:var(--${p.c})"></i>${p.t}　`).join('')}<i class="dot" style="background:var(--soft)"></i>没收全，自动补一轮</p>
+ ${col.got.filter(x=>x.bad||x.probs.length).slice(-3).reverse().map(x=>`<p class="note" style="margin:2px 0">${x.bad?'第 '+x.att+' 次':'第 '+x.n+' 轮'}：${issues(x)}</p>`).join('')}
+ <details style="text-align:left;margin-top:10px"><summary class="note" >逐轮明细（${okRounds().length} 轮）</summary>${colA().replace(/^<section class="panel">/,'<div>').replace(/<\/section>$/,'</div>')}</details></section>`}
+function colC(){const g=okRounds(),D=build(SCENES[scene]),L=D.lines,main=L[L.length-1],W=720,H=230,Lp=46,R=12,T=14,B=30;
+ const ymax=Math.ceil(Math.max(main.slow,...D.rounds.flatMap(r=>r.ends))*1.1*2)/2;
+ const x=i=>Lp+(W-Lp-R)*(i+.5)/colN,y=v=>T+(H-T-B)*(1-v/ymax);
+ const hl=(v,t,c)=>`<line x1="${Lp}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="${c}" stroke-dasharray="4 4"/><text x="${W-R}" y="${y(v)-4}" text-anchor="end" font-size="11" fill="${c}">${t}</text>`;
+ const mains=g.map(r=>r.e[L.length-1]);const st=ymax<=2.5?.5:1,ticks=[...Array(Math.floor(ymax/st)+1)].map((_,i)=>+(i*st).toFixed(1));
+ return `<section class="panel"><h2>已测 <span class="num">${g.length}</span> / ${colN} 轮　<span class="note" style="font-weight:400">${col.st===1?`现在：${PH()[col.phase]}`:col.st===3?'已停止':'测完了'}</span></h2>
+ <div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:560px" role="img" aria-label="每轮用时">
+  <rect x="${Lp}" y="${y(main.ok[1])}" width="${W-Lp-R}" height="${y(main.ok[0])-y(main.ok[1])}" fill="var(--speak-soft)" opacity=".5"/>
+  ${ticks.map(v=>`<text x="${Lp-8}" y="${y(v)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${v} 秒</text>`).join('')}
+  ${D.S.exp?hl(D.S.exp.fair,D.S.exp.fair+' 秒：超过算体验差','var(--warn)'):''}
+  ${mains.length?hl(med(mains),main.end+'一般 '+f(med(mains))+' 秒','var(--speak)'):''}
+  ${g.map((r,i)=>L.map((l,j)=>`<circle cx="${x(i)}" cy="${y(r.e[j])}" r="${j===L.length-1?5:4}" fill="${j===L.length-1&&r.probs.length?'var(--bad)':l.col}"/>`).join('')).join('')}
+  <text x="${Lp}" y="${H-8}" font-size="11" fill="var(--muted)">第 1 轮</text><text x="${W-R}" y="${H-8}" text-anchor="end" font-size="11" fill="var(--muted)">第 ${colN} 轮</text>
+ </svg></div>
+ <p class="note">${L.map(l=>`<i class="dot" style="background:${l.col}"></i>${l.end}　`).join('')}<i class="dot" style="background:var(--bad)"></i>这轮有问题　浅色带：${main.end}合理范围 ${main.ok[0]}～${main.ok[1]} 秒</p>
+ <div class="ilog"><span class="note">设备输出</span><code>${col.st===1&&col.last?col.last:'—'}</code></div></section>`}
+const COLVAR={a:{label:'A 逐轮表',idea:'A 逐轮表：每收一轮加一行（换表情、开口、有没有问题），最新的在上面。信息最全，适合研发盯着看。'},
+ b:{label:'B 跟着做',idea:'B 跟着做（推荐）：大字提示下一步做什么、现在到哪一步，一轮一格小方块、出问题变色；下面能展开 A 的逐轮明细。人眼要看着设备，页面只需扫一眼。'},
+ c:{label:'C 边测边画',idea:'C 边测边画：每收一轮在图上多两个点，合理范围和"一般用时"线跟着变，收到一半就能看出稳不稳。'}};
+function collectPage(){
+ if(col.st===0)return `<div class="stack">${colSetup()}</div>`;
+ const body={a:colA,b:colB,c:colC}[colVar]();
+ const g=okRounds(),bad=col.got.length-g.length;
+ return `<div class="stack">${col.st===1?`<div class="status" style="justify-content:flex-end">${beepBtn()}</div>`:''}${body}${col.st===2||(col.st===3&&okRounds().length>=10)?enough():''}
+ <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${col.st===3?(()=>{const k=g.length,can=k>=10,to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];return `<span class="note">已停止。测了的 ${k} 轮都留着，可以接着测。${can?'也可以先看结果，会注明只测了 '+k+' 轮。':''}</span><span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" data-go="${to[0]}" ${can?'':blk('[data-col="resume"]','至少测 10 轮才能看结果')}>${to[1]}</button><button class="btn" data-col="restart">从头重测</button><button class="btn pri" data-col="resume">接着测（从第 ${k+1} 轮）</button></span>`})():`<span class="note">${col.st===2?`测完 ${g.length} 轮${bad?`（另有 ${bad} 轮没收全，没算）`:''}；原始日志已存。`:'可以随时停，停了能接着测，已测的都留着。'}</span><span style="display:flex;gap:8px">${col.st===1?'<button class="btn" data-col="stop">停止实测</button>':`<button class="btn ${needMore()?'pri':''}" data-col="more">再测 10 轮${needMore()?'（建议）':''}</button>`}${flow==='retest'&&rtC().steps[3][1]?`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="compare" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看前后对比</button>`:`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="report" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看报告</button>`}</span>`}</div></section></div>`}
+
+// ===== 前后对比 =====（通用：两次结果都用报告页同一套计算；改后数据是模拟的）
+
+function afterScene(k){const S=JSON.parse(JSON.stringify(SCENES[k]));for(const s in RUNS[k].afterSegs)S.segs[s].v=RUNS[k].afterSegs[s];return S}
+let cmpVar='c';
+const flat=(a,b)=>Math.abs(b-a)<Math.max(.03,a*.05);
+function dchip(a,b){if(flat(a,b))return '<span class="note">→ 持平</span>';const d=b-a;return d<0?`<span class="down">↓ 快了 ${f(-d)} 秒</span>`:`<span class="up">↑ 慢了 ${f(d)} 秒</span>`}
+const TIERS=[['一般','med'],['10 次最慢','p90'],['最差一次','max']];
+function cmpData(){const B=build(SCENES[scene]),A=build(afterScene(scene));return {B,A,R:RUNS[scene]}}
+function cmpHead(){const {B,A}=cmpData();
+ return A.lines.map((l,i)=>{const b=B.lines[i],m=flat(b.med,l.med),p=flat(b.p90,l.p90);
+  const s1=m?`一般持平（${f(b.med)} → ${f(l.med)} 秒）`:`一般${l.med<b.med?'快':'慢'}了 ${f(Math.abs(l.med-b.med))} 秒（${f(b.med)} → ${f(l.med)}）`;
+  const s2=p?'最慢那几次也差不多':`最慢那几次${l.p90<b.p90?'好了很多':'更慢了'}（${f(b.p90)} → ${f(l.p90)} 秒）`;
+  return `<b>${l.end}</b>：${s1}，${s2}。`}).join('<br>')}
+function fair(){const {R}=cmpData(),C=COLLECT[scene];
+ return `<div class="status"><span><i class="dot" style="background:var(--ok)"></i>两次都按同样的 20 ${C.unit}${C.act}</span><span><i class="dot" style="background:var(--ok)"></i>计时点相同</span><span><i class="dot" style="background:var(--ok)"></i>用同一份合理范围</span>${flow==='retest'&&rtCase==='tool'?'<span><i class="dot" style="background:var(--warn)"></i>编译工具不同（v6.1 → v6.2），变化不一定都来自你改的那一处</span>':''}<span><i class="dot" style="background:var(--warn)"></i>网络、服务器负载码表看不到，请自己保证差不多</span></div>`}
+function cmpPick(){const R=RUNS[scene];return `<section class="panel"><h1 style="font-size:22px">前后对比</h1>
+ <div class="pickrow"><label>改前<select><option>${flow==='retest'?RT[scene].last+'　上一次（自动选的）':R.before}</option></select></label><span class="note">→</span><label>改后<select><option>${flow==='retest'?'今天　这次改完再测':R.after}</option></select></label></div>
+ <p class="note" style="margin:6px 0">这次改了什么（${rtWhat?'改完再测时码表先写、你确认过的':'你填'}，报告里会带上）：<b>${rtWhat||R.what}</b></p>${fair()}</section>`}
+function cmpA(){const {B,A}=cmpData();
+ const tier=`<table class="rtab"><thead><tr><th></th>${A.lines.map(l=>`<th colspan="3">${l.end}</th>`).join('')}</tr><tr><th></th>${A.lines.map(()=>'<th>改前</th><th>改后</th><th>变化</th>').join('')}</tr></thead><tbody>${TIERS.map(([t,k])=>`<tr><td>${t}</td>${A.lines.map((l,i)=>`<td class="num">${f(B.lines[i][k])}</td><td class="num">${f(l[k])}</td><td>${dchip(B.lines[i][k],l[k])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+ const segs=`<table class="rtab" style="margin-top:14px"><thead><tr><th>分段（中位数）</th><th>谁负责</th><th>改前</th><th>改后</th><th>变化</th></tr></thead><tbody>${A.allSegs.map((s,i)=>`<tr><td>${s.name}</td><td class="note">${s.owner}</td><td class="num">${f(B.allSegs[i].med,3)}</td><td class="num">${f(s.med,3)}</td><td>${dchip(B.allSegs[i].med,s.med)}</td></tr>`).join('')}</tbody></table>`;
+ return `<section class="panel"><h2>对照表</h2>${tier}${segs}<p class="note">变化小于 0.03 秒或 5% 算持平：同一台设备连测两次，本来就会有这么大的抖动。</p></section>`}
+function cmpB(){const {B,A}=cmpData();const T=niceT(Math.max(...B.lines.map(l=>l.med),...A.lines.map(l=>l.med)));
+ const W=900,X0=150,X1=820,sx=t=>X0+(X1-X0)*t/T,h=18,top=30;let g='',y=top;const st=step(T);
+ const rows=[];A.lines.forEach((l,i)=>{rows.push([B.lines[i],'改前',.45,B]);rows.push([l,'改后',1,A])});
+ const H=top+rows.length*30+40;
+ for(let t=0;t<=T+1e-9;t+=st)g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="${top-10}" y2="${H-26}" stroke="var(--soft)"/><text x="${sx(t)}" y="${H-8}" text-anchor="middle" font-size="12" fill="var(--muted)">${+t.toFixed(2)} 秒</text>`;
+ rows.forEach(([l,lab,op,D],r)=>{y=top+r*30+(r%2?0:6);let t0=0;
+  g+=`<text x="${X0-12}" y="${y+13}" text-anchor="end" font-size="13" fill="${l.col}" ${op<1?'opacity=".7"':'font-weight="700"'}>${l.end}·${lab}</text>`;
+  l.segs.forEach((k,j)=>{const d=l.segMed[j];g+=`<rect x="${sx(t0)}" y="${y}" width="${Math.max(2,sx(t0+d)-sx(t0))}" height="${h}" fill="${j===l.segs.length-1?l.col:l.soft}" opacity="${op}" rx="2"><title>${D.S.segs[k].name} ${f(d)} 秒</title></rect>`;
+   if(op===1&&sx(t0+d)-sx(t0)>80){const bd=B.lines[l.i].segMed[j];g+=`<text x="${(sx(t0)+sx(t0+d))/2}" y="${y+13}" text-anchor="middle" font-size="11.5" fill="var(--fg)">${D.S.segs[k].name}${flat(bd,d)?'':d<bd?' ↓':' ↑'}</text>`}t0+=d});
+  g+=`<text x="${sx(t0)+8}" y="${y+13}" font-size="12.5" class="num" fill="${l.col}">${f(l.med)} 秒</text>`});
+ return `<section class="panel"><h2>改前改后叠在一起看</h2><div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="前后对比时间线">${g}</svg></div>
+ <p class="note">浅色是改前，深色是改后；段名旁的 ↓ ↑ 表示这一段快了还是慢了。数字取 20 轮中位数。</p></section>`}
+function cmpC(){const {B,A}=cmpData();const L=A.lines.length-1,lb=B.lines[L],la=A.lines[L];
+ const T=niceT(Math.max(...B.rounds.flatMap(r=>r.ends),...A.rounds.flatMap(r=>r.ends))/1.1),W=900,X0=90,X1=860,sx=t=>X0+(X1-X0)*t/T,st=step(T);
+ let g='';for(let t=0;t<=T+1e-9;t+=st)g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="10" y2="104" stroke="var(--soft)"/><text x="${sx(t)}" y="122" text-anchor="middle" font-size="12" fill="var(--muted)">${+t.toFixed(2)} 秒</text>`;
+ [[B,'改前',30,.45],[A,'改后',80,1]].forEach(([D,lab,y,op])=>{g+=`<text x="${X0-12}" y="${y+4}" text-anchor="end" font-size="13" fill="var(--fg)">${lab}</text>`;
+  D.rounds.forEach(r=>g+=`<circle cx="${sx(r.ends[L])}" cy="${y}" r="6" fill="${D.lines[L].col}" opacity="${op}"/>`);
+  g+=`<line x1="${sx(D.lines[L].med)}" x2="${sx(D.lines[L].med)}" y1="${y-14}" y2="${y+14}" stroke="var(--fg)" stroke-width="2"/>`});
+ const card=([t,k])=>`<div class="tcard"><span class="note">${t}</span><b class="num">${f(la[k])} 秒</b><span>${dchip(lb[k],la[k])}</span></div>`;
+ return `<section class="panel"><h2>结论</h2><p style="font-size:16px;line-height:1.7;margin:4px 0 12px">${cmpHead()}</p>
+ <div class="tcards">${TIERS.map(card).join('')}</div><p class="note">上面三格是"${la.end}"那条线。</p>
+ <h3 class="h3">20 轮"${la.end}"的用时，一个点一轮</h3><div class="scroll"><svg viewBox="0 0 ${W} 130" style="min-width:640px;width:100%" role="img" aria-label="改前改后每轮分布">${g}</svg></div>
+ <p class="note">竖线是一般用时。点挤得越紧，说明越稳定。</p></section>`}
+const CMPVAR={a:{label:'A 对照表',idea:'A 对照表：三档用时和每一段，改前、改后、变化三列，箭头标快慢。最全，适合研发查是哪一段变了。'},
+ b:{label:'B 叠图',idea:'B 叠图：报告里那张计时图，改前（浅）改后（深）叠在一起，段名旁带 ↓ ↑。一眼看出变化落在哪一段。'},
+ c:{label:'C 结论先行',idea:'C 结论先行：先一句话说改完变快没有，再给三档大数字和箭头，最后是每轮分布（点挤得紧说明稳）。负责人只看上面就能拍板。'}};
+function comparePage(){return `<div class="stack">${flow==='retest'?`<section class="panel" style="border-color:var(--ok)"><b>改完再测完成。</b><span class="note">　下面是和上一次的对比；这次的完整报告也已生成。</span><div class="acts" style="margin:8px 0 0"><button class="btn" data-go="report">看这次的完整报告</button><button class="btn" data-go="home">回首页</button></div></section>`:''}${cmpPick()}${cmpC()}<details class="panel"><summary style="cursor:pointer"><b>对照表</b>　<span class="note">三档用时和每一段的改前、改后、变化</span></summary>${cmpA().replace(/^<section class="panel"><h2>对照表<\/h2>/,'').replace(/<\/section>$/,'')}</details></div>`}
+
+// ===== 合理范围 =====（通用：部件、分段标准、依据都按场景）
+let rngVar='a',rngAsk=0;
+const sureC=s=>s==='高'?'c-ok':s==='中'?'c-warn':'c-bad';
+function rngParts(){const R=RANGE[scene];return `<section class="panel"><h2>先认出关键部件</h2><p class="note" style="margin-top:0">合理范围要看是什么硬件、连的什么服务器。下面是码表读代码认出来的，可信度不高的请你确认。</p>
+ <div class="stable">${R.parts.map(([k,v,s,why])=>`<div class="srow2" style="grid-template-columns:8em 1fr auto"><b>${k}</b><div>${v} <span class="chip ${sureC(s)}">可信度${s}</span><div class="note">${why}</div></div>${s==='高'?'<span class="note">✓</span>':'<button class="pill">确认或修改</button>'}</div>`).join('')}</div></section>`}
+function rngTable(){const S=SCENES[scene],R=RANGE[scene],D=build(S);
+ return `<table class="rtab"><thead><tr><th>分段</th><th>谁负责</th><th>合理</th><th>超过算慢</th><th>依据</th><th>可信度</th><th>实测基线</th></tr></thead><tbody>${Object.entries(S.segs).map(([k,s])=>{const r=R.segs[k];return `<tr><td>${s.name}</td><td class="note">${s.owner}</td><td class="num">${r[0]}</td><td class="num">${r[1]}</td><td class="note">${r[2]}</td><td><span class="chip ${sureC(r[3])}">${r[3]}</span></td><td class="num">${f(med(s.v),s.v[0]<.05?3:2)} 秒</td></tr>`}).join('')}</tbody></table>
+ <p class="note">${R.exp}。实测基线：${D.n} 轮中位数，有实测后自动加上，以后每次测量都会和它比。</p>`}
+function rngHist(){const R=RANGE[scene];const rows=[...R.hist];if(rngAsk>=2)rows.push(['今天','你：'+R.chat[0]+'（示例）',R.chat[2]]);
+ return `<details><summary class="note" >改动历史（${rows.length} 条）</summary>${rows.map(r=>`<div class="srow"><span><b>${r[0]}</b>　${r[1]}</span><span class="note">${r[2]}</span></div>`).join('')}</details>`}
+function rngA(){return `${rngParts()}<section class="panel"><h2>每段多久算正常</h2>${rngTable()}${rngHist()}</section>`}
+function rngChat(){const R=RANGE[scene],steps=[['you',R.chat[0]],['ai',R.chat[1]]];
+ return `<h3 class="h3" style="margin-top:18px">想改哪里，直接说</h3><p class="note" style="margin-top:0">码表先把改动摆出来（旧 → 新），你点确认才生效，并记进改动历史。</p>
+ <div class="chat">${steps.slice(0,rngAsk?2:0).map(([w,t])=>`<div class="msg ${w}">${t}</div>`).join('')}${rngAsk===1?'<div class="acts"><button class="btn pri" data-rng="ok">确认修改</button><button class="btn" data-rng="no">取消修改</button></div>':''}${rngAsk===2?'<p class="note">已改，记进了改动历史。<br>之前按旧范围判断的报告，打开时顶上会提示用新范围更新。</p>':''}</div>
+ <div class="inrow" style="margin:10px 0"><input type="text" placeholder="${R.chat[3]}" ${rngAsk?'':`value="${R.chat[0]}"`}><button class="btn pri" data-rng="ask" ${rngAsk?'disabled':''}>发给码表</button></div>`}
+function rngB(){const R=RANGE[scene],steps=[['you',R.chat[0]],['ai',R.chat[1]]];
+ return `${rngParts()}<section class="panel"><h2>用说话的方式改标准</h2><p class="note" style="margin-top:0">不用找是哪一格，直接说你想怎么改；码表先把改动摆出来，你点确认才生效。</p>
+ <div class="chat">${steps.slice(0,rngAsk?2:0).map(([w,t])=>`<div class="msg ${w}">${t}</div>`).join('')}${rngAsk===1?'<div class="acts"><button class="btn pri" data-rng="ok">确认修改</button><button class="btn" data-rng="no">取消修改</button></div>':''}${rngAsk===2?'<p class="note">已改，记进了改动历史。<br>之前按旧范围判断的报告，打开时顶上会提示用新范围更新。</p>':''}</div>
+ <div class="inrow" style="margin-top:10px"><input type="text" placeholder="${R.chat[3]}" ${rngAsk?'':`value="${R.chat[0]}"`}><button class="btn pri" data-rng="ask" ${rngAsk?'disabled':''}>发给码表</button></div>
+ <details style="margin-top:12px"><summary class="note" >完整标准</summary>${rngTable()}</details>${rngHist()}</section>`}
+function rngC(){const S=SCENES[scene],R=RANGE[scene],D=build(S);
+ const parse=t=>{const m=t.replace(' 秒','').replace(' 毫秒','').split('～').map(Number);return t.includes('毫秒')?m.map(x=>x/1000):m};
+ const rows=Object.entries(S.segs).map(([k,s])=>{const r=R.segs[k],ok=parse(r[0]),slow=parse(r[1])[0],me=med(s.v),T=Math.max(slow*1.25,me*1.1,ok[1]*1.3);
+  const W=520,sx=v=>10+(W-20)*v/T;
+  return `<div class="ruler"><div><b>${s.name}</b> <span class="chip ${sureC(r[3])}">可信度${r[3]}</span><div class="note">${s.owner} · ${r[2]}</div></div>
+  <svg viewBox="0 0 ${W} 40" style="width:100%;max-width:${W}px" role="img" aria-label="${s.name}的合理范围">
+   <line x1="10" x2="${W-10}" y1="20" y2="20" stroke="var(--line)" stroke-width="2"/>
+   <rect x="${sx(ok[0])}" y="12" width="${sx(ok[1])-sx(ok[0])}" height="16" rx="3" fill="var(--ok)" opacity=".25"/>
+   <line x1="${sx(slow)}" x2="${sx(slow)}" y1="6" y2="34" stroke="var(--bad)" stroke-width="2"/><text x="${sx(slow)+4}" y="10" font-size="11" fill="var(--bad)">超过算慢</text>
+   <circle cx="${sx(me)}" cy="20" r="6" fill="${me>slow?'var(--bad)':me>ok[1]?'var(--warn)':'var(--speak)'}"/><text x="${sx(me)}" y="39" text-anchor="middle" font-size="11" fill="var(--muted)">实测 ${me<.05?Math.round(me*1000)+' 毫秒':f(me)+' 秒'}</text></svg></div>`}).join('');
+ return `${rngParts()}<section class="panel"><h2>每段的尺子</h2><p class="note" style="margin-top:0">绿色是合理范围，红线是超过算慢，圆点是实测一般用时。一眼看出哪段落在范围外、哪段的依据可信度低。</p>${rows}
+ <p class="note">${R.exp}</p>${rngHist()}</section>`}
+const RNGVAR={a:{label:'A 标准表',idea:'A 标准表：先确认部件，再一张表列出每段合理范围、超过算慢、依据、可信度、实测基线，下面是改动历史。和存下来的 markdown 文件一一对应。'},
+ b:{label:'B 说话改',idea:'B 说话改：直接打字说想怎么改，码表把改动摆出来（旧 → 新），你点确认才生效并记进历史。点"发给码表"试试。'},
+ c:{label:'C 尺子',idea:'C 尺子：每段一把尺子，绿色是合理范围、红线是超过算慢、圆点是实测，适合负责人看"标准定得合不合理"。'}};
+function rangePage(){const R=RANGE[scene];return `<div class="stack"><div class="status"><span><i class="dot" style="background:var(--ok)"></i>标准文件：<span class="code">${R.file}</span>，存在你电脑上，每个被测项目一份</span><span><i class="dot" style="background:var(--ok)"></i>报告、多轮实测、前后对比都按它判快慢</span></div>${rngParts()}<section class="panel"><h2>每段多久算正常</h2>${rngTable()}${rngChat()}${rngHist()}</section></div>`}
+
+
+let rtCase='same',rtWhat=null,flow=null,showWhy=false;
+const FLOW1=[['home','选固件'],['steps','找关键步骤'],['flash','插计时点和烧录'],['collect','多轮实测'],['report','报告']];
+// ===== 引导 =====（被挡住的按钮点了会告诉你缺什么并闪两下；长任务做完弹窗；顶部一行"现在要做"）
+let pop=null;
+const blk=(sel,msg,go)=>` aria-disabled="true" data-need='${sel}' data-msg='${msg}'${go?` data-needgo="${go}"`:''}`;
+// 被挡住的按钮：原因直接写在按钮左边；点它只把原因加粗、把要补的地方框成橙色，不跳不闪
+function nudge(sel){setTimeout(()=>{const el=sel&&document.querySelector(sel);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.add('need')}},40)}
+function guide(){const F=FF[scene];
+ if(page==='home'){if(hStage>=2)return null;if(hReading)return ['正在读项目，稍等一下',null];
+  if(hStage===0)return ['把固件文件夹拖到下面的框里，或点「选文件夹」','#dropzone'];
+  return ['用一句话写要测从什么到什么（不确定就点「AI 推荐」里的一个），再点「下一步」','#h-what']}
+ if(page==='settings'){if(hStage<1)return null;if(setFirst&&!keyTested&&setLLM!=='cc')return ['填大模型密钥：粘贴进去，点「测试密钥」','#set-key'];return ['准备好了，点「回去继续」','[data-resume]']}
+ if(page==='steps'){if(stepsRead<2)return ['不用操作，等它读完（一般 1～3 分钟）。读完会弹窗告诉你',null];
+  if(alsoFace===null)return ['先回答「读代码时发现一件事」','#sideask'];return ['看一眼「要你看一眼」里的步骤，没问题就点「确认，去插计时点」','[data-go="flash"]']}
+ if(page==='flash'){if(fl.st===4)return ['没看到设备：用 USB 线插上设备，插上会自动继续','[data-fl="plug"]'];
+  if(fl.st===2)return ['装好了，马上进入多轮实测',null];
+  if(fl.st===1&&fl.step===4)return [F.big,'.bigask'];
+  if(fl.st===1)return [`正在${FST()[fl.step][0]}，不用操作，做完会提示你`,null];
+  if(flashVar==='b'&&(fl.st===3||fl.step>=2)&&!diffOk)return ['看一下改了什么，没问题就点「确认改动，编译并烧录」','[data-fl="ok"]'];
+  if(fl.st===0)return [flashVar==='a'?'点「开始」':'点「开始插计时点」',flashVar==='a'?'[data-fl="all"]':'[data-fl="ins"]'];return null}
+ if(page==='collect'){const C=CC();if(col.st===0)return ['看一眼要'+C.act+'的内容，点「开始实测」','[data-col="go"]'];
+  if(col.st===1)return [`照大字提示${C.act}，每收好一轮会提示一次`,null];
+  return [flow==='retest'?'测完了，点「查看前后对比」':'测完了，点「查看报告」','.acts [data-go="report"],.acts [data-go="compare"]']}
+ if(page==='retest')return rtSrc<2?['告诉码表改好的代码在哪','.rtsrc']:['看码表比对出的变化，再点下面的按钮继续','[data-rtgo],[data-rtchoice]'];
+ return null}
+function stepInfo(){const C=CC(),F=FF[scene];const pos=(list,id)=>{const k=list.indexOf(id);return k<0?'':`第 ${k+1} 步 / 共 ${list.length} 步`};
+ const L1=['home','steps','flash','collect','report'],L2=['retest','steps','flash','collect','compare'];
+ const tag=flow==='retest'?'改完再测':'第一次测',P=flow==='retest'?pos(L2,page):pos(L1,page);
+ const nxt=flow==='retest'?{retest:'按查出的情况，跳过不用做的步骤',steps:'插计时点、编译、烧到设备上',flash:'照提示一轮一轮触发设备，码表记下每轮用时',collect:'看前后对比：改动有没有用',compare:'这次测量结束'}:{home:'码表读代码，找出中间要插计时点的关键步骤',steps:'把计时点插进代码副本，编译、烧到设备上',flash:'照提示一轮一轮触发设备，码表记下每轮用时',collect:'看报告：哪一段慢、为什么、怎么改',report:'照建议改完后，点最下面的「改完了，再测一次」'};
+ const T={home:['选固件，说清要测什么','告诉码表测哪个固件、从什么时候到什么时候。码表只读代码，不改你的文件。'],
+  steps:['找关键步骤','大模型读代码，找出起点到终点中间经过的关键步骤，计时点就插在这些地方。找错一个，后面量的就不对，所以要你看一眼。'],
+  flash:['插计时点和烧录','把计时点插进码表复制的那份代码，编译后烧到设备上，再确认设备真的在输出计时点。你原来的文件夹不动。'],
+  collect:['多轮实测',`照提示一轮一轮${C.act}，码表记下每轮每一段用了多久。同样的内容测多轮，才看得出一般多快、偶尔多慢。`],
+  report:['看报告','一般多快、偶尔多慢、慢在哪一段、为什么、怎么改。'],
+  retest:['查改了什么','改完再测一次，和上次比。先告诉码表代码在哪，码表比对改了什么，能跳过的步骤自动跳过。'],
+  compare:['前后对比','两次放在一起比，看改动有没有用。'],
+  settings:['先把工具准备好','找关键步骤要用大模型，编译要用乐鑫编译工具。准备好再回去接着测。']};
+ const t=T[page];if(!t)return null;
+ if(page==='settings'&&hStage<1)return null;if((page==='report'||page==='compare')&&!flow)return null;
+ const g=guide();
+ const todo=g?g[0]:page==='report'?'从上往下看结论；要改的在方案表里勾选':page==='compare'?'先看最上面的结论':'';
+ return {pos:page==='settings'?'中途准备工具':`${tag} · ${P}`,title:t[0],what:t[1],todo,next:page==='settings'?'回到刚才那一步接着走':nxt[page]}}
+function guideBar(){const S=stepInfo();if(!S)return '';
+ return `<section class="stepcard" aria-label="这一步"><div class="sc-hd"><span class="note">${S.pos}</span><b>${S.title}</b></div><dl><dt>这一步</dt><dd>${S.what}</dd><dt>你要做</dt><dd class="sc-todo">${S.todo}</dd><dt>做完以后</dt><dd>${S.next}</dd></dl></section>`}
+let cd=0,cdT=null;
+function startCd(){clearInterval(cdT);cd=3;cdT=setInterval(()=>{cd--;if(page!=='home'||hStage!==3){clearInterval(cdT);cdT=null;cd=0;return}if(cd<=0){clearInterval(cdT);cdT=null;hStage=4;render()}else render()},1000)}
+function modalHTML(){const F=FF[scene],llm={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
+ const meant=hSay===F.ai[0]?F.measure:hSay.replace(/^从/,'').replace('到',' → ');
+ if(hStage===2)return `<h2 id="dlg-t">确认要测的内容</h2>
+   <dl class="kv"><dt>项目名称</dt><dd><input type="text" id="h-pname" value="${pName}" style="width:100%;max-width:22em"></dd><dt>固件源码位置</dt><dd class="num">${hSrc}</dd><dt>芯片和板子</dt><dd>${F.chip}</dd><dt>要测的</dt><dd>${hSay}</dd><dt>码表理解为</dt><dd><b>${meant}</b></dd></dl>
+   <p class="note" style="margin:0">接下来码表把代码交给大模型（${llm}），找出中间经过的关键步骤，一般 1～3 分钟。</p>
+   <div class="acts"><button class="btn" data-mclose="1" id="dlg-back">关闭</button><button class="btn pri" data-mfind="1">开始找关键步骤</button></div>`;
+ if(hStage===3)return `<h2 id="dlg-t">${stepsRead===2?'找完了':'正在找关键步骤'}</h2><p class="note" style="margin-top:0">${pName} · 要测：${meant}</p>${stepsRead===2?`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span></div>`:''}<div id="readbox">${readBox()}</div>
+   <div class="acts" style="justify-content:flex-end"><button class="btn pri" ${stepsRead===2?'data-mnext="1"':blk('','还在找，找完就能点')}>下一步</button></div>`;
+ const rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
+ return `<h2 id="dlg-t">找完了</h2><div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span>${envComp()?`<span><i class="dot" style="background:var(--ok)"></i>后台已把原版编译通过（${F.bg}）</span>`:`<span><i class="dot" style="background:var(--warn)"></i>${inst.st===1?'编译工具正在后台装，装好就编原版':'编译工具还没装，原版没编：烧录前装好就行'}</span>`}</div>
+   <p style="margin:10px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
+   <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
+   <p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>
+   <div class="acts" style="justify-content:flex-end"><button class="btn pri" data-mnext="1">下一步</button></div>`}
+function popHTML(){const F=FF[scene],C=CC();
+ const box=(t,body,acts)=>`<h2>${t}</h2>${body}<div class="acts">${acts}</div>`;
+ if(pop==='steps'){const n=live().length,mid=STEPS.filter(x=>x.sure!=='高').length;
+  return box('找完了',`<p>找到 ${STEPS.length} 个关键步骤。接下来按顺序做三件事：</p><ol class="notes" style="font-size:15px;color:var(--fg)"><li>回答一个问题："${F.sideAsk.q}"要不要一起测</li><li>看一眼 ${mid} 个需核对的步骤，对不对</li><li>点「确认，去插计时点」</li></ol>`,
+   `<button class="btn pri" data-pop="close" data-nudge="#sideask" data-msg="先回答这个问题">开始核对</button>`)}
+ if(pop==='flash')return box('设备准备好了',`<p>插计时点、编译、烧录都完成了。刚才试的那一次，${live().length} 个计时点都收到了。</p><p>下一步<b>多轮实测</b>：照提示${C.act} ${colN} ${C.unit}，码表记下每一${C.unit}里每一段用了多久，最后出报告。</p>`,
+   `<button class="btn" data-pop="close">留在这页</button><button class="btn pri" data-go="collect">开始多轮实测</button>`);
+ if(pop==='col'){const g=okRounds(),bad=col.got.length-g.length;const to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];
+  return box(`测完了 ${g.length} 轮`,`<p>${bad?`有 ${bad} 轮没收全，没算，已自动补收。`:'每轮都收全了。'}</p><p class="note">页面下方「测的够不够」写了要不要再测；不再收就直接看结果。</p>`,
+   `<button class="btn" data-pop="close" data-nudge="#enough">先看够不够</button><button class="btn pri" data-go="${to[0]}">${to[1]}</button>`)}
+ if(pop==='bg'){const d=bgDone(),no=!envComp();return box(d?'✓ 原始代码已编好':no?'后台编原始代码：等编译工具装好':`后台在编原始代码：${bgPct()}%`,`${d||no?'':`<span class="pbar" style="display:block;margin:0 0 12px"><i style="width:${bgPct()}%"></i></span>`}<ul class="notes" style="font-size:14px;color:var(--fg)">${BGTIP.split('<br>').map(x=>`<li>${x}</li>`).join('')}</ul>${no?'<p class="note">编译工具装好后自动开始，不用点。</p>':''}`,`<button class="btn pri" data-pop="close">知道了</button>`)}
+ if(pop==='colre')return box('从头重测？',`<p>会清掉已测的 ${okRounds().length} 轮，从第 1 轮重新开始。</p><p class="note">只是想补几轮，用「接着测」就行。</p>`,`<button class="btn" data-pop="close">取消</button><button class="btn pri" data-col="restart2">清掉，从头测</button>`);
+ if(pop==='inst')return box('编译工具装好了',`<p>乐鑫编译工具 v6.1 装好了。</p><p class="note">都准备好后，点设置页最下面的「保存」。</p>`,`<button class="btn pri" data-pop="close">知道了</button>`);
+ if(pop==='env'){const m=missing(envBack==='flash'?'comp':null);return box(envBack==='flash'?'编译前还缺编译工具':'还缺这些环境',`<p>${envBack==='flash'?'插好计时点了，编译这个固件要用下面这样，你电脑上还没准备好：':`这个固件要用到下面 ${m.length} 样，你电脑上还没准备好：`}</p><ul class="notes" style="font-size:15px;color:var(--fg)">${m.map(([,t,w])=>`<li><b>${t}</b><br><span class="note">${w}</span></li>`).join('')}</ul>`,`<button class="btn" data-pop="close">关闭</button>${m.some(x=>!(x[0]==='set-idf'&&inst.st===1))?'<button class="btn pri" data-envgo="1">配置环境</button>':''}`)}
+ return ''}
+let flowMax=0;
+function flowReset(){flowMax=0}
+function stepsChanged(){if(flow==='first'&&flowMax>1){flowMax=1;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;colStop();col={st:0,att:0,got:[],phase:0};toast('步骤改了：插计时点和烧录、多轮实测要重新做')}}
+function flowBar(){if(!flow&&page!=='home')return '';let st;
+ if(flow==='first'||!flow){if(!FLOW1.some(x=>x[0]===page))return '';st=FLOW1.map(([id,n])=>[id,n,0])}
+ else{const C0=rtC(),pre=page==='retest'&&rtSrc<2,C={steps:C0.steps.map(x=>pre?[x[0],1]:x)};const ids=['retest','steps','flash','collect','compare'];if(!ids.includes(page))return '';st=[['retest','查改了什么',0],['steps','找关键步骤',!C.steps[0][1]],['flash','插计时点和烧录',!C.steps[1][1]],['collect','多轮实测',0],['compare','前后对比',!C.steps[3][1]]]}
+ const ci=st.findIndex(x=>x[0]===page);if(flow&&ci>flowMax)flowMax=ci;const mx=flow?flowMax:ci;
+ return `<ol class="flow" aria-label="测量步骤"><span class="note" style="margin-right:4px">${flow==='retest'?'改完再测':'第一次测'}：</span>${st.map(([id,n,sk],i)=>`<li>${sk?`<span class="fs skip">${n}（跳过）</span>`:i===ci?`<span class="fs cur ${page==='flash'&&(fl.st===5||fl.st===4)?'bad':''}">${page==='flash'&&(fl.st===5||fl.st===4)?'! ':i<mx?'✓ ':''}${n}</span>`:i<mx?`<button class="fs done" data-go="${id}" data-keepflow="1" title="回去看看，已做的不会清掉">✓ ${n}</button>`:i===mx?`<button class="fs goon" data-go="${id}" data-keepflow="1" title="回到做到一半的这一步">${n}（做到这里）</button>`:`<span class="fs">${n}</span>`}</li>`).join('')}</ol>${flow&&ci<mx?`<p class="note" style="margin:-4px 0 10px">在回看已做完的「${st[ci][1]}」，后面已做的都留着。只有在这里改了东西，后面的步骤才要重做。</p>`:''}`}
+function restoreBox(sc){const r=restored[sc];return `<section class="panel"><h2>设备上现在是：${r?'原版':'计时版'}</h2>${r?'<p class="note" style="margin:0">✓ 已还原成原版，和你的原版逐字节比对一致。</p>':`<p class="note" style="margin:0 0 8px">计时版每过一个计时点会多打印一行，交货、演示前请还原。<br>还原是直接烧读代码时编好的那份原版，烧完逐字节比对。还要接着测就先别还原。</p><div class="acts" style="margin:0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
+function retestEntry(){return `<section class="panel"><h2>改完以后</h2><p class="note" style="margin:0 0 8px">照上面的建议改完代码、换了模型或升级了版本，点这里再测一次。<br>码表先查改了什么，能跳过的步骤自动跳过，测完直接和这次比。</p><div class="acts" style="margin:0"><button class="btn pri" data-retest="${scene}">改完了，再测一次</button></div></section>`}
+
+function rtExtra(sc,k){const P=PROJ.find(p=>p.scene===sc),R=RT[sc],u=COLLECT[sc];const same=R.same;
+ if(k==='gone')return {label:'文件夹没了',checks:[['bad','源码',`找不到 ${P.path}（可能挪走或删了）`],['est','计时点','没有源码，查不了'],['ok','设备','插着，上面还是上次烧的计时版']],
+  route:'上次的固件文件夹找不到了。两条路，选一条：',choice:[['重新选文件夹','代码挪了地方就选新位置。码表会比对是不是同一个项目，不是会先问你。','home'],['直接用设备上的版本测','你这次只改了服务器或网络、没改固件时用。设备上已经是计时版，不用代码也能测。','collect']],
+  steps:[['找关键步骤',0,'沿用上次确认的步骤（存在码表的项目文件夹里，不跟代码走）'],['插计时点和烧录',0,'直接用设备上现有的计时版'],['多轮实测',1,`同样 20 ${u.unit}${u.act}，句子清单也存在码表里，没丢`],['前后对比',1,`上一次（${R.last}）自动当"改前"`]],what:'固件没改（源码找不到，按你说的）。服务器那边：',whatHint:same.whatHint};
+ if(k==='tool')return {label:'编译工具变了',checks:[['warn','源码','改了 1 个文件'],['ok','计时点','都在原位'],['warn','编译工具',`上次用 ESP-IDF v6.1，这次电脑上是 v6.2`],['warn','设备','代码改了，要重新烧']],
+  route:'照样能测。编译工具换了版本，底层代码也跟着变了，对比时会单独标出来，变快变慢不一定都是你改的那一处带来的。',
+  steps:R.code.steps,what:R.code.what+'另：编译工具 v6.1 → v6.2。',whatHint:R.code.whatHint};
+ if(k==='nodata')return {label:'上次数据没了',checks:[['ok','源码','找到了'],['ok','计时点','都在原位'],['bad','上次数据',`上次（${R.last}）的测量数据找不到了（被删或挪走）`]],
+  route:'没有上次的数据，就没法对比。改成按"第一次测"走：步骤、句子清单、合理范围还在，都沿用，测完出一份新报告。',
+  steps:[['找关键步骤',0,'沿用上次确认的步骤'],['插计时点和烧录',1,'在现在的代码上插计时点、编译、烧录'],['多轮实测',1,`20 ${u.unit}，沿用句子清单`],['前后对比',0,'没有"改前"，测完看报告']],what:'',whatHint:'这次没法对比，这一栏可以不填。'};}
+const RTVAR={same:{label:'固件没改',idea:'固件没改（比如只换了服务器的大模型）：跳过找步骤和烧录，直接多轮实测。'},code:{label:'改了固件',idea:'改了固件、计时点位置没动（比如照报告建议改了一处）：沿用步骤，AI 只看改过的地方，重新插点、烧录。'},up:{label:'升级了版本',idea:'升级了版本、计时点所在代码也变了：AI 把计时点接到新代码上，接不上的列出来让你确认。'},gone:{label:'文件夹没了',idea:'环境变了：上次的固件文件夹找不到。给两条路：重新选文件夹，或者直接用设备上的计时版测。'},tool:{label:'编译工具变了',idea:'环境变了：编译工具版本和上次不同。照样测，对比里单独标出来。'},nodata:{label:'上次数据没了',idea:'环境变了：上次的测量数据没了，改按"第一次测"走，出新报告。'}};
+function rtC(){return RT[scene][rtCase]||rtExtra(scene,rtCase)}
+let rtSrc=0,rtPath='',rtReading=false,rtOther=false;
+function rtSrcPanel(P){const F=FF[scene],gone=rtCase==='gone';
+ if(rtReading)return `<section class="panel rtsrc"><h2>改好的代码在哪？</h2><p><span class="spin"></span> 正在看 ${rtPath}：是不是同一个项目、和上次比改了什么……</p></section>`;
+ if(rtOther)return `<section class="panel rtsrc" style="border-color:var(--warn)"><h2>这不像同一个项目</h2>
+  <dl class="kv"><dt>你选的</dt><dd class="num">${rtPath}</dd><dt>仓库地址</dt><dd>上次是 ${F.repo}，这次是 github.com/someone/other-fw</dd><dt>项目配置</dt><dd>项目名字、板子都和上次不一样</dd></dl>
+  <p class="note">码表认同一个项目看仓库地址和项目配置，不看文件夹名和路径。</p>
+  <div class="acts" style="justify-content:flex-start"><button class="btn" data-rtsrc="reset">重新选</button><button class="btn" data-rtsrc="force">就是同一个项目，继续比对</button><button class="btn pri" data-rtchoice="home">当成新项目，从头测</button></div></section>`;
+ return `<section class="panel rtsrc"><h2>改好的代码在哪？</h2><p class="note" style="margin-top:0">放在哪都行：原来的文件夹、新拉的分支目录、别人发来的压缩包都可以。<br>上次测的时候码表已经留了一份原版，比对"改了什么"用的是那一份。</p>
+  ${gone?`<p style="color:var(--warn);margin:0 0 10px">上次的文件夹 ${P.path} 找不到了（挪走或删了）。</p>`:`<div class="inrow"><input type="text" value="${P.path}" readonly><button class="btn pri" data-rtsrc="last">就用上次这个文件夹</button></div><p class="note" style="margin:10px 0 6px">不在这里？</p>`}
+  <div class="drop"><b>把改好的固件文件夹或压缩包拖到这里</b><div class="acts" style="justify-content:center;margin:8px 0 0"><button class="btn ${gone?'pri':''}" data-rtsrc="dir">选文件夹</button><button class="btn" data-rtsrc="zip">选压缩包</button></div></div>
+  <div class="inrow" style="margin-top:8px"><input type="text" id="rt-paste" placeholder="或者粘贴路径"><button class="btn" data-rtsrc="paste">用这个路径</button></div>
+  ${gone?`<p class="note" style="margin:12px 0 6px">这次没改固件、只改了服务器或网络？不用代码也能测：</p><button class="btn" data-rtchoice="collect">直接用设备上的计时版测</button>`:''}
+  <div class="pills" style="margin-top:10px"><span class="note">演示：</span><button class="pill" data-rtsrc="other">拖进来的是别的项目</button></div></section>`}
+function retestPage(){const P=PROJ.find(p=>p.scene===scene),R=RT[scene];
+ if(rtSrc<2)return `<div class="stack"><section class="panel"><h1 style="font-size:22px">改完再测：${P.name}</h1><p class="note" style="margin:0">和上一次（${R.last}）比。测的还是"${P.what}"。</p></section>${rtSrcPanel(P)}</div>`;
+ const C0=rtC(),C={...C0,checks:[['ok','代码',`${rtPath}（认出是同一个项目：仓库地址、项目配置都对得上）　<button class="pill" data-rtsrc="reset">换一个</button>`],...C0.checks]};
+ const dot=c=>`<i class="dot" style="background:var(--${c})"></i>`;
+ const conf=C.confirm?`<section class="panel"><h2>接到新版本时，要你看一眼的计时点</h2><table><thead><tr><th>情况</th><th>计时点</th><th>变化</th><th>可信度</th><th></th></tr></thead><tbody>${C.confirm.map(([k,n,d,b])=>`<tr><td><span class="chip ${k==='要你确认'?'c-warn':'c-ok'}">${k}</span></td><td>${n}</td><td>${d}</td><td>${b}</td><td><button class="pill" data-go="steps">${k==='要你确认'?'去确认':'查看'}</button></td></tr>`).join('')}</tbody></table><p class="note" style="margin:8px 0 0">其余计时点原样接上，不用看。<br>确认后如果这个点量的意思变了，前后对比里这一段标"量法不同，不比"，其他段照比。</p></section>`:'';
+ return `<div class="stack"><section class="panel"><h1 style="font-size:22px">改完再测：${P.name}</h1><p class="note" style="margin:0">和上一次（${R.last}）比。测的还是"${P.what}"。</p></section>
+ <section class="panel"><h2>码表先查了一遍</h2><p class="note" style="margin:-4px 0 8px">只比对文件，不用大模型，几秒钟。</p><dl class="kv" style="grid-template-columns:4em 1fr">${C.checks.map(([c,k,v])=>`<dt>${k}</dt><dd>${dot(c)}${v}</dd>`).join('')}</dl></section>
+ <section class="panel"><h2>所以这次这样走</h2><p style="margin:0 0 8px">${C.route}</p>${C.choice?C.choice.map(([n,d,to])=>`<div class="rtstep" style="grid-template-columns:12em 1fr"><button class="btn ${to==='collect'?'pri':''}" data-rtchoice="${to}">${n}</button><span class="note">${d}</span></div>`).join('')+'<p class="note" style="margin:12px 0 4px"><b>选"直接用设备上的版本测"时这样走：</b></p>':''}${C.steps.map(([n,d,r])=>`<div class="rtstep ${d?'':'skip'}"><b>${n}</b><span class="chip ${d?'c-ok':'c-est'}">${d?'要做':'跳过'}</span><span class="note">${r}</span></div>`).join('')}</section>
+ ${conf}
+ <section class="panel"><h2>这次改了什么</h2><p class="note" style="margin:-4px 0 8px">${C.whatHint}<br>会写进前后对比和报告。</p><textarea class="rtta" id="rt-what">${C.what}${C.what.endsWith('：')?RT[scene].whatFill:''}</textarea>
+  <div class="acts">${C.choice?'':`<button class="btn pri" data-rtgo="1">${C.steps[1][1]?(C.steps[0][1]?'先确认计时点，再插点烧录':'开始插点、烧录'):'开始多轮实测'}</button>`}<button class="btn" data-go="report">不测了，回报告</button></div></section></div>`}
+function render(){if(!scene||!SCENES[scene])return;applyScene();
+  const D=build(SCENES[scene]);
+  document.getElementById('nav-home').toggleAttribute('aria-current',page==='home');document.getElementById('nav-set').toggleAttribute('aria-current',page==='settings');
+  document.getElementById('flowbar').innerHTML=flowBar();bgPill();
+  const isReport=page==='report',isHome=page==='home';
+  document.getElementById('verseg').hidden=!isReport;
+  const PN=(PROJ.find(p=>p.scene===scene)||{}).name;document.getElementById('crumb').innerHTML=isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${D.S.crumb}<span class="mock">模拟数据，不是实测</span>`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'';
+  let body;
+  if(isHome)body=HOME[homeVar].html();
+  else if(isReport)body=reportPage(D);
+  else if(page==='settings')body=settingsPage();
+  else if(page==='steps')body=stepsPage();
+  else if(page==='flash')body=flashPage();
+  else if(page==='collect')body=collectPage();
+  else if(page==='compare')body=comparePage();
+  else if(page==='retest')body=retestPage();
+  else if(page==='range')body=rangePage();
+  else body=`<div class="panel todo">这一页还没做样子，按顺序下一步做。</div>`;
+  document.getElementById('main').innerHTML=`<div class="view">${body}</div>`;
+  const md=document.getElementById('modal');md.hidden=!(isHome&&hStage>=2);
+  if(!md.hidden)document.getElementById('dlg').innerHTML=modalHTML();
+  const pp=document.getElementById('pop');pp.hidden=!pop;if(pop)document.getElementById('popdlg').innerHTML=popHTML();
+  document.querySelectorAll('[data-need]').forEach(b=>{if(b.previousElementSibling&&b.previousElementSibling.classList.contains('gate'))return;const g=document.createElement('span');g.className='gate';g.textContent='还差：'+b.dataset.msg;b.before(g)});
+  {const m=document.getElementById('main');const need=page==='steps'&&stepsRead===2&&alsoFace===null?'#sideask':null;const el=need&&m.querySelector(need);if(el)el.classList.add('need')}
+  document.getElementById('v-boss').setAttribute('aria-pressed',String(mode==='boss'));
+  document.getElementById('v-dev').setAttribute('aria-pressed',String(mode==='dev'));
+  syncFlow();
 }
-
-async function runBuild() {
-  const U = ui('probes');
-  Object.assign(U, { phase: 'building', pct: 0, flash: 0 });
-  for (U.pct = 0; U.pct < 100; U.pct += 10) {
-    render(); await sleep(120);
-    if (failDemo === 'probes' && !U.failedOnce && U.pct >= 60) {
-      U.failedOnce = true; U.phase = 'review';
-      await flowDo('fail', 'probes', { message: `编译没通过：${S.demo.changes[1] ? S.demo.changes[1].file : S.demo.changes[0].file} 里插的计时点引起的` });
-      return;
-    }
-  }
-  for (U.flash = 0; U.flash <= 100; U.flash += 20) { render(); await sleep(100); }
-  U.phase = 'try'; U.got = 0; U.log = []; render();
-  const es = new EventSource(`/api/device/stream?demo=${S.demo.id}&rounds=1&interval=0.08`);
-  es.onmessage = async e => {
-    if (e.data === 'END') {
-      es.close(); U.phase = 'ok'; render();
-      await sleep(1500);
-      if (stepOf('probes').status === 'doing') await flowDo('complete', 'probes');
-      return;
-    }
-    U.log.push(e.data);
-    if (/^FSW,P/.test(e.data)) U.got++;
-    render();
-  };
-}
-
-function runMeasure() {
-  const U = ui('measure');
-  U.phase = 'run'; render();
-  const from = U.got.length;
-  const es = new EventSource(`/api/device/stream?demo=${S.demo.id}&rounds=${U.rounds - from}&start=${from}&interval=0.015`);
-  U.es = es;
-  let inRound = false;
-  es.onmessage = e => {
-    if (e.data === 'FSW,RESET' || e.data === 'END') {
-      if (inRound) U.got.push(roundColor(S.demo, U.got.length % 20));
-      inRound = true;
-      if (e.data === 'END') { es.close(); U.phase = 'done'; }
-      render();
-    }
-  };
-}
-
-// ===== 按钮 =====
-const ACTS = {
-  view: el => flowDo('view', el.dataset.step),
-  resume: () => go('flow'),
-  pick: async el => { S.home.demo = el.dataset.demo; S.home.data = await loadDemo(el.dataset.demo); render(); },
-  unpick: () => { S.home.demo = null; S.home.data = null; render(); },
-  fill: el => { S.home.ask = el.dataset.text; render(); },
-  confirm: () => {
-    const D = S.home.data;
-    $('#modal').innerHTML = `<div class="modal"><div class="dlg"><h2>开始找关键步骤</h2>
-      <div class="field"><label for="pname">项目名称（可改）</label><input type="text" id="pname" value="${esc(D.project.name)}"></div>
-      <p class="note">固件源码位置：${esc(D.project.pick.dir)}<br>要测：${esc(S.home.ask)}</p>
-      <div class="acts" style="justify-content:flex-end"><button class="btn" data-act="close">关闭</button><button class="btn pri" data-act="start">开始找关键步骤</button></div></div></div>`;
-  },
-  close: () => { $('#modal').innerHTML = ''; },
-  start: async () => {
-    $('#modal').innerHTML = ''; S.ui = {};
-    await setState(await api('/api/flow/start', { kind: 'first', demo: S.home.demo }));
-    go('flow');
-  },
-  retest: async el => {
-    S.ui = {};
-    await setState(await api('/api/flow/start', { kind: 'retest', demo: el.dataset.demo }));
-    go('flow');
-  },
-  setp: el => { S.ui.set_p = el.value; render(); },
-  testkey: () => toast('测试密钥要等大模型接上后才能用'),
-  save: async () => {
-    const v = id => ($('#' + id) || {}).value;
-    const p = S.ui.set_p !== undefined ? S.ui.set_p : S.state.settings.llm_provider;
-    await setState(await api('/api/settings', { llm_provider: p, key_entered: !!(v('key') || '').trim(), idf_path: v('idf'), serial_port: v('port'), data_dir: v('ddir') }));
-    delete S.ui.set_p;
-    toast('保存成功'); go(S.back);
-  },
-  diffcheck: async () => { ui('diff').phase = 'checking'; render(); await sleep(900); ui('diff').phase = 'result'; render(); },
-  diffnext: () => flowDo('complete', 'diff', { skip: S.demo.retest.skip }),
-  idnext: () => { ui('identify').phase = 'list'; render(); },
-  iddrop: el => mutate('identify', () => { const U = ui('identify'), id = el.dataset.id; U.dropped = U.dropped.includes(id) ? U.dropped.filter(x => x !== id) : [...U.dropped, id]; }),
-  idedit: el => mutate('identify', () => toast(`演示：「${S.demo.steps.concat(ui('identify').added || []).find(s => s.id === el.dataset.id).name}」的位置改好了`)),
-  idside: () => mutate('identify', () => { ui('identify').sideOff = !ui('identify').sideOff; }),
-  idadd: () => {
-    const t = ($('#addstep').value || '').trim();
-    if (!t) return toast('先写一句要加什么');
-    mutate('identify', () => { const U = ui('identify'); U.added = U.added || []; U.added.push({ id: 'A' + (U.added.length + 1), name: t, file: '（AI 找到的位置）', line: '?', why: '你加的步骤', sure: '中', note: '位置是 AI 按你那句话找的，请核对' }); });
-  },
-  idok: () => flowDo('complete', 'identify'),
-  prredo: () => mutate('probes', () => { ui('probes').phase = undefined; }),
-  prbuild: () => runBuild(),
-  prretry: async () => { await flowDo('retry', 'probes'); runBuild(); },
-  msstart: () => { const U = ui('measure'); U.rounds = Math.max(1, parseInt($('#rounds').value, 10) || 20); U.beep = $('#beep').checked; runMeasure(); },
-  msstop: () => { const U = ui('measure'); if (U.es) U.es.close(); U.phase = 'stopped'; render(); },
-  msgoon: () => runMeasure(),
-  msmore: () => { ui('measure').rounds += 10; runMeasure(); },
-  msreport: () => flowDo('complete', 'measure'),
-  rtab: el => { ui('report').tab = el.dataset.tab; render(); },
-  restore: () => toast('还原成原版：烧后台编好的原版并逐字节比对（后面接上）'),
-  openlog: () => toast('打开原始日志所在文件夹（后面接上）'),
-  rpdone: async () => { await flowDo('complete', 'report'); go('home'); },
-  cmpdone: async () => { await flowDo('complete', 'compare'); go('home'); },
-  back: () => flowDo('view', flow().current),
-};
-
-document.addEventListener('click', e => {
-  const nav = e.target.closest('[data-nav]');
-  if (nav) {
-    if (nav.dataset.nav === 'settings' && S.page !== 'settings') S.back = S.page;
-    if (nav.dataset.nav === 'home' && flow() && !flow().finished) S.back = 'home';
-    return go(nav.dataset.nav);
-  }
-  const el = e.target.closest('[data-act]');
-  if (el && !el.disabled && ACTS[el.dataset.act]) {
-    if (el.type === 'radio') return ACTS[el.dataset.act](el);
-    e.preventDefault(); ACTS[el.dataset.act](el);
-  }
+// 步骤条同步给后台：后台记下走到哪一步、哪步出错、哪些跳过（刷新网页、以后接真功能都靠它）
+let lastKind='',lastSync='';
+function post(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})}
+function syncFlow(){if(!flow)return;
+ const ids=flow==='retest'?['retest','steps','flash','collect','compare']:FLOW1.map(x=>x[0]);
+ let skipped=[];if(flow==='retest'&&!(page==='retest'&&rtSrc<2)){const C=rtC();skipped=[['steps',!C.steps[0][1]],['flash',!C.steps[1][1]],['compare',!C.steps[3][1]]].filter(x=>x[1]).map(x=>x[0])}
+ const err=page==='flash'&&(fl.st===4||fl.st===5)?(fl.st===4?'没看到设备':{build:'编译没通过',burn:'烧录中断',try:'试一次没收到计时点'}[fl.err]):null;
+ const b={reached:flowMax,viewing:ids.includes(page)?page:null,error:err,skipped},k=JSON.stringify(b),kind=flow+'/'+scene;
+ if(k===lastSync&&kind===lastKind)return;lastSync=k;
+ (kind!==lastKind?post('/api/flow/start',{kind:flow,demo:scene}):Promise.resolve()).then(()=>post('/api/flow/sync',b)).catch(()=>{});lastKind=kind}
+function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
+document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
+document.addEventListener('click',e=>{
+  const nd=e.target.closest('[data-need]');if(nd){if(nd.dataset.needgo&&nd.dataset.needgo!==page){if(hStage>=2)hStage=1;page=nd.dataset.needgo;render();window.scrollTo(0,0);return}const g=nd.previousElementSibling;if(g&&g.classList.contains('gate'))g.classList.add('hit');nudge(nd.dataset.need);return}
+  if(e.target.closest('#pop button')){pop=null;document.getElementById('pop').hidden=true}
+  if(e.target.closest('[data-envgo]')){envBack=page==='flash'?'flash':'home';envMark=true;hStage=Math.min(hStage,1);page='settings';render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-save]')){applied.key=keyOK();applied.comp=compOK();compPending=inst.st===1;envMark=false;toast(compPending?'✓ 已保存。编译工具还在后台装，装好自动变绿':'✓ 保存成功');const back=hSrc?envBack:'home';envBack='home';setTimeout(()=>{page=back;if(hStage>=2)hStage=1;render();window.scrollTo(0,0)},compPending?1800:1000);return}
+  if(e.target.closest('[data-mclose]')){hStage=1;render();return}
+  if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}
+  if(e.target.closest('[data-cdskip]')){clearInterval(cdT);cdT=null;cd=0;hStage=4;render();return}
+  if(e.target.closest('[data-mnext]')){clearInterval(cdT);cdT=null;cd=0;hStage=1;page='steps';mode='boss';render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-goins]')){page='flash';flashVar='b';flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1);render();window.scrollTo(0,0);return}
+  const dop=e.target.closest('[data-dopen]');if(dop){const k=dop.dataset.dopen;diffOpen.has(k)?diffOpen.delete(k):diffOpen.add(k);render();return}
+  const del=e.target.closest('[data-del]');if(del){stepsChanged();dropped.add(del.dataset.del);if(editP===del.dataset.del)editP=null;render();return}
+  const und=e.target.closest('[data-undel]');if(und){dropped.delete(und.dataset.undel);render();return}
+  const ep=e.target.closest('[data-editp]');if(ep){editP=editP===ep.dataset.editp?null:ep.dataset.editp;render();const el=document.getElementById('ed-f');if(el){el.scrollIntoView({block:'center'});el.focus()}return}
+  const es=e.target.closest('[data-edsave]');if(es){const x=allRows().find(r=>r.p===es.dataset.edsave),fv=(document.getElementById('ed-f').value||'').trim().replace(/[<>&"]/g,''),lv=parseInt(document.getElementById('ed-l').value,10);if(x&&fv&&lv>0){stepsChanged();x.f=fv;x.l=lv;edits[x.p]=true}editP=null;render();return}
+  if(e.target.closest('[data-edcancel]')){editP=null;render();return}
+  const al=e.target.closest('[data-addline]');if(al){const i=document.getElementById('add-n');if(i)addName=i.value;addLine=al.dataset.addline;render();return}
+  const ad=e.target.closest('[data-add]');if(ad){const a=ad.dataset.add,i=document.getElementById('add-n');if(i)addName=i.value.trim().replace(/[<>&"]/g,'');
+   if(a==='open'){addSt=1;addManual=false}else if(a==='cancel'){addSt=0;addName=''}else if(a==='manual'){addManual=true}
+   else if(a==='ai'){if(!addName){i&&i.focus();i&&i.classList.add('need');return}addSt=2;setTimeout(()=>{addSt=3;if(page==='steps')render()},1400)}
+   else if(a==='ok'||a==='manualok'){const g=FF[scene].sideAsk.addGuess;let f=g.f,l=g.l;if(a==='manualok'){f=(document.getElementById('add-f').value||'').trim().replace(/[<>&"]/g,'');l=parseInt(document.getElementById('add-l').value,10);if(!addName||!f||!(l>0))return}
+    stepsChanged();added.push({p:'U'+(added.length+1),n:addName||'你加的步骤',f,l,line:addLine,why:'你加的步骤',sure:'你加'});addSt=0;addName='';addManual=false}
+   render();return}
+  if(e.target.closest('[data-bgpop]')){pop='bg';render();return}
+  const pc=e.target.closest('[data-pop]');if(pc){render();if(pc.dataset.nudge)nudge(pc.dataset.nudge);return}
+  const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if((to==='home'||to==='settings')&&!g.dataset.keepflow)flow=flow&&to==='settings'?flow:null;page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
+  const rt=e.target.closest('[data-retest]');if(rt){flowReset();scene=rt.dataset.retest;rtSrc=0;rtOther=false;rtReading=false;rtPath='';page='retest';rtCase=RTCASE;flow='retest';render();window.scrollTo(0,0);return}
+  const rv2=e.target.closest('[data-rtvar]');if(rv2){rtCase=rv2.dataset.rtvar;rtSrc=0;rtOther=false;render();return}
+  const rs2=e.target.closest('[data-rtsrc]');if(rs2){const a=rs2.dataset.rtsrc,P=PROJ.find(p=>p.scene===scene),F=FF[scene];
+   if(a==='reset'){rtSrc=0;rtOther=false;render();return}
+   if(a==='force'){rtOther=false;rtSrc=2;render();return}
+   if(a==='paste'){const v=(document.getElementById('rt-paste').value||'').trim().replace(/[<>&"]/g,'');if(!v){nudge('#rt-paste');return}rtPath=v}
+   else rtPath=a==='last'?P.path:a==='zip'?`~/Downloads/${F.slug}-fix.zip`:a==='other'?'~/Downloads/other-fw':`~/work/${F.slug}-fix`;
+   rtReading=true;render();setTimeout(()=>{rtReading=false;if(a==='other')rtOther=true;else{rtSrc=2;if(rtCase==='gone')rtCase='code'}if(page==='retest')render()},900);return}
+  const rch=e.target.closest('[data-rtchoice]');if(rch&&rch.dataset.rtchoice==='home'){flow=null;page='home';hStage=0;hSrc='';render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-rtgo]')||rch){flow='retest';const t=document.getElementById('rt-what');rtWhat=t?t.value:null;const C=rtC();page=C.steps[0][1]?'steps':C.steps[1][1]?'flash':'collect';colStop();col={st:0,att:0,got:[],phase:0};if(page==='flash'){diffOk=false;fl={st:0,step:0,pct:0,log:''}}render();window.scrollTo(0,0);return}
+  const o=e.target.closest('[data-open]');if(o){scene=o.dataset.open;flow=null;page='report';mode='boss';render();window.scrollTo(0,0);return}
+  const v=e.target.closest('[data-var]');if(v){homeVar=v.dataset.var;save('fsw-home',homeVar);render();return}
+  const pk=e.target.closest('[data-pick]');if(pk){const a=pk.dataset.pick;
+   if(a==='reset'){clearInterval(bgT);bgT=null;bgSrc='';hStage=0;hSrc='';hScan=0;render();return}
+   if(a==='file'){hErr='"application.cc" 是单个文件。编译要整个项目，请拖整个固件文件夹，或者它的压缩包。';render();return}
+   if(a==='paste'){const v=(document.getElementById('h-paste').value||'').trim();if(!v){hErr='先粘贴一个路径。';render();return}pickSrc(v.replace(/[<>&"]/g,''),true);return}
+   const P=FF[scene].pick;pickSrc(a==='zip'?P.zip:a==='drag'?P.drag:P.dir);return}
+  const rs=e.target.closest('[data-restore]');if(rs){restored[rs.dataset.restore]=true;render();return}
+  const sgo=e.target.closest('[data-setgo]');if(sgo){page='settings';render();setTimeout(()=>{const el=document.getElementById(sgo.dataset.setgo);if(el){el.scrollIntoView({block:'start'});el.classList.add('flash')}},30);return}
+  const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
+  const sv=e.target.closest('[data-setvar]');if(sv){setFirst=sv.dataset.setvar==='first';applied={key:false,comp:false};keyTested=false;instStop();inst={st:0,step:0,pct:0,log:'',timer:null};render();return}
+  const os=e.target.closest('[data-os]');if(os){setOS=os.dataset.os;if(inst.st!==2){instStop();inst={st:0,step:0,pct:0,log:'',timer:null}}render();return}
+  const ins=e.target.closest('[data-inst]');if(ins){const a=ins.dataset.inst;if(a==='manual'){inst.manual=true;render();const m=document.getElementById('manual');m&&m.scrollIntoView({block:'center'});return}instStart(a==='fail');render();return}
+  const svr=e.target.closest('[data-stepvar]');if(svr){stepsVar=svr.dataset.stepvar;render();return}
+  const fc=e.target.closest('[data-face]');if(fc){const a=fc.dataset.face;if(a!=='reset')stepsChanged();alsoFace=a==='reset'?null:a==='yes';render();return}
+  const mp=e.target.closest('[data-map]');if(mp){mapSel=mp.dataset.map;mapOpen=true;render();return}
+  const mt=e.target.closest('[data-mapt]');if(mt){mapOpen=!mapOpen;return}
+  const rr=e.target.closest('[data-reread]');if(rr){stepsRead=0;render();return}
+  const fv=e.target.closest('[data-flashvar]');if(fv){flashVar=fv.dataset.flashvar;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';render();return}
+  const fa=e.target.closest('[data-fl]');if(fa){const a=fa.dataset.fl;
+   let a2=a;if(a==='nodev'){flNoDev=true;a2=flashVar==='b'?'ins':'all'}
+   if(a2==='all'&&!envComp()){envBack='flash';pop='env';render();return}if(a2==='all')flRun(0,4);else if(a2==='ins')flRun(0,1);else if(a2==='ok'){if(!envComp()){envBack='flash';pop='env';render();return}diffOk=true;flRun(2,4)}else if(a2==='redo'){if(flow==='first'&&flowMax>2){flowMax=2;colStop();col={st:0,att:0,got:[],phase:0}}diffOk=false;diffOpen=new Set();flRun(0,1)}else if(a2==='plug'){flNoDev=false;flRun(3,flashVar==='c'?3:4)}
+   render();return}
+  const de=e.target.closest('[data-demoerr]');if(de){const k=de.dataset.demoerr;flNoDev=k==='nodev';demoErr=k==='nodev'?'':k;if(page==='home'&&k){hErr=''}render();return}
+  const fx=e.target.closest('[data-flx]');if(fx){const a=fx.dataset.flx;demoErr='';
+   if(a==='drop'){const L=live();stepsChanged();diffOk=true;dropped.add(L[Math.min(2,L.length-1)].p);flowMax=Math.max(flowMax,2);toast('已撤掉这个计时点，重新编译');flRun(2,4)}
+   else if(a==='move'){const L=live();editP=L[Math.min(2,L.length-1)].p;fl={st:0,step:0,pct:0,log:''};diffOk=false;page='steps';render();window.scrollTo(0,0);setTimeout(()=>{const el=document.getElementById('ed-f');if(el){el.scrollIntoView({block:'center'});el.focus()}},50);return}
+   else if(a==='reburn')flRun(3,4);else if(a==='retry')flRun(4,4);
+   render();return}
+  const df=e.target.closest('[data-df]');if(df){diffFile=+df.dataset.df;render();return}
+  const od=e.target.closest('[data-ondev]');if(od){onDev=od.dataset.ondev;flRun(2,3);render();return}
+  const rv=e.target.closest('[data-rngvar]');if(rv){rngVar=rv.dataset.rngvar;rngAsk=0;render();return}
+  const ra=e.target.closest('[data-rng]');if(ra){const a=ra.dataset.rng;rngAsk=a==='ask'?1:a==='ok'?2:0;if(a==='ok')stale=1;render();return}
+  if(e.target.closest('[data-stale]')){stale=2;render();return}
+  const cp=e.target.closest('[data-copy]');if(cp){const el=document.getElementById(cp.dataset.copy);if(el){try{navigator.clipboard.writeText(el.textContent)}catch(_){};copied=el.dataset.who;render();setTimeout(()=>{copied=null;if(page==='report')render()},1500)}return}
+  const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}
+  const rpv=e.target.closest('[data-repvar]');if(rpv){repVar=rpv.dataset.repvar;render();return}
+  const td=e.target.closest('[data-todo]');if(td){fixTodo=!fixTodo;render();return}
+  const sgb=e.target.closest('[data-seg]');if(sgb){segSel=sgb.dataset.seg;render();return}
+  const cmv=e.target.closest('[data-cmpvar]');if(cmv){cmpVar=cmv.dataset.cmpvar;render();return}
+  const cv=e.target.closest('[data-colvar]');if(cv){colVar=cv.dataset.colvar;render();return}
+  if(e.target.closest('[data-beep]')){beep=!beep;render();return}
+  const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
+  const ca=e.target.closest('[data-col]');if(ca){const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
+  if(e.target.closest('[data-resume]')){page='home';hStage=2;render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-demokey]')){const k=document.getElementById('set-key');if(k){k.value='demo-0000-key-示例';toast('已粘贴示例密钥，点「测试密钥」')}return}
+  const tk=e.target.closest('[data-test]');if(tk){keyTested=true;render();return}
+  const fil=e.target.closest('[data-fill]');if(fil){const i=document.getElementById('h-what');if(i)i.value=fil.dataset.fill;hSay=fil.dataset.fill;return}
 });
-// 输入要测什么：只在"空 ↔ 有字"变化、且输入法打完字时才重画，免得打断中文输入
-function onAsk(e) {
-  if (e.target.id !== 'ask' || e.isComposing) return;
-  const was = !!S.home.ask.trim();
-  S.home.ask = e.target.value;
-  if (was !== !!S.home.ask.trim()) { render(); const a = $('#ask'); a.focus(); a.setSelectionRange(a.value.length, a.value.length); }
-}
-document.addEventListener('input', onAsk);
-document.addEventListener('compositionend', onAsk);
-
-// ===== 画页面 =====
-function render() {
-  if (!S.state) return;
-  if (S.page === 'flow' && !flow()) S.page = 'home';
-  renderChrome();
-  let html;
-  if (S.page === 'flow') {
-    const F = flow(), key = F.viewing;
-    const look = reviewing(key) && F.current ? `<div class="review"><span>这一步已经做完，现在是回看。改了这里的东西，后面的步骤要重新做。</span><button class="btn pri" data-act="back">回到做到这里</button></div>` : '';
-    html = look + PAGES[key]();
-  } else html = PAGES[S.page]();
-  $('#view').innerHTML = html;
-}
-
-(async function init() {
-  S.demos = await api('/api/demo');
-  const h = location.hash.slice(1);
-  if (['home', 'settings', 'flow'].includes(h)) S.page = h;
-  await setState(await api('/api/state'));
-})();
+document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
+document.addEventListener('change',e=>{if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;render()}});
+document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
+document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
+(async function init(){
+ const list=await (await fetch('/api/demo')).json();
+ for(const d of list){const x=await (await fetch('/api/demo/'+encodeURIComponent(d.id))).json();SCENES[d.id]=x.S;FF[d.id]=x.F;COLLECT[d.id]=x.C;RUNS[d.id]=x.R;RANGE[d.id]=x.RG;RT[d.id]=x.RT;PROJ.push({...x.P,scene:d.id})}
+ scene=DEMO&&SCENES[DEMO]?DEMO:list[0].id;pName=FF[scene].pname;mapSel=FF[scene].mapSel;
+ try{const s=(await (await fetch('/api/state')).json()).settings;setFirst=SETTINGS==='done'?false:SETTINGS==='first'?true:!(s.llm_provider==='claude-code'||(s.llm_provider&&s.has_key[s.llm_provider]))}catch(e){}
+ render()})();
