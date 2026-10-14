@@ -178,6 +178,21 @@ def find_claude(home=None, path_env=None):
     return bundled[0] if bundled else None
 
 
+def claude_code_status(exe="auto", timeout=10):
+    """本机 Claude Code 找没找到、登没登录：只跑官方的 claude auth status，不调用模型、不花钱。
+    它的输出里有登录邮箱，这里只取"登没登录"，别的不留。"""
+    exe = find_claude() if exe == "auto" else exe
+    if not exe:
+        return {"found": False, "logged_in": False}
+    try:
+        out = subprocess.run([str(exe), "auth", "status"], capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL, timeout=timeout)
+        logged = bool(json.loads(out.stdout or "{}").get("loggedIn"))
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+        logged = False
+    return {"found": True, "logged_in": logged}
+
+
 class ClaudeCode(LLM):
     """本机已登录的 Claude Code（用你自己的会员额度，不用密钥）。只调用官方的 claude 命令，不碰登录凭证。"""
     name = "Claude Code"

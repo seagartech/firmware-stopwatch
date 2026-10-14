@@ -173,3 +173,14 @@ def test_install_box_uses_real_installer_and_demo_switches_are_gone():
     assert "/api/install/start" in js and "/api/install/retry" in js
     assert 'data-inst="fail"' not in js, "演示安装失败的按钮应去掉"
     assert "样子演示，看哪台电脑" not in js
+
+
+def test_settings_page_uses_real_checks_not_prototype_fakes():
+    """任务 12：保存、Claude Code 登录、设备、结果位置都换成真查，原型里的假文字去掉。"""
+    js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
+    assert "a3F9" not in js                      # 假密钥尾巴
+    assert "找到 v5.3" not in js                  # 假的编译工具列表
+    assert "/api/env?cc=0" in js and "data-datadir" in js and 'data-idf="pick"' in js
+    assert "fetch('/api/settings'" in js          # 保存真写
+    assert "applied" not in js                    # 灯不再看"点过保存"的假标记
+    assert "REAL?'':'<button class=\"pill\" data-fl=\"plug\">演示：设备已插上</button>'" in js

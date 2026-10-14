@@ -107,7 +107,9 @@ def test_key_test_button_uses_the_chosen_model(tmp_path):
 
 
 def test_environment_reports_installed_idf(tmp_path):
-    c = TestClient(create_app(data_dir=tmp_path / "data", idf_finder=lambda: [{"path": "/x/esp-idf-v6.1", "version": "6.1.0"}]))
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg",
+                                 idf_finder=lambda: [{"path": "/x/esp-idf-v6.1", "version": "6.1.0"}],
+                                 cc_status=lambda: {"found": False, "logged_in": False}, port_finder=lambda: []))
     assert c.get("/api/env").json()["idf"] == [{"path": "/x/esp-idf-v6.1", "version": "6.1.0"}]
 
 
