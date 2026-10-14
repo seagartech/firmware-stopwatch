@@ -1,0 +1,192 @@
+{
+ "format": "fsw-scenario/1",
+ "name": "门禁刷卡",
+ "recognized": "读代码认出来的",
+ "what": "从刷卡到开门",
+ "mode": "round",
+ "start": {
+  "name": "设备读到卡",
+  "point": "P1",
+  "short": "卡贴上去",
+  "title": "卡贴上去（设备读到卡）",
+  "unseen": {
+   "name": "卡贴近到设备察觉",
+   "note": "每 0.1 秒查一次读卡芯片，推算 0～0.1 秒",
+   "range": [
+    0,
+    0.1
+   ],
+   "take": 0.05
+  }
+ },
+ "segments": {
+  "read": {
+   "name": "读卡号",
+   "what": "设备察觉到卡，读出卡号",
+   "owner": "固件+读卡芯片",
+   "side": "device",
+   "from": "P1",
+   "to": "P2",
+   "range": [
+    0.03,
+    0.1
+   ],
+   "slow": 0.15,
+   "basis": "measured",
+   "code": "rfid_task.c:88 → 131"
+  },
+  "beep": {
+   "name": "亮灯响一声",
+   "what": "读到卡号后亮灯、响一声，告诉人刷上了",
+   "owner": "固件",
+   "side": "device",
+   "from": "P2",
+   "to": "P3",
+   "range": [
+    0.005,
+    0.03
+   ],
+   "slow": 0.05,
+   "basis": "measured",
+   "code": "rfid_task.c:131 → ui_led.c:42"
+  },
+  "check": {
+   "name": "服务器校验并返回",
+   "what": "把卡号发给服务器，服务器核对这张卡能不能开门，再回复",
+   "owner": "服务器+网络",
+   "side": "outside",
+   "from": "P2",
+   "to": "P4",
+   "range": [
+    0.2,
+    0.8
+   ],
+   "slow": 1.5,
+   "basis": "measured",
+   "code": "rfid_task.c:131 → net_auth.c:207"
+  },
+  "lock": {
+   "name": "电磁锁动作",
+   "what": "收到可以开门，给电磁锁断电，门弹开",
+   "owner": "固件+门锁",
+   "side": "device",
+   "from": "P4",
+   "to": "P5",
+   "range": [
+    0.1,
+    0.3
+   ],
+   "slow": 0.5,
+   "basis": "measured",
+   "code": "net_auth.c:207 → lock_ctrl.c:55"
+  }
+ },
+ "lines": [
+  {
+   "name": "反应线",
+   "end": "亮灯响一声",
+   "phrase": "亮灯响一声",
+   "segments": [
+    "read",
+    "beep"
+   ],
+   "range": [
+    0.04,
+    0.15
+   ],
+   "slow": 0.3
+  },
+  {
+   "name": "开门线",
+   "end": "开门",
+   "phrase": "后开门",
+   "segments": [
+    "read",
+    "check",
+    "lock"
+   ],
+   "range": [
+    0.35,
+    1.2
+   ],
+   "slow": 2
+  }
+ ],
+ "experience": null,
+ "expect_order": [
+  "反应线",
+  "开门线"
+ ],
+ "per_round": {
+  "dev": "设备",
+  "act": "刷卡",
+  "unit": "次",
+  "cnt": "刷卡",
+  "say": "请刷：",
+  "said": "刚才刷的是：",
+  "mode": "按轮测：刷一次卡算一轮",
+  "who": "每一次由你拿卡去刷，码表只负责提示下一次刷哪张和计时。",
+  "listName": "要刷的",
+  "per": "一次约 5 秒",
+  "why": "用哪张卡、按什么顺序固定下来，改完重测照同样顺序刷，前后对比才公平。",
+  "wait": "每次等门锁动作完、再关上后刷下一次。",
+  "items": [
+   "员工卡 A（有权限）",
+   "员工卡 B（有权限）",
+   "访客卡 C（今天有效）",
+   "员工卡 A（有权限）",
+   "员工卡 B（有权限）",
+   "访客卡 C（今天有效）",
+   "员工卡 A（有权限）",
+   "员工卡 B（有权限）",
+   "访客卡 C（今天有效）",
+   "员工卡 A（有权限）",
+   "员工卡 B（有权限）",
+   "访客卡 C（今天有效）",
+   "员工卡 A（有权限）",
+   "员工卡 B（有权限）",
+   "访客卡 C（今天有效）",
+   "员工卡 A（有权限）",
+   "员工卡 B（有权限）",
+   "访客卡 C（今天有效）",
+   "员工卡 A（有权限）",
+   "员工卡 B（有权限）"
+  ],
+  "miss": "没等到开门",
+  "beepNote": "收好一轮\"叮\"一声，没收全低一声。",
+  "phases": [
+   {
+    "name": "读到卡",
+    "point": "P1"
+   },
+   {
+    "name": "亮灯响一声",
+    "point": "P3"
+   },
+   {
+    "name": "服务器校验",
+    "point": "P4"
+   },
+   {
+    "name": "开门",
+    "point": "P5"
+   },
+   {
+    "name": "这次记好了",
+    "point": "P5"
+   }
+  ]
+ },
+ "problems": [
+  {
+   "key": "to",
+   "name": "服务器校验超过 1.5 秒",
+   "level": "bad",
+   "rule": {
+    "type": "segment_over",
+    "segment": "check",
+    "seconds": 1.5
+   }
+  }
+ ]
+}

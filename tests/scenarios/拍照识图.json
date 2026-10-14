@@ -1,0 +1,250 @@
+{
+ "format": "fsw-scenario/1",
+ "name": "拍照识图",
+ "recognized": "读代码认出来的",
+ "what": "举东西问这是什么，到设备开口",
+ "mode": "round",
+ "start": {
+  "name": "设备发现你停了",
+  "point": "P2",
+  "short": "你说完",
+  "title": "你说完（设备发现安静了）",
+  "unseen": {
+   "name": "真正说完到设备发现安静",
+   "note": "看不见，不计入",
+   "range": [
+    0,
+    null
+   ],
+   "take": null
+  }
+ },
+ "segments": {
+  "asr": {
+   "name": "服务器判断你说完 + 听写",
+   "what": "服务器判断你说完 + 听写",
+   "owner": "服务器",
+   "side": "outside",
+   "from": "P2",
+   "to": "P4",
+   "range": [
+    0.3,
+    1.0
+   ],
+   "slow": 1.2,
+   "basis": "measured"
+  },
+  "decide": {
+   "name": "大模型决定拍照",
+   "what": "大模型决定拍照",
+   "owner": "服务器（大模型）",
+   "side": "outside",
+   "from": "P4",
+   "to": "P21",
+   "range": [
+    0.4,
+    1.5
+   ],
+   "slow": 2.0,
+   "basis": "estimated"
+  },
+  "tools": {
+   "name": "工具调用合计（第一次开始到最后一次结束）",
+   "what": "工具调用合计（第一次开始到最后一次结束）",
+   "owner": "设备 + 服务器",
+   "side": "outside",
+   "from": "P21",
+   "to": "P35",
+   "range": null,
+   "slow": null,
+   "basis": "estimated"
+  },
+  "answer": {
+   "name": "大模型看完结果、合成第一句",
+   "what": "大模型看完结果、合成第一句",
+   "owner": "服务器（大模型）",
+   "side": "outside",
+   "from": "P35",
+   "to": "P5",
+   "range": [
+    0.4,
+    1.5
+   ],
+   "slow": 2.0,
+   "basis": "estimated",
+   "from_occurrence": "last"
+  },
+  "play": {
+   "name": "第一包声音传来并播放",
+   "what": "第一包声音传来并播放",
+   "owner": "网络 + 固件",
+   "side": "outside",
+   "from": "P5",
+   "to": "P10",
+   "range": [
+    0.01,
+    0.25
+   ],
+   "slow": 0.3,
+   "basis": "estimated"
+  },
+  "q": {
+   "name": "工具排队等主循环",
+   "what": "工具排队等主循环",
+   "owner": "固件",
+   "side": "device",
+   "from": "P21",
+   "to": "P23",
+   "range": [
+    0,
+    0.02
+   ],
+   "slow": 0.1,
+   "basis": "estimated"
+  },
+  "run": {
+   "name": "设备上执行一次拍照识图（期间主循环被占住）",
+   "what": "设备上执行一次拍照识图（期间主循环被占住）",
+   "owner": "设备 + 服务器",
+   "side": "outside",
+   "from": "P23",
+   "to": "P34",
+   "range": [
+    1.5,
+    5.0
+   ],
+   "slow": 7.0,
+   "basis": "estimated"
+  },
+  "back": {
+   "name": "结果排队并发回",
+   "what": "结果排队并发回",
+   "owner": "固件",
+   "side": "device",
+   "from": "P34",
+   "to": "P35",
+   "range": [
+    0,
+    0.02
+   ],
+   "slow": 0.1,
+   "basis": "estimated"
+  },
+  "shot": {
+   "name": "拍照和屏幕预览",
+   "what": "拍照和屏幕预览",
+   "owner": "固件 + 摄像头",
+   "side": "device",
+   "from": "P24",
+   "to": "P26",
+   "range": [
+    0.1,
+    0.3
+   ],
+   "slow": 0.5,
+   "basis": "estimated"
+  },
+  "up": {
+   "name": "连接识图服务器并上传照片",
+   "what": "连接识图服务器并上传照片",
+   "owner": "网络 + 固件",
+   "side": "outside",
+   "from": "P28",
+   "to": "P30",
+   "range": [
+    0.2,
+    0.8
+   ],
+   "slow": 1.5,
+   "basis": "estimated"
+  },
+  "see": {
+   "name": "服务器识图",
+   "what": "服务器识图",
+   "owner": "服务器（识图模型）",
+   "side": "outside",
+   "from": "P30",
+   "to": "P31",
+   "range": [
+    1.0,
+    4.0
+   ],
+   "slow": 6.0,
+   "basis": "estimated"
+  }
+ },
+ "lines": [
+  {
+   "name": "整轮",
+   "end": "开口",
+   "phrase": "后开口",
+   "segments": [
+    "asr",
+    "decide",
+    "tools",
+    "answer",
+    "play"
+   ],
+   "range": [
+    1.5,
+    6.0
+   ],
+   "slow": 8.0
+  },
+  {
+   "name": "每次拍照",
+   "end": "结果发回",
+   "phrase": "发回结果",
+   "segments": [
+    "q",
+    "run",
+    "back"
+   ],
+   "range": [
+    1.5,
+    5.1
+   ],
+   "slow": 7.2,
+   "each": true
+  }
+ ],
+ "experience": {
+  "line": "整轮",
+  "fair": 1.5,
+  "good": 0.8,
+  "source": "对话类公开参考"
+ },
+ "problems": [
+  {
+   "key": "slow",
+   "name": "整轮超过 8 秒",
+   "level": "bad",
+   "rule": {
+    "type": "line_over",
+    "line": "整轮",
+    "seconds": 8.0
+   }
+  }
+ ],
+ "per_round": {
+  "action": "举东西问",
+  "unit": "次",
+  "items": [
+   "举起杯子问：这是什么"
+  ],
+  "phases": [
+   {
+    "name": "听你说",
+    "point": "P2"
+   },
+   {
+    "name": "拍照识图",
+    "point": "P23"
+   },
+   {
+    "name": "开口",
+    "point": "P10"
+   }
+  ]
+ }
+}

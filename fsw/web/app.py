@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from fsw.config import load_config
+from fsw.scenario import to_page
 from fsw.workspace.picker import native_pick
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
@@ -25,7 +26,10 @@ DEMO = HERE / "demo"
 
 
 def load_demos():
-    demos = [json.loads(p.read_text(encoding="utf-8")) for p in DEMO.glob("*.json")]
+    demos = []
+    for p in DEMO.glob("*.json"):
+        d = json.loads(p.read_text(encoding="utf-8"))
+        demos.append({**d, **to_page(d)})  # 演示数据按通用格式存，换成网页要的样子
     return {d["id"]: d for d in sorted(demos, key=lambda d: d.get("order", 99))}
 
 

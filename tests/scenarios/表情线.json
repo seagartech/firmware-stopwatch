@@ -1,0 +1,300 @@
+{
+ "format": "fsw-scenario/1",
+ "name": "表情线",
+ "recognized": "读代码认出来的",
+ "what": "从说完话到先换表情、再开口",
+ "mode": "round",
+ "start": {
+  "name": "设备发现你停了",
+  "point": "P2",
+  "short": "你说完",
+  "title": "你说完（设备发现安静了）",
+  "unseen": {
+   "name": "真正说完到设备发现安静",
+   "note": "看不见，不计入",
+   "range": [
+    0,
+    null
+   ],
+   "take": null
+  }
+ },
+ "segments": {
+  "asr": {
+   "name": "服务器判断你说完 + 听写",
+   "what": "服务器判断你说完 + 听写",
+   "owner": "服务器",
+   "side": "outside",
+   "from": "P2",
+   "to": "P4",
+   "range": [
+    0.3,
+    1.0
+   ],
+   "slow": 1.2,
+   "basis": "measured"
+  },
+  "think": {
+   "name": "服务器想回答、合成第一句",
+   "what": "服务器想回答、合成第一句",
+   "owner": "服务器（大模型）",
+   "side": "outside",
+   "from": "P4",
+   "to": "P5",
+   "range": [
+    0.4,
+    1.5
+   ],
+   "slow": 2.0,
+   "basis": "measured"
+  },
+  "net": {
+   "name": "第一包声音传到设备",
+   "what": "第一包声音传到设备",
+   "owner": "服务器 + 网络",
+   "side": "outside",
+   "from": "P5",
+   "to": "P7",
+   "range": [
+    0.0,
+    0.2
+   ],
+   "slow": 0.3,
+   "basis": "measured"
+  },
+  "queue": {
+   "name": "第一包排进解压队列",
+   "what": "验证 03 没给这一段的范围，按代码推算",
+   "owner": "固件",
+   "side": "device",
+   "from": "P7",
+   "to": "P8",
+   "range": [
+    0.0,
+    0.01
+   ],
+   "slow": 0.03,
+   "basis": "estimated"
+  },
+  "decode": {
+   "name": "解压第一段声音",
+   "what": "解压第一段声音",
+   "owner": "固件",
+   "side": "device",
+   "from": "P8",
+   "to": "P9",
+   "range": [
+    0.002,
+    0.015
+   ],
+   "slow": 0.03,
+   "basis": "measured"
+  },
+  "speak": {
+   "name": "把声音交给喇叭芯片",
+   "what": "把声音交给喇叭芯片",
+   "owner": "固件",
+   "side": "device",
+   "from": "P9",
+   "to": "P10",
+   "range": [
+    0.0,
+    0.005
+   ],
+   "slow": 0.02,
+   "basis": "measured"
+  },
+  "state": {
+   "name": "设备切到说话状态",
+   "what": "设备切到说话状态",
+   "owner": "固件",
+   "side": "device",
+   "from": "P5",
+   "to": "P6",
+   "range": [
+    0.001,
+    0.01
+   ],
+   "slow": 0.03,
+   "basis": "measured"
+  },
+  "clear": {
+   "name": "清空播放器",
+   "what": "清空播放器",
+   "owner": "固件",
+   "side": "device",
+   "from": "P6",
+   "to": "P13",
+   "range": [
+    0.001,
+    0.015
+   ],
+   "slow": 0.04,
+   "basis": "measured"
+  },
+  "dec": {
+   "name": "决策模型选表情并发回",
+   "what": "决策模型选表情并发回",
+   "owner": "服务器（决策模型）+ 网络",
+   "side": "outside",
+   "from": "P4",
+   "to": "P11",
+   "range": [
+    0.2,
+    0.6
+   ],
+   "slow": 1.0,
+   "basis": "estimated"
+  },
+  "face": {
+   "name": "换表情",
+   "what": "换表情",
+   "owner": "固件",
+   "side": "device",
+   "from": "P11",
+   "to": "P12",
+   "range": [
+    0.001,
+    0.02
+   ],
+   "slow": 0.05,
+   "basis": "measured"
+  }
+ },
+ "lines": [
+  {
+   "name": "表情线",
+   "end": "换表情",
+   "phrase": "先换表情",
+   "segments": [
+    "asr",
+    "dec",
+    "face"
+   ],
+   "range": [
+    0.5,
+    1.6
+   ],
+   "slow": 2.0
+  },
+  {
+   "name": "说话线",
+   "end": "开口",
+   "phrase": "后开口",
+   "segments": [
+    "asr",
+    "think",
+    "net",
+    "queue",
+    "decode",
+    "speak"
+   ],
+   "range": [
+    0.7,
+    2.75
+   ],
+   "slow": null
+  }
+ ],
+ "experience": {
+  "line": "说话线",
+  "fair": 1.5,
+  "good": 0.8,
+  "source": "对话类公开参考"
+ },
+ "problems": [
+  {
+   "key": "rev",
+   "name": "表情比开口还晚",
+   "level": "warn",
+   "rule": {
+    "type": "line_order",
+    "first": "表情线",
+    "second": "说话线"
+   }
+  },
+  {
+   "key": "sw",
+   "name": "回答开头被吞",
+   "level": "bad",
+   "rule": {
+    "type": "any",
+    "rules": [
+     {
+      "type": "value_not",
+      "point": "P7",
+      "value": 6
+     },
+     {
+      "type": "point_before",
+      "a": "P8",
+      "b": "P13"
+     }
+    ]
+   }
+  }
+ ],
+ "per_round": {
+  "action": "说话",
+  "unit": "句",
+  "items": [
+   "今天天气怎么样",
+   "给我讲个笑话",
+   "你叫什么名字",
+   "现在几点了",
+   "帮我定个明天早上七点的闹钟",
+   "你喜欢吃什么",
+   "讲一个关于月亮的小故事，短一点",
+   "一加一等于几",
+   "你会唱歌吗",
+   "我有点累了",
+   "推荐一本适合周末看的书",
+   "你今天心情好吗",
+   "用一句话介绍一下你自己",
+   "北京到上海有多远",
+   "晚安",
+   "你觉得猫可爱还是狗可爱",
+   "帮我想个周末去哪玩",
+   "说一句鼓励我的话",
+   "你能听懂方言吗",
+   "再见"
+  ],
+  "phases": [
+   {
+    "name": "听你说",
+    "point": "P2"
+   },
+   {
+    "name": "服务器在想",
+    "point": "P4"
+   },
+   {
+    "name": "换表情",
+    "point": "P12"
+   },
+   {
+    "name": "开口",
+    "point": "P10"
+   },
+   {
+    "name": "这轮记好了",
+    "point": "P10"
+   }
+  ]
+ },
+ "expect_order": [
+  "表情线",
+  "说话线"
+ ],
+ "gaps": [
+  {
+   "name": "表情领先说话",
+   "earlier": "表情线",
+   "later": "说话线",
+   "range": [
+    0.3,
+    null
+   ]
+  }
+ ]
+}
