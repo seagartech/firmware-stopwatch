@@ -184,7 +184,7 @@ async function realPick(body,label,board){hErr='';envBack='home';hBoardNeed=fals
  let r;try{r=await api('/api/source/inspect',{...body,board:board||null})}catch(e){r={ok:false,message:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
  hReading=false;
  if(!r.ok){REAL=null;hSrc='';hStage=0;hErr=r.kind==='multiple'?`<b>${r.message}</b><div class="acts" style="margin:8px 0 0">${r.projects.map(p=>`<button class="btn" data-pickroot="${p.root.replace(/"/g,'&quot;')}">${p.name}<span class="note">　${p.root}</span></button>`).join('')}</div>`:r.message;render();return}
- REAL={...r.info,body,label:hSrc};pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');
+ REAL={...r.info,body,label:hSrc,work:r.work};pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');
  hScan=1;if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);hScanT=setTimeout(()=>{hScan=2;if(page==='home')render()},2500)}
 function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
  const q=hBoardQ.trim().toLowerCase(),list=REAL.boards.filter(b=>!q||b.id.toLowerCase().includes(q)||(b.chip||'').toLowerCase().includes(q));
@@ -397,7 +397,20 @@ const allRows=()=>[...STEPS,...added].filter(x=>useFace()||x.line!=='face');
 const live=()=>allRows().filter(x=>!dropped.has(x.p));
 let bgSec=0,bgDur=70,bgT=null,bgSrc='';
 const bgDone=()=>bgSec>=bgDur,bgPct=()=>Math.min(100,Math.round(bgSec/bgDur*100));
-function bgStart(){clearInterval(bgT);bgSrc=hSrc;bgSec=0;bgDur=demoErr==='slowbg'?260:70;
+// ===== 后台编原始代码（真的）：选了真源码时，后台真编那份一个字没改的副本，这里每秒问一次进度 =====
+let BG=null,bgPoll=null;
+const bgFailed=()=>!!(BG&&BG.state==='failed'),bgWaitTool=()=>!!(BG&&BG.state==='waiting_tool');
+const htmlEsc=t=>String(t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const BGTIME=()=>{if(BG&&BG.seconds!=null){const t=Math.round(BG.seconds);return t>=60?`${Math.floor(t/60)} 分 ${t%60} 秒`:`${t} 秒`}return FF[scene].bg};
+function bgStartReal(){clearInterval(bgT);bgT=null;clearInterval(bgPoll);bgSrc=hSrc;bgSec=0;bgDur=100;BG={state:'running',pct:0};
+ const body={work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min};
+ const show=s=>{BG=s;bgSec=s.state==='done'?100:(s.pct||0);bgPill();if(pop==='bg')document.getElementById('popdlg').innerHTML=popHTML();if(page==='home'&&hStage===3&&stepsRead===2)document.getElementById('dlg').innerHTML=modalHTML()};
+ const tick=async()=>{let s;try{s=await (await fetch('/api/bgbuild')).json();if(s.state==='waiting_tool'||s.state==='idle'||s.work!==body.work)s=await api('/api/bgbuild/start',body)}catch(e){return}
+  show(s);
+  if(s.state==='done'||s.state==='failed'){clearInterval(bgPoll);bgPoll=null;if(s.state==='done'){bgShownDone=Date.now();setTimeout(bgPill,5100)}
+   if(page==='flash'||page==='steps'||(page==='home'&&hStage===3))render()}};
+ api('/api/bgbuild/start',body).then(show).catch(()=>{});bgPoll=setInterval(tick,1000)}
+function bgStart(){if(REAL&&REAL.work)return bgStartReal();clearInterval(bgT);bgSrc=hSrc;bgSec=0;bgDur=demoErr==='slowbg'?260:70;
  bgT=setInterval(()=>{if(!envComp())return;bgSec+=7;const done=bgDone();
   bgPill();if(pop==='bg')document.getElementById('popdlg').innerHTML=popHTML();
   if(done){clearInterval(bgT);bgT=null;bgShownDone=Date.now();setTimeout(bgPill,5100);if(page==='flash'||page==='steps'||(page==='home'&&hStage===3))render()}},400)}
@@ -421,20 +434,20 @@ function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='�
 let bgShownDone=0;
 const BGTIP='原始代码：你选的那份源码，码表复制一份，一个字没改、没插计时点。<br>点「开始找关键步骤」时开始编，这时源码和要测的内容都定了。插完计时点后的「编译」要用它，只重编改过的几个文件（验证期实测：从头编 119 秒，只重编 80 秒）。<br>没编完，只有「编译」那一步会先等它，其他步骤照常做。你原来的文件夹不动。';
 function bgPill(){const el=document.getElementById('bgpill');if(!el)return;let h='';
- if(bgSrc&&hSrc){if(!envComp())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
+ if(bgSrc&&hSrc){if(bgFailed())h=`<button class="bgp warn" data-bgpop="1">原始代码编译没通过</button>`;else if(!envComp()||bgWaitTool())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
   else if(!bgDone())h=`<button class="bgp" data-bgpop="1" title="点开看详情"><span class="spin"></span>后台在编原始代码 ${bgPct()}%</button>`;
   else if(Date.now()-bgShownDone<5000)h=`<span class="bgp ok">✓ 原始代码已编好</span>`}
  el.innerHTML=h}
 function bgRow(){const done=bgDone(),noTool=!envComp();
- return `<div class="bgrow">${done?'✓':noTool?'!':'<span class="spin"></span>'} <b>后台在编原始代码（选好源码就开始了）</b>：${done?'编好了，用了 '+FF[scene].bg:noTool?(inst.st===1?'等编译工具装好就开始':'等编译工具装好就开始，烧录前装好就行'):bgPct()+'%（验证期实测约 2 分钟）'}<span class="note">　不用管；插完计时点后编译要用它，没编完不挡「下一步」</span></div>`}
-function bgLight(){return bgDone()?`<span><i class="dot" style="background:var(--ok)"></i>后台：原版编译通过（${FF[scene].bg}）</span>`:`<span><i class="dot" style="background:var(--warn)"></i>后台：原版还在编（${bgPct()}%），不挡核对和插计时点，编译那步会等它</span>`}
+ return `<div class="bgrow">${done?'✓':noTool?'!':'<span class="spin"></span>'} <b>后台在编原始代码（选好源码就开始了）</b>：${done?'编好了，用了 '+BGTIME():noTool?(inst.st===1?'等编译工具装好就开始':'等编译工具装好就开始，烧录前装好就行'):bgPct()+'%（验证期实测约 2 分钟）'}<span class="note">　不用管；插完计时点后编译要用它，没编完不挡「下一步」</span></div>`}
+function bgLight(){return bgDone()?`<span><i class="dot" style="background:var(--ok)"></i>后台：原版编译通过（${BGTIME()}）</span>`:`<span><i class="dot" style="background:var(--warn)"></i>后台：原版还在编（${bgPct()}%），不挡核对和插计时点，编译那步会等它</span>`}
 function bgBox(){const pct=bgPct(),done=bgDone(),noTool=!envComp();
  const row=(i,t,d,st)=>`<li class="istep ${st}"><b>${st==='ok'?'✓':i}</b><span>${t}<small>${d}</small>${st==='cur'&&i===2?`<span class="pbar"><i style="width:${pct}%"></i></span>`:''}</span></li>`;
  return `<div class="bgjob"><h3 class="h3" style="margin-top:0">${done?'✓ 后台已把原版编好':stepsRead===2?`后台还在编原版：${pct}%（不挡「下一步」）`:'等它读的时候，码表在后台先编一遍原版（不用你管）'}</h3>
   ${stepsRead===2&&!done?`<p style="margin:0 0 8px;font-size:14px">可以先点「下一步」去核对步骤、看插计时点的改动；<b>只有"编译"那一步要等它编完</b>，到时会自动接着编，不用你点。</p>`:''}
   <ul class="notes" style="margin:0 0 8px"><li><b>为什么编：</b>先确认这个项目在你电脑上编得过。原版就编不过，是环境问题（编译工具、依赖、板子），和计时点无关，码表会当场说缺什么。</li><li><b>编好有什么用：</b>插完计时点只要重编改过的几个文件，快很多；这份原版也留着，"还原成原版"和比较计时点开销时直接用。</li><li><b>动不动你的文件：</b>编的是码表复制出来的那份，你原来的文件夹不动。</li></ul>
   <ol class="isteps">${row(1,'复制一份源码','复制到纯英文的工作目录（乐鑫编译器读不了中文路径）','ok')}
-  ${row(2,'编译原版',done?'编译通过，用了 '+FF[scene].bg:noTool?(inst.st===1?'编译工具正在后台装，装好自动开始编':'编译工具还没装，装好后自动开始编'):`已编 ${pct}%。第一次要从头编，一般 1～3 分钟（按项目大小估算）；电脑会忙一点`,done?'ok':noTool?'':'cur')}
+  ${row(2,'编译原版',done?'编译通过，用了 '+BGTIME():noTool?(inst.st===1?'编译工具正在后台装，装好自动开始编':'编译工具还没装，装好后自动开始编'):`已编 ${pct}%。第一次要从头编，一般 1～3 分钟（按项目大小估算）；电脑会忙一点`,done?'ok':noTool?'':'cur')}
   ${row(3,'查设备','没插上。不急，烧录前插上就行',done?'ok':'')}</ol></div>`}
 function faceAsk(){const A=FF[scene].sideAsk;
  if(alsoFace!==null)return `<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${alsoFace?`也测「${A.side}」这条线（多 ${A.k} 个计时点）`:A.no}</span><button class="pill" data-face="reset">重新选择</button></div>`;
@@ -528,13 +541,14 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:''};
   const fe=demoErr==='build'&&fl.step===2&&fl.pct>=60?'build':demoErr==='burn'&&fl.step===3&&fl.pct>=48?'burn':demoErr==='try'&&fl.step===4&&fl.pct>=70?'try':'';
   if(fe){fl.st=5;fl.err=fe;flStop();if(page==='flash')render();return}
   if(fl.step===3&&flNoDev){fl.st=4;fl.log='没看到设备';flStop();if(page==='flash')render();return}
+  if(fl.step===2&&bgFailed()){fl.st=5;fl.err='orig';flStop();if(page==='flash')render();return}
   if(fl.step===2&&!bgDone()){fl.wait=true;fl.log=`等后台把原始代码编完（${bgPct()}%）`;if(page==='flash')render();return}fl.wait=false;
   fl.pct+=fl.step===2||fl.step===3?8:fl.step===4?6:25;
   if(fl.pct>=100){fl.step++;fl.pct=0;if(fl.step>to){flStop();fl.st=fl.step>4?2:3;if(fl.st===2){onDev='fsw';if(page==='flash')setTimeout(()=>{if(page==='flash'&&fl.st===2){page='collect';justFlashed=true;render();window.scrollTo(0,0)}},1200)}if(page==='flash')render();return}}
   fl.log=FST()[fl.step][2].replace('{n}',Math.round(fl.pct*16.3)).replace('{p}',Math.min(fl.pct,99));
   if(page==='flash')render()},350)}
 function flErr(){const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
- const E={build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} 第 ${p.l} 行）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
+ const E={orig:['原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(BG&&BG.message)}`,htmlEsc(BG&&BG.error),`<button class="btn" data-bgpop="1">看详情</button>`],build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} 第 ${p.l} 行）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
   burn:['烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。','A fatal error occurred: The chip stopped responding.',`<button class="btn pri" data-flx="reburn">重新烧录</button>`],
   try:['试一次没收到计时点',`烧录成功，设备也重启了，但${F.trig}后 15 秒内没收到计时点。常见原因：<br>1. 没触发到：再${C.act}一次试试。<br>2. 串口被别的软件占着（比如别的串口监视器）：关掉它。<br>3. 设备在反复重启：点「完整日志」看。`,'（15 秒内没有新输出）',`<button class="btn pri" data-flx="retry">再试一次</button>`]}[fl.err];
  return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code><button class="pill">完整日志</button></div><div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
@@ -826,16 +840,21 @@ function guideBar(){const S=stepInfo();if(!S)return '';
  return `<section class="stepcard" aria-label="这一步"><div class="sc-hd"><span class="note">${S.pos}</span><b>${S.title}</b></div><dl><dt>这一步</dt><dd>${S.what}</dd><dt>你要做</dt><dd class="sc-todo">${S.todo}</dd><dt>做完以后</dt><dd>${S.next}</dd></dl></section>`}
 let cd=0,cdT=null;
 function startCd(){clearInterval(cdT);cd=3;cdT=setInterval(()=>{cd--;if(page!=='home'||hStage!==3){clearInterval(cdT);cdT=null;cd=0;return}if(cd<=0){clearInterval(cdT);cdT=null;hStage=4;render()}else render()},1000)}
+// "找完了"里那一行：后台编原版的结果（找完窗口里写用时、后台编译结果和步骤清单）
+function bgFoundSpan(){return bgFailed()?`<span><i class="dot" style="background:var(--bad)"></i>原版编译没通过，不是码表改的：你选的源码本身在这台电脑上编不过，烧录前要先解决（点右上角看报错）</span>`
+ :!envComp()||bgWaitTool()?`<span><i class="dot" style="background:var(--warn)"></i>${inst.st===1?'编译工具正在后台装，装好就编原版':'编译工具还没装，原版没编：烧录前装好就行'}</span>`
+ :!bgDone()?`<span><i class="dot" style="background:var(--warn)"></i>后台还在编原版：${bgPct()}%（不挡下一步，编译那步会等它）</span>`
+ :`<span><i class="dot" style="background:var(--ok)"></i>后台已把原版编译通过（${BGTIME()}）</span>`}
 function modalHTML(){const F=FF[scene],llm={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[setLLM];
  const meant=hSay===F.ai[0]?F.measure:hSay.replace(/^从/,'').replace('到',' → ');
  if(hStage===2)return `<h2 id="dlg-t">确认要测的内容</h2>
    <dl class="kv"><dt>项目名称</dt><dd><input type="text" id="h-pname" value="${pName}" style="width:100%;max-width:22em"></dd><dt>固件源码位置</dt><dd class="num">${hSrc}</dd><dt>芯片和板子</dt><dd>${CHIP()}</dd><dt>要测的</dt><dd>${hSay}</dd><dt>码表理解为</dt><dd><b>${meant}</b></dd></dl>
    <p class="note" style="margin:0">接下来码表把代码交给大模型（${llm}），找出中间经过的关键步骤，一般 1～3 分钟。</p>
    <div class="acts"><button class="btn" data-mclose="1" id="dlg-back">关闭</button><button class="btn pri" data-mfind="1">开始找关键步骤</button></div>`;
- if(hStage===3)return `<h2 id="dlg-t">${stepsRead===2?'找完了':'正在找关键步骤'}</h2><p class="note" style="margin-top:0">${pName} · 要测：${meant}</p>${stepsRead===2?`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span></div>`:''}<div id="readbox">${readBox()}</div>
+ if(hStage===3)return `<h2 id="dlg-t">${stepsRead===2?'找完了':'正在找关键步骤'}</h2><p class="note" style="margin-top:0">${pName} · 要测：${meant}</p>${stepsRead===2?`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span>${bgFoundSpan()}</div>`:''}<div id="readbox">${readBox()}</div>
    <div class="acts" style="justify-content:flex-end"><button class="btn pri" ${stepsRead===2?'data-mnext="1"':blk('','还在找，找完就能点')}>下一步</button></div>`;
  const rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
- return `<h2 id="dlg-t">找完了</h2><div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span>${envComp()?`<span><i class="dot" style="background:var(--ok)"></i>后台已把原版编译通过（${F.bg}）</span>`:`<span><i class="dot" style="background:var(--warn)"></i>${inst.st===1?'编译工具正在后台装，装好就编原版':'编译工具还没装，原版没编：烧录前装好就行'}</span>`}</div>
+ return `<h2 id="dlg-t">找完了</h2><div class="status"><span><i class="dot" style="background:var(--ok)"></i>用时 1 分 10 秒，调用 1 次 ${llm}</span>${bgFoundSpan()}</div>
    <p style="margin:10px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
    <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
    <p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>
@@ -850,7 +869,8 @@ function popHTML(){const F=FF[scene],C=CC();
  if(pop==='col'){const g=okRounds(),bad=col.got.length-g.length;const to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];
   return box(`测完了 ${g.length} 轮`,`<p>${bad?`有 ${bad} 轮没收全，没算，已自动补收。`:'每轮都收全了。'}</p><p class="note">页面下方「测的够不够」写了要不要再测；不再收就直接看结果。</p>`,
    `<button class="btn" data-pop="close" data-nudge="#enough">先看够不够</button><button class="btn pri" data-go="${to[0]}">${to[1]}</button>`)}
- if(pop==='bg'){const d=bgDone(),no=!envComp();return box(d?'✓ 原始代码已编好':no?'后台编原始代码：等编译工具装好':`后台在编原始代码：${bgPct()}%`,`${d||no?'':`<span class="pbar" style="display:block;margin:0 0 12px"><i style="width:${bgPct()}%"></i></span>`}<ul class="notes" style="font-size:14px;color:var(--fg)">${BGTIP.split('<br>').map(x=>`<li>${x}</li>`).join('')}</ul>${no?'<p class="note">编译工具装好后自动开始，不用点。</p>':''}`,`<button class="btn pri" data-pop="close">知道了</button>`)}
+ if(pop==='bg'&&bgFailed())return box('原版编译没通过，不是码表改的',`<p>${htmlEsc(String(BG.message||'').replace(/^原版编译没通过，不是码表改的：/,''))}</p><div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div><p class="note">找关键步骤照常做；烧录前要先让原版编得过。</p>`,`<button class="btn pri" data-pop="close">知道了</button>`);
+ if(pop==='bg'){const d=bgDone(),no=!envComp()||bgWaitTool();return box(d?'✓ 原始代码已编好':no?'后台编原始代码：等编译工具装好':`后台在编原始代码：${bgPct()}%`,`${d||no?'':`<span class="pbar" style="display:block;margin:0 0 12px"><i style="width:${bgPct()}%"></i></span>`}<ul class="notes" style="font-size:14px;color:var(--fg)">${BGTIP.split('<br>').map(x=>`<li>${x}</li>`).join('')}</ul>${no?'<p class="note">编译工具装好后自动开始，不用点。</p>':''}`,`<button class="btn pri" data-pop="close">知道了</button>`)}
  if(pop==='colre')return box('从头重测？',`<p>会清掉已测的 ${okRounds().length} 轮，从第 1 轮重新开始。</p><p class="note">只是想补几轮，用「接着测」就行。</p>`,`<button class="btn" data-pop="close">取消</button><button class="btn pri" data-col="restart2">清掉，从头测</button>`);
  if(pop==='inst')return box('编译工具装好了',`<p>乐鑫编译工具 v6.1 装好了。</p><p class="note">都准备好后，点设置页最下面的「保存」。</p>`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='env'){const m=missing(envBack==='flash'?'comp':null);return box(envBack==='flash'?'编译前还缺编译工具':'还缺这些环境',`<p>${envBack==='flash'?'插好计时点了，编译这个固件要用下面这样，你电脑上还没准备好：':`这个固件要用到下面 ${m.length} 样，你电脑上还没准备好：`}</p><ul class="notes" style="font-size:15px;color:var(--fg)">${m.map(([,t,w])=>`<li><b>${t}</b><br><span class="note">${w}</span></li>`).join('')}</ul>`,`<button class="btn" data-pop="close">关闭</button>${m.some(x=>!(x[0]==='set-idf'&&inst.st===1))?'<button class="btn pri" data-envgo="1">配置环境</button>':''}`)}

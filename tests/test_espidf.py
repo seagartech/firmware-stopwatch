@@ -154,3 +154,42 @@ def test_read_lines_from_debug_port():
         if len(got) == 3:
             break
     assert got == ["I (12) boot: ok", "FSW,P2,18342210,0", "FSW,RESET,1,0"]
+
+
+def test_build_explains_the_slow_start_before_compiling(tmp_path):
+    src = board_project(tmp_path)
+    seen = []
+    out = ["Executing action: all (aliases: build)", "Processing 41 dependencies:", "[1/41] espressif/esp-sr (2.1.5)",
+           "[41/41] idf (6.1.0)", "-- Configuring done (52.1s)", "-- Generating done (1.2s)",
+           "[1/2241] Building C object a.obj", "[2241/2241] Linking CXX executable xiaozhi.elf"]
+    EspIdf(tmp_path / "idf", runner=fake_runner(out), env={}).build(src, target="esp32s3", on_progress=lambda p, m: seen.append((p, m)))
+    before = [x for x in seen if x[1] and "Building C object" not in x[1] and x[0] < 100]
+    assert any("下载" in m for p, m in before)
+    assert all(p <= 5 for p, m in seen[:4])
+    assert seen[-1][0] == 100 and [p for p, m in seen] == sorted(p for p, m in seen)
+
+
+def test_build_folder_from_another_place_is_cleared(tmp_path):
+    src = board_project(tmp_path)
+    (src / "build").mkdir()
+    (src / "build/CMakeCache.txt").write_text("CMAKE_HOME_DIRECTORY:INTERNAL=/somewhere/else/src\n")
+    EspIdf(tmp_path / "idf", runner=fake_runner(["Project build complete."]), env={}).build(src, target="esp32s3")
+    assert not (src / "build/CMakeCache.txt").exists()
+
+
+def test_build_folder_of_this_place_is_kept(tmp_path):
+    src = board_project(tmp_path)
+    (src / "build").mkdir()
+    (src / "build/CMakeCache.txt").write_text(f"CMAKE_HOME_DIRECTORY:INTERNAL={src.resolve()}\n")
+    EspIdf(tmp_path / "idf", runner=fake_runner(["Project build complete."]), env={}).build(src, target="esp32s3")
+    assert (src / "build/CMakeCache.txt").exists()
+
+
+def test_build_failure_shows_the_compiler_error_not_the_command_line(tmp_path):
+    src = board_project(tmp_path)
+    out = ["/x/xtensa-esp32s3-elf-g++ -DX -Werror=all -Wno-error=deprecated -c ../main/application.cc",
+           "../main/application.cc:2101:1: error: 'this' does not name a type",
+           " 2101 | this is not valid c++ ;;; @@@", "ninja: build stopped: subcommand failed."]
+    r = EspIdf(tmp_path / "idf", runner=fake_runner(out, code=1), env={}).build(src, target="esp32s3")
+    assert r["error"].startswith("../main/application.cc:2101:1: error:")
+    assert "-Werror" not in r["error"]

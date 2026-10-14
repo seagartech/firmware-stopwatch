@@ -6,6 +6,7 @@ Mac 和 Windows 的差别（编译工具装在哪、怎么加载环境、串口�
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -14,8 +15,17 @@ from pathlib import Path
 # 常见 USB 转串口芯片：乐鑫自带 USB、CH340、CP210x、FTDI、PL2303
 USB_SERIAL_VIDS = {0x303A, 0x1A86, 0x10C4, 0x0403, 0x067B}
 NINJA = re.compile(r"^\[(\d+)/(\d+)\]")
+DEP_LINE = re.compile(r"^\[\d+/\d+\]\s+\S+\s+\([^)]*\)$")
 FLASH_PCT = [re.compile(r"Writing at 0x[0-9a-fA-F]+.*?\(\s*(\d+)\s*%\)"),
              re.compile(r"Writing at 0x[0-9a-fA-F]+.*?\s(\d+)(?:\.\d+)?%")]
+
+
+# 编译前几个阶段：(输出里认的话, 进度, 给人看的说法)
+CONFIG_STAGES = [
+    (r"Processing \d+ dependencies", 1, "第一次编译要先下载用到的组件，一般 1 分钟左右（看网速）"),
+    (r"-- Configuring done", 3, "项目配置读完了，正在生成编译清单"),
+    (r"-- Generating done|Build files have been written", 5, "开始编译"),
+]
 
 
 def version_tuple(v):
@@ -174,6 +184,11 @@ class EspIdf:
         defaults = [n for n in ("sdkconfig.defaults", f"sdkconfig.defaults.{target}") if (src / n).exists()]
         if board:
             defaults.append(self._board_fragment(src, board))
+        cache = src / "build" / "CMakeCache.txt"
+        if cache.exists():
+            m = re.search(r"^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$", cache.read_text(encoding="utf-8", errors="replace"), re.M)
+            if m and Path(m.group(1).strip()).resolve() != src.resolve():
+                shutil.rmtree(src / "build")  # build 文件夹是别的位置留下的（源码挪过），清掉从头编
         old = src / "sdkconfig"
         if old.exists() and f'CONFIG_IDF_TARGET="{target}"' not in old.read_text(encoding="utf-8", errors="replace"):
             old.unlink()  # 换了芯片，旧配置作废
@@ -184,13 +199,25 @@ class EspIdf:
         best = [0]
         on_progress(0, "准备编译：读项目配置、下载要用的组件")
 
+        stage = {"compiling": False}
+
         def line_cb(line):
-            p = ninja_progress(line)
-            if p:
-                pct = min(99, 1 + int(98 * p[0] / max(1, p[1])))
+            s = line.strip()
+            # 编译器开始数"第几个 / 共几个"之前，按阶段给说法（第一次从头编这段要一分多钟）
+            for pat, pct, msg in CONFIG_STAGES:
+                if not stage["compiling"] and re.search(pat, s) and pct > best[0]:
+                    best[0] = pct
+                    on_progress(pct, msg)
+                    if pct == 5:
+                        stage["compiling"] = True
+                    return
+            p = ninja_progress(s)
+            if p and not DEP_LINE.match(s):  # "[1/41] 组件名 (版本)" 是下载组件清单，不是编译进度
+                stage["compiling"] = True
+                pct = min(99, 5 + int(94 * p[0] / max(1, p[1])))
                 if pct > best[0]:
                     best[0] = pct
-                    on_progress(pct, line.strip()[:200])
+                    on_progress(pct, s[:200])
 
         t = time.time()
         code, tail = self._run(cmd, src, line_cb)
@@ -198,8 +225,11 @@ class EspIdf:
         if code == 0:
             on_progress(100, "编译完成")
             return {"ok": True, "seconds": secs, "error": None}
-        errs = [l for l in tail if "error" in l.lower()] or tail[-8:]
-        return {"ok": False, "seconds": secs, "error": "\n".join(errs[-8:])}
+        # 先找编译器的报错行（文件:行: error:），找不到再退而求其次
+        errs = [l for l in tail if re.search(r":\d+(:\d+)?: (fatal )?error:", l)] \
+            or [l for l in tail if re.search(r"\berror\b", l, re.I) and not re.search(r"\s-W|xtensa-.*-g(cc|\+\+)\s", l)] \
+            or tail[-8:]
+        return {"ok": False, "seconds": secs, "error": "\n".join(errs[:8])}
 
     def wait_for_port(self, on_waiting=lambda: None, cancelled=lambda: False):
         """烧录前才查设备：没插就停下等，插上自动继续。"""
