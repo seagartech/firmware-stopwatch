@@ -1,0 +1,394 @@
+{
+ "format": "fsw-scenario-set/1",
+ "name": "按事件测量",
+ "scenarios": [
+  {
+   "format": "fsw-scenario/1",
+   "name": "主动开口",
+   "recognized": "读代码认出来的",
+   "what": "设备自己决定开口",
+   "mode": "event",
+   "start": {
+    "name": "决定开口",
+    "point": "P41",
+    "short": "决定开口",
+    "title": "决定开口",
+    "unseen": {
+     "name": "事件发生到设备察觉",
+     "note": "起点就是固件自己决定开口",
+     "range": [
+      0,
+      0
+     ],
+     "take": 0
+    }
+   },
+   "segments": {
+    "say": {
+     "name": "决定开口到出声（经服务器）",
+     "what": "决定开口到出声（经服务器）",
+     "owner": "服务器 + 固件",
+     "side": "outside",
+     "from": "P41",
+     "to": "P10",
+     "range": [
+      1.0,
+      3.0
+     ],
+     "slow": 5.0,
+     "basis": "estimated"
+    }
+   },
+   "lines": [
+    {
+     "name": "主动开口",
+     "end": "决定开口到出声（经服务器）",
+     "phrase": "",
+     "segments": [
+      "say"
+     ],
+     "range": [
+      1.0,
+      3.0
+     ],
+     "slow": 5.0
+    }
+   ],
+   "event": {
+    "trigger": "设备自己决定开口",
+    "max_wait": 10.0,
+    "end_value": 41
+   },
+   "problems": []
+  },
+  {
+   "format": "fsw-scenario/1",
+   "name": "摸头害羞",
+   "recognized": "读代码认出来的",
+   "what": "摸一下设备的头",
+   "mode": "event",
+   "start": {
+    "name": "摸到头",
+    "point": "P42",
+    "short": "摸到头",
+    "title": "摸到头",
+    "unseen": {
+     "name": "事件发生到设备察觉",
+     "note": "每 20 毫秒读一次触摸，平均晚半个间隔",
+     "range": [
+      0,
+      0.02
+     ],
+     "take": 0.01
+    }
+   },
+   "segments": {
+    "judge": {
+     "name": "判断是不是摸头",
+     "what": "判断是不是摸头",
+     "owner": "固件",
+     "side": "device",
+     "from": "P42",
+     "to": "P43",
+     "range": [
+      0,
+      0.04
+     ],
+     "slow": 0.1,
+     "basis": "estimated"
+    },
+    "shy": {
+     "name": "换上害羞表情",
+     "what": "换上害羞表情",
+     "owner": "固件",
+     "side": "device",
+     "from": "P43",
+     "to": "P12",
+     "range": [
+      0.005,
+      0.05
+     ],
+     "slow": 0.1,
+     "basis": "estimated"
+    }
+   },
+   "lines": [
+    {
+     "name": "摸头害羞",
+     "end": "换上害羞表情",
+     "phrase": "",
+     "segments": [
+      "judge",
+      "shy"
+     ],
+     "range": [
+      0.01,
+      0.09
+     ],
+     "slow": 0.2
+    }
+   ],
+   "event": {
+    "trigger": "摸一下设备的头",
+    "max_wait": 3.0,
+    "end_value": 42
+   },
+   "problems": []
+  },
+  {
+   "format": "fsw-scenario/1",
+   "name": "关灯犯困",
+   "recognized": "读代码认出来的",
+   "what": "把灯关掉",
+   "mode": "event",
+   "start": {
+    "name": "察觉光线变暗",
+    "point": "P44",
+    "short": "察觉光线变暗",
+    "title": "察觉光线变暗",
+    "unseen": {
+     "name": "事件发生到设备察觉",
+     "note": "假设每 0.5 秒读一次光线",
+     "range": [
+      0,
+      0.5
+     ],
+     "take": 0.25
+    }
+   },
+   "segments": {
+    "sleepy": {
+     "name": "换上犯困表情",
+     "what": "换上犯困表情",
+     "owner": "固件",
+     "side": "device",
+     "from": "P44",
+     "to": "P12",
+     "range": [
+      0.005,
+      0.09
+     ],
+     "slow": 0.2,
+     "basis": "estimated"
+    }
+   },
+   "lines": [
+    {
+     "name": "关灯犯困",
+     "end": "换上犯困表情",
+     "phrase": "",
+     "segments": [
+      "sleepy"
+     ],
+     "range": [
+      0.005,
+      0.09
+     ],
+     "slow": 0.2
+    }
+   ],
+   "event": {
+    "trigger": "把灯关掉",
+    "max_wait": 3.0,
+    "start_value": 1,
+    "end_value": 44
+   },
+   "problems": []
+  },
+  {
+   "format": "fsw-scenario/1",
+   "name": "夜间陪伴",
+   "recognized": "读代码认出来的",
+   "what": "起夜开灯",
+   "mode": "event",
+   "start": {
+    "name": "察觉开灯",
+    "point": "P44",
+    "short": "察觉开灯",
+    "title": "察觉开灯",
+    "unseen": {
+     "name": "事件发生到设备察觉",
+     "note": "同关灯犯困",
+     "range": [
+      0,
+      0.5
+     ],
+     "take": 0.25
+    }
+   },
+   "segments": {
+    "greet": {
+     "name": "开灯到出声（经服务器）",
+     "what": "开灯到出声（经服务器）",
+     "owner": "服务器 + 固件",
+     "side": "outside",
+     "from": "P44",
+     "to": "P10",
+     "range": [
+      1.0,
+      3.0
+     ],
+     "slow": 5.0,
+     "basis": "estimated"
+    }
+   },
+   "lines": [
+    {
+     "name": "夜间陪伴",
+     "end": "开灯到出声（经服务器）",
+     "phrase": "",
+     "segments": [
+      "greet"
+     ],
+     "range": [
+      1.0,
+      3.0
+     ],
+     "slow": 5.0
+    }
+   ],
+   "event": {
+    "trigger": "起夜开灯",
+    "max_wait": 10.0,
+    "start_value": 2,
+    "end_value": 44
+   },
+   "problems": []
+  },
+  {
+   "format": "fsw-scenario/1",
+   "name": "眼睛跟着人转",
+   "recognized": "读代码认出来的",
+   "what": "人在镜头前走动",
+   "mode": "event",
+   "start": {
+    "name": "拍到这一帧",
+    "point": "P45",
+    "short": "拍到这一帧",
+    "title": "拍到这一帧",
+    "unseen": {
+     "name": "事件发生到设备察觉",
+     "note": "摄像头每秒 20 帧，平均晚半帧",
+     "range": [
+      0,
+      0.05
+     ],
+     "take": 0.025
+    }
+   },
+   "segments": {
+    "eyes": {
+     "name": "认出人在哪并画眼睛",
+     "what": "认出人在哪并画眼睛",
+     "owner": "固件 + 摄像头",
+     "side": "device",
+     "from": "P45",
+     "to": "P46",
+     "range": [
+      0.03,
+      0.15
+     ],
+     "slow": 0.2,
+     "basis": "estimated"
+    }
+   },
+   "lines": [
+    {
+     "name": "眼睛跟着人转",
+     "end": "认出人在哪并画眼睛",
+     "phrase": "",
+     "segments": [
+      "eyes"
+     ],
+     "range": [
+      0.03,
+      0.15
+     ],
+     "slow": 0.2
+    }
+   ],
+   "event": {
+    "trigger": "人在镜头前走动",
+    "max_wait": 1.0,
+    "pair_by": "编号",
+    "no_reaction": "没处理就跳过的帧"
+   },
+   "problems": []
+  },
+  {
+   "format": "fsw-scenario/1",
+   "name": "工作搭子",
+   "recognized": "读代码认出来的",
+   "what": "电脑推一条消息",
+   "mode": "event",
+   "start": {
+    "name": "电脑发出消息",
+    "point": "P50",
+    "short": "电脑发出消息",
+    "title": "电脑发出消息",
+    "unseen": {
+     "name": "事件发生到设备察觉",
+     "note": "起点就是电脑程序发出的那一刻",
+     "range": [
+      0,
+      0
+     ],
+     "take": 0
+    }
+   },
+   "segments": {
+    "msg": {
+     "name": "电脑到设备传消息",
+     "what": "电脑到设备传消息",
+     "owner": "网络",
+     "side": "outside",
+     "from": "P50",
+     "to": "P47",
+     "range": [
+      0.01,
+      0.3
+     ],
+     "slow": 1.0,
+     "basis": "estimated"
+    },
+    "remind": {
+     "name": "换上提醒表情",
+     "what": "换上提醒表情",
+     "owner": "固件",
+     "side": "device",
+     "from": "P47",
+     "to": "P12",
+     "range": [
+      0.005,
+      0.05
+     ],
+     "slow": 0.1,
+     "basis": "estimated"
+    }
+   },
+   "lines": [
+    {
+     "name": "工作搭子",
+     "end": "换上提醒表情",
+     "phrase": "",
+     "segments": [
+      "msg",
+      "remind"
+     ],
+     "range": [
+      0.02,
+      0.35
+     ],
+     "slow": 1.0
+    }
+   ],
+   "event": {
+    "trigger": "电脑推一条消息",
+    "max_wait": 5.0,
+    "end_value": 47,
+    "clock": "用电脑的时钟对齐两边"
+   },
+   "problems": []
+  }
+ ]
+}
