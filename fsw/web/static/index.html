@@ -4,23 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>固件码表</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+
 <div class="wrap">
-  <header class="apphd">
-    <button class="brand" data-nav="home">固件码表</button>
-    <div class="apphd-r">
-      <button class="pill" data-nav="home" id="nav-home">首页</button>
-      <button class="pill" data-nav="settings" id="nav-settings">设置</button>
+  <div class="apphd"><button class="brand" data-go="home">⏱ 固件码表</button><span class="apphd-r"><span id="bgpill"></span><button class="pill" data-go="home" id="nav-home">首页</button><button class="pill" data-go="settings" id="nav-set">设置</button></span></div>
+  <div id="flowbar"></div><div id="guide"></div>
+  <header class="top">
+    <div class="crumb" id="crumb"></div>
+    <div class="seg" role="group" aria-label="报告版本" id="verseg">
+      <button id="v-boss" aria-pressed="true">结论建议</button>
+      <button id="v-dev" aria-pressed="false">技术细节</button>
     </div>
   </header>
-  <ol class="flow" id="flowbar" hidden></ol>
-  <div id="notice"></div>
-  <main id="view" class="view"></main>
+  <main id="main"></main>
 </div>
-<div id="modal"></div>
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" role="status" hidden></div><div id="tip" hidden></div><div class="modal" id="pop" hidden><div class="dlg" role="dialog" aria-modal="true" id="popdlg"></div></div>
+<div class="modal" id="modal" hidden><div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-t" id="dlg"></div></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

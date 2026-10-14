@@ -7,12 +7,12 @@ def statuses(flow):
     return {s.key: s.status for s in flow.steps}
 
 
-def test_first_time_flow_has_four_steps_and_starts_at_the_first():
+def test_first_time_flow_has_five_steps_like_the_prototype():
     flow = Flow.start("first")
 
-    assert [s.name for s in flow.steps] == ["找关键步骤", "插计时点和烧录", "多轮实测", "报告"]
-    assert statuses(flow) == {"identify": "doing", "probes": "todo", "measure": "todo", "report": "todo"}
-    assert flow.viewing == "identify"
+    assert [s.name for s in flow.steps] == ["选固件", "找关键步骤", "插计时点和烧录", "多轮实测", "报告"]
+    assert statuses(flow) == {"pick": "doing", "identify": "todo", "probes": "todo", "measure": "todo", "report": "todo"}
+    assert flow.viewing == "pick"
 
 
 def test_retest_flow_has_five_steps_and_nothing_skipped_before_code_is_chosen():
@@ -24,6 +24,7 @@ def test_retest_flow_has_five_steps_and_nothing_skipped_before_code_is_chosen():
 
 def test_completing_a_step_moves_on_to_the_next():
     flow = Flow.start("first")
+    flow.complete("pick")
 
     flow.complete("identify")
 
@@ -34,6 +35,7 @@ def test_completing_a_step_moves_on_to_the_next():
 
 def test_going_back_only_looks_and_keeps_later_work():
     flow = Flow.start("first")
+    flow.complete("pick")
     flow.complete("identify")
     flow.complete("probes")
     before = statuses(flow)
@@ -48,6 +50,7 @@ def test_going_back_only_looks_and_keeps_later_work():
 
 def test_can_look_forward_again_after_looking_back():
     flow = Flow.start("first")
+    flow.complete("pick")
     flow.complete("identify")
     flow.complete("probes")
     flow.view("identify")
@@ -59,6 +62,7 @@ def test_can_look_forward_again_after_looking_back():
 
 def test_cannot_jump_to_a_step_not_reached_yet():
     flow = Flow.start("first")
+    flow.complete("pick")
 
     with pytest.raises(FlowError):
         flow.view("report")
@@ -66,13 +70,14 @@ def test_cannot_jump_to_a_step_not_reached_yet():
 
 def test_changing_an_earlier_step_resets_later_steps_and_says_so():
     flow = Flow.start("first")
+    flow.complete("pick")
     flow.complete("identify")
     flow.complete("probes")
     flow.view("identify")
 
     flow.change("identify")
 
-    assert statuses(flow) == {"identify": "doing", "probes": "todo", "measure": "todo", "report": "todo"}
+    assert statuses(flow) == {"pick": "done", "identify": "doing", "probes": "todo", "measure": "todo", "report": "todo"}
     assert flow.viewing == "identify"
     assert "插计时点和烧录" in flow.notice
     assert "重新做" in flow.notice
@@ -80,6 +85,7 @@ def test_changing_an_earlier_step_resets_later_steps_and_says_so():
 
 def test_changing_the_current_step_needs_no_notice():
     flow = Flow.start("first")
+    flow.complete("pick")
 
     flow.change("identify")
 
@@ -88,6 +94,7 @@ def test_changing_the_current_step_needs_no_notice():
 
 def test_notice_goes_away_after_the_next_step_is_done():
     flow = Flow.start("first")
+    flow.complete("pick")
     flow.complete("identify")
     flow.change("identify")
 
@@ -98,6 +105,7 @@ def test_notice_goes_away_after_the_next_step_is_done():
 
 def test_error_marks_the_step_red_and_stays_there():
     flow = Flow.start("first")
+    flow.complete("pick")
     flow.complete("identify")
 
     flow.fail("probes", "编译没通过")
@@ -110,6 +118,7 @@ def test_error_marks_the_step_red_and_stays_there():
 
 def test_retry_after_error_clears_red():
     flow = Flow.start("first")
+    flow.complete("pick")
     flow.fail("identify", "大模型没回应")
 
     flow.retry("identify")
@@ -133,6 +142,7 @@ def test_retest_skips_steps_after_code_is_checked():
 
 def test_finishing_the_last_step_marks_the_flow_done():
     flow = Flow.start("first")
+    flow.complete("pick")
     for key in ["identify", "probes", "measure", "report"]:
         flow.complete(key)
 
@@ -142,6 +152,43 @@ def test_finishing_the_last_step_marks_the_flow_done():
 
 def test_only_the_current_step_can_be_completed():
     flow = Flow.start("first")
+    flow.complete("pick")
 
     with pytest.raises(FlowError):
         flow.complete("probes")
+
+
+def test_sync_follows_how_far_the_page_got():
+    flow = Flow.start("first")
+
+    flow.sync(reached=3, viewing="identify")
+
+    assert statuses(flow) == {"pick": "done", "identify": "done", "probes": "done", "measure": "doing", "report": "todo"}
+    assert flow.viewing == "identify"
+    assert flow.current == "measure"
+
+
+def test_sync_marks_error_on_the_current_step():
+    flow = Flow.start("first")
+
+    flow.sync(reached=2, viewing="probes", error="编译没通过")
+
+    assert statuses(flow)["probes"] == "error"
+    assert flow.error == "编译没通过"
+
+
+def test_sync_going_back_resets_later_steps():
+    flow = Flow.start("first")
+    flow.sync(reached=4, viewing="report")
+
+    flow.sync(reached=1, viewing="identify")
+
+    assert statuses(flow) == {"pick": "done", "identify": "doing", "probes": "todo", "measure": "todo", "report": "todo"}
+
+
+def test_sync_keeps_skipped_steps_of_a_retest():
+    flow = Flow.start("retest")
+
+    flow.sync(reached=3, viewing="measure", skipped=["identify", "probes"])
+
+    assert statuses(flow) == {"diff": "done", "identify": "skipped", "probes": "skipped", "measure": "doing", "compare": "todo"}
