@@ -1,0 +1,172 @@
+"""任务 15 的网页后台：多轮实测。开始 → 一轮轮收 → 停止 → 接着测（轮数和数据连得上）→ 从头重测；
+没收全自动补测；设备中途断开自动暂停、插回接着测；设备原样输出存一份。全是假设备，不真读串口。"""
+
+import json
+import threading
+import time
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from fsw import measure as m
+from fsw.web.app import create_app
+
+DEMO = Path(__file__).resolve().parent.parent / "fsw/web/demo"
+
+
+class FakeSerialDevice:
+    """假设备：把一份日志一行行吐出来；break_at=k 时吐到第 k 行像拔了线一样断开（只断一次）。"""
+
+    def __init__(self, lines, break_at=None, gap=0.002):
+        self.lines, self.break_at, self.gap, self.pos, self.opened = list(lines), break_at, gap, 0, 0
+
+    def stream(self, port, on_line, stop):
+        self.opened += 1
+        while self.pos < len(self.lines) and not stop():
+            if self.break_at is not None and self.pos == self.break_at:
+                self.break_at = None
+                raise OSError("device disconnected")
+            on_line(self.lines[self.pos])
+            self.pos += 1
+            time.sleep(self.gap)
+        while not stop():
+            time.sleep(0.01)
+
+
+@pytest.fixture
+def make(tmp_path):
+    def _make(device=None, ports=("/dev/cu.usbmodem1101",)):
+        port_list = list(ports)
+        c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", idf_finder=lambda: [],
+                                  cc_status=lambda: {"found": True, "logged_in": True},
+                                  port_finder=lambda: list(port_list), device=device, wait_step=0.01))
+        return c, port_list
+    return _make
+
+
+def wait(c, until, timeout=10):
+    t = time.time()
+    while time.time() - t < timeout:
+        j = c.get("/api/collect").json()
+        if until(j):
+            return j
+        time.sleep(0.02)
+    raise AssertionError(j)
+
+
+def ok_rounds(j):
+    return [r for r in j["rounds"] if r["ok"]]
+
+
+def test_demo_rounds_are_parsed_from_replayed_output(make):
+    c, _ = make()
+    c.post("/api/collect/start", json={"demo": "door", "rounds": 20, "interval": 0})
+    j = wait(c, lambda j: j["status"] == "done")
+    rs = ok_rounds(j)
+    door = json.loads((DEMO / "door.json").read_text(encoding="utf-8"))
+    assert len(rs) == 20 and [r["n"] for r in rs if "to" in r["probs"]] == door["result"]["problems"]["to"]
+    assert rs[0]["ends"][1] == pytest.approx(sum(door["result"]["segments"][k][0] for k in ("read", "check", "lock")), abs=1e-4)
+    assert Path(j["raw_log"]).read_text(encoding="utf-8").count("FSW,RESET") == 20  # 设备输出原样存了一份
+
+
+def test_incomplete_round_is_resampled_until_target(make):
+    c, _ = make()
+    c.post("/api/collect/start", json={"demo": "voice", "rounds": 20, "interval": 0, "drop_at": 9})
+    j = wait(c, lambda j: j["status"] == "done")
+    assert len(ok_rounds(j)) == 20 and len(j["rounds"]) == 21
+    bad = [r for r in j["rounds"] if not r["ok"]]
+    assert bad[0]["att"] == 9 and bad[0]["missing"]
+
+
+def test_stop_then_continue_keeps_numbers_and_data(make):
+    lines = list(m.demo_lines(json.loads((DEMO / "voice.json").read_text(encoding="utf-8")), 25))  # 停下时正在收的那轮会丢，多备几轮
+    dev = FakeSerialDevice(lines, gap=0.01)
+    c, _ = make(device=dev)
+    c.post("/api/collect/start", json={"demo": "voice", "source": "device", "rounds": 20})
+    wait(c, lambda j: len(ok_rounds(j)) >= 5)
+    c.post("/api/collect/stop")
+    j = wait(c, lambda j: j["status"] == "stopped")
+    k = len(ok_rounds(j))
+    assert 5 <= k < 20
+    c.post("/api/collect/start", json={"demo": "voice", "source": "device", "rounds": 20, "resume": True})
+    j = wait(c, lambda j: j["status"] == "done")
+    rs = ok_rounds(j)
+    assert [r["n"] for r in rs] == list(range(1, 21))  # 从第 k+1 轮接着，编号连着
+    voice = json.loads((DEMO / "voice.json").read_text(encoding="utf-8"))
+    assert [round(r["segs"]["think"], 4) for r in rs[:k]] == pytest.approx(voice["result"]["segments"]["think"][:k], abs=1e-4)
+    assert rs[k]["att"] > rs[k - 1]["att"]  # 停之前测的留着，接着往后记
+
+
+def test_more_rounds_after_done(make):
+    c, _ = make()
+    c.post("/api/collect/start", json={"demo": "door", "rounds": 10, "interval": 0})
+    wait(c, lambda j: j["status"] == "done")
+    c.post("/api/collect/start", json={"demo": "door", "rounds": 20, "interval": 0, "resume": True})  # "再测 10 轮"
+    j = wait(c, lambda j: j["status"] == "done")
+    assert [r["n"] for r in ok_rounds(j)] == list(range(1, 21))
+
+
+def test_restart_from_scratch(make):
+    c, _ = make()
+    c.post("/api/collect/start", json={"demo": "door", "rounds": 10, "interval": 0})
+    first = wait(c, lambda j: j["status"] == "done")
+    c.post("/api/collect/start", json={"demo": "door", "rounds": 10, "interval": 0})
+    j = wait(c, lambda j: j["status"] == "done" and j["raw_log"] != first["raw_log"])
+    assert [r["n"] for r in ok_rounds(j)] == list(range(1, 11))
+
+
+def test_device_unplugged_pauses_then_continues(make):
+    lines = list(m.demo_lines(json.loads((DEMO / "door.json").read_text(encoding="utf-8")), 22))  # 断开时那一轮会丢
+    dev = FakeSerialDevice(lines, break_at=40)
+    c, ports = make(device=dev)
+    c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 20})
+    j = wait(c, lambda j: j["status"] == "done")
+    assert len(ok_rounds(j)) == 20 and dev.opened == 2 and j["pauses"] == 1  # 断开过一次，自动接着测完
+
+
+def test_no_device_waits(make):
+    lines = list(m.demo_lines(json.loads((DEMO / "door.json").read_text(encoding="utf-8")), 10))
+    c, ports = make(device=FakeSerialDevice(lines), ports=())
+    c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 10})
+    wait(c, lambda j: j["status"] == "waiting_device")
+    ports.append("/dev/cu.usbmodem1101")
+    assert len(ok_rounds(wait(c, lambda j: j["status"] == "done"))) == 10
+
+
+def test_real_steps_spec_from_page(make, tmp_path):
+    """真找完的步骤（编号 P1～P9）：按结果页的段算，计时点行格式和任务 14 插的一样。"""
+    page = {"segs": [{"a": "P1", "b": "P2"}, {"a": "P2", "b": "P5"}, {"a": "P5", "b": "P9"}],
+            "fsegs": [{"a": "P2", "b": "P3"}, {"a": "P3", "b": "P4"}], "ln": {"talk": "开口这条", "face": "表情这条"},
+            "steps": [{"p": f"P{i}", "n": f"第{i}步"} for i in range(1, 10)]}
+    log = []
+    for r in range(3):
+        b = 1_000_000 * (r + 1) * 10
+        log += [f"FSW,RESET,{b},0", f"FSW,P3,{b + 300},0", f"FSW,P4,{b + 400},0", f"FSW,P2,{b + 200},0",
+                f"FSW,P1,{b + 100},2", f"FSW,P5,{b + 500},0", f"FSW,P9,{b + 900},0"]
+    c, _ = make(device=FakeSerialDevice(log))
+    c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3, "project_dir": str(tmp_path / "proj")})
+    j = wait(c, lambda j: j["status"] == "done")
+    rs = ok_rounds(j)
+    assert len(rs) == 3 and rs[0]["ends"] == [pytest.approx(0.0002), pytest.approx(0.0008)]
+    assert Path(j["raw_log"]).parent.parent == tmp_path / "proj" / "runs"
+
+
+def test_unplugged_message_stays_while_waiting(make):
+    lines = list(m.demo_lines(json.loads((DEMO / "door.json").read_text(encoding="utf-8")), 22))
+    dev = FakeSerialDevice(lines, break_at=40)
+    c, ports = make(device=dev)
+    orig = dev.stream
+
+    def unplug(port, on_line, stop):
+        try:
+            orig(port, on_line, stop)
+        except OSError:
+            ports.clear()  # 拔了线：设备也不在了
+            raise
+    dev.stream = unplug
+    c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 20})
+    j = wait(c, lambda j: j["status"] == "paused")
+    assert "断开" in j["message"] and "留着" in j["message"]
+    ports.append("/dev/cu.usbmodem1101")
+    assert len(ok_rounds(wait(c, lambda j: j["status"] == "done"))) == 20

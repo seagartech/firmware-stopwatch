@@ -67,39 +67,6 @@ def test_unknown_demo_is_404(client):
     assert client.get("/api/demo/nope").status_code == 404
 
 
-def stream(client, query):
-    with client.stream("GET", f"/api/device/stream?{query}&interval=0") as r:
-        assert r.headers["content-type"].startswith("text/event-stream")
-        body = "".join(r.iter_text())
-    return [l[6:] for l in body.splitlines() if l.startswith("data: ")]
-
-
-def test_device_output_streams_live(client):
-    lines = stream(client, "demo=door&rounds=2")
-    assert lines.count("FSW,RESET") == 2
-    assert any(re.fullmatch(r"FSW,P\d+,\d+,\d+", l) for l in lines)
-    assert lines[-1] == "END"
-
-
-def test_device_output_can_continue_from_a_later_round(client):
-    def last_time(start):
-        return stream(client, f"demo=voice&rounds=1&start={start}")[-2].split(",")[2]
-
-    assert last_time(5) != last_time(0)
-
-
-def test_device_output_can_include_a_round_that_was_not_fully_received(client):
-    lines = stream(client, "demo=door&rounds=3&drop_at=2")
-    rounds, cur = [], None
-    for l in lines:
-        if l == "FSW,RESET":
-            cur = []
-            rounds.append(cur)
-        elif l.startswith("FSW,P"):
-            cur.append(l)
-    assert [len(r) for r in rounds] == [5, 1, 5, 5]
-
-
 def test_state_without_flow_is_empty(client):
     assert client.get("/api/state").json()["flow"] is None
 
@@ -201,3 +168,10 @@ def test_flash_page_uses_real_insert_build_flash():
     for api in ("/api/fsw/insert", "/api/fsw/run", "/api/fsw/drop", "/api/fsw/restore", "fetch('/api/fsw')"):
         assert api in js, api
     assert "diffViewReal" in js and "flErrReal" in js
+
+
+def test_collect_page_reads_rounds_from_backend():
+    """任务 15：多轮实测的每轮数据由后台读设备输出算出来，不再直接拿演示数据里的数。"""
+    js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
+    assert "/api/collect/start" in js and "/api/collect/stop" in js and "fetch('/api/collect')" in js
+    assert "EventSource" not in js and "D.rounds[col.got" not in js

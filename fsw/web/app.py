@@ -3,7 +3,6 @@
 这一版只用演示数据；真读源码、真编译、真串口后面逐个接进来。
 """
 
-import asyncio
 import hashlib
 import json
 import re
@@ -12,7 +11,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -20,6 +19,7 @@ from fsw.config import load_config, save_config
 from fsw.scenario import to_page
 from fsw import identify as idf
 from fsw import instrument as ins
+from fsw import measure as meas
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, find_idf, find_ports, pick_idf
@@ -49,39 +49,6 @@ class StepBody(BaseModel):
     step: str
     message: str | None = None
     skip: list[str] = []
-
-
-def device_lines(demo, rounds, start=0, drop_at=0):
-    """按演示数据生成设备调试口会打出来的计时点行。
-
-    drop_at=k：在第 k 个完整轮之前插一轮只收到第一个计时点的（模拟没收全）。
-    """
-    S = demo["S"]
-    chains = []
-    for line in S["lines"]:
-        chain = []
-        for key in line["segs"]:
-            a, b = [p.strip() for p in S["segs"][key]["code"].split("→")]
-            chain.append((a, b, key))
-        chains.append(chain)
-    n = len(next(iter(S["segs"].values()))["v"])
-    for i, r in enumerate(range(start, start + rounds)):
-        base = 5_000_000 + r * 7_000_000
-        marks = {}
-        for chain in chains:
-            t = 0.0
-            marks.setdefault(chain[0][0], 0.0)
-            for a, b, key in chain:
-                t += S["segs"][key]["v"][r % n]
-                marks.setdefault(b, t)
-        ordered = sorted(marks.items(), key=lambda x: x[1])
-        if drop_at and i + 1 == drop_at:
-            yield "FSW,RESET"
-            p, t = ordered[0]
-            yield f"FSW,{p},{base - 3_000_000 + round(t * 1_000_000)},0"
-        yield "FSW,RESET"
-        for p, t in ordered:
-            yield f"FSW,{p},{base + round(t * 1_000_000)},0"
 
 
 PAGE_TO_STEP = {
@@ -125,6 +92,33 @@ class EspDevice:
             return EspIdf.read_for(ser, seconds, on_line)
         finally:
             ser.close()
+
+    def stream(self, port, on_line, stop):
+        """多轮实测：一直读调试口，一行交一行，直到 stop()；拔线时串口会报错，交给上面处理。"""
+        ser = EspIdf.open_port(port)
+        buf = b""
+        try:
+            while not stop():
+                chunk = ser.read(ser.in_waiting or 1)
+                if not chunk:
+                    continue
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    on_line(line.rstrip(b"\r").decode("utf-8", "replace"))
+        finally:
+            ser.close()
+
+
+class CollectBody(BaseModel):
+    rounds: int = 20
+    demo: str | None = None          # 演示数据（没真源码时）：按它的场景算；没设备时回放它的设备输出
+    page: dict | None = None         # 真找完的步骤（结果页数据）：按它的段算
+    source: str | None = None        # "device"：读真设备调试口；不写：演示数据回放
+    project_dir: str | None = None
+    resume: bool = False             # 接着测 / 再测几轮
+    interval: float = 0.12           # 回放时每行间隔（秒）
+    drop_at: int = 0                 # 回放时第几次故意没收全（演示"没收全，自动补测"）
 
 
 class FswInsertBody(BaseModel):
@@ -549,6 +543,102 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job.update(view=ins.diff_view(rec, a.steps), total=len(rec["steps"]), dropped=(job.get("dropped") or []) + [body.step])
         return _run_from("build")
 
+    # ---- 多轮实测：一轮轮收，收齐算一轮；没收全自动补；停止 / 接着测 / 从头重测；断开自动暂停 ----
+    col = {"job": None, "lock": threading.Lock()}
+
+    def _col_view(job):
+        return {k: v for k, v in job.items() if not k.startswith("_")}
+
+    @app.post("/api/collect/start")
+    def collect_start(body: CollectBody):
+        old = col["job"]
+        if old and old["status"] in ("running", "waiting_device", "paused"):
+            old["_stop"] = True
+            time.sleep(0.05)
+        if body.page:
+            spec = meas.Spec.from_page(body.page)
+        elif body.demo in demos:
+            spec = meas.Spec.from_scenario(demos[body.demo]["scenario"])
+        else:
+            raise HTTPException(400, "不知道要测什么：先找关键步骤")
+        if body.resume and old:
+            job, coll = old, old["_coll"]
+            coll.finish()  # 停下时没收齐的那一轮不算
+        else:
+            base = Path(body.project_dir) if body.project_dir else live["data"] / "demo-runs"
+            run = base / "runs" / time.strftime("%Y%m%d-%H%M%S") if body.project_dir else base / f"{body.demo}-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}"
+            run.mkdir(parents=True, exist_ok=True)
+            coll = meas.Collector(spec)
+            job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll}
+            col["job"] = job
+        job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
+        raw = open(job["raw_log"], "a", encoding="utf-8")
+
+        def ok_count():
+            return len([r for r in job["rounds"] if r["ok"]])
+
+        def on_line(line):
+            raw.write(line + "\n")  # 设备调试口原样存一份（码表不改日志去向）
+            raw.flush()
+            for r in coll.feed(line):
+                job["rounds"].append(r)
+            job["progress"], job["last"] = list(coll.progress()), coll.last
+            if ok_count() >= job["target"]:
+                job["_stop"] = True
+
+        stop = lambda: job["_stop"]
+
+        def run_demo():
+            d = demos[body.demo]
+            ok0 = ok_count()
+            for line in meas.demo_lines(d, max(0, job["target"] - ok0) + 1, start=ok0,
+                                        drop_at=body.drop_at if not body.resume else 0):
+                if stop():
+                    break
+                on_line(line)
+                if body.interval:
+                    time.sleep(body.interval)
+
+        def run_device():
+            while not stop():
+                ports = port_finder()
+                if not ports:
+                    job.update(status="waiting_device" if job["status"] != "paused" else "paused")
+                    time.sleep(wait_step)
+                    continue
+                job.update(status="running", message="", port=ports[0])
+                try:
+                    device.stream(ports[0], on_line, stop)
+                except Exception as e:  # 拔线了：已测的留着，插回后接着测
+                    coll.finish()
+                    job["pauses"] = job.get("pauses", 0) + 1
+                    job.update(status="paused", message=f"设备断开了，已测的 {ok_count()} 轮都留着；插回去会自动接着测。",
+                               error=str(e))
+                    time.sleep(wait_step)
+
+        def run():
+            try:
+                (run_device if body.source == "device" else run_demo)()
+            finally:
+                raw.close()
+                coll.finish()
+                if job is col["job"]:
+                    job["status"] = "done" if ok_count() >= job["target"] else "stopped"
+
+        threading.Thread(target=run, daemon=True).start()
+        return _col_view(job)
+
+    @app.post("/api/collect/stop")
+    def collect_stop():
+        job = col["job"]
+        if job:
+            job["_stop"] = True
+        return _col_view(job) if job else {"status": "idle"}
+
+    @app.get("/api/collect")
+    def collect_status():
+        return _col_view(col["job"]) if col["job"] else {"status": "idle", "rounds": []}
+
     @app.get("/api/fsw")
     def fsw_status():
         return fsw["job"] or {"status": "idle"}
@@ -750,22 +840,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(400, "先选一个固件源码位置")
         unpack = ascii_work_root(live["data"]) / "_unpack" / hashlib.sha1(str(path).encode()).hexdigest()[:10]
         return prepare(path, data_dir=live["data"], board=body.board, unpack_to=unpack)
-
-    @app.get("/api/device/stream")
-    async def device_stream(
-        demo: str, rounds: int = 1, start: int = 0, drop_at: int = 0, interval: float = 0.05
-    ):
-        if demo not in demos:
-            raise HTTPException(404, "没有这套演示数据")
-
-        async def gen():
-            for line in device_lines(demos[demo], rounds, start, drop_at):
-                yield f"data: {line}\n\n"
-                if interval:
-                    await asyncio.sleep(interval)
-            yield "data: END\n\n"
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.middleware("http")
     async def no_stale_page(request, call_next):
