@@ -473,7 +473,18 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.post("/api/fsw/insert")
     def fsw_insert(body: FswInsertBody):
-        _, model = _model()
+        proj = Path(body.project_dir)
+        try:
+            fp = json.loads((proj / "project.json").read_text(encoding="utf-8")).get("fingerprint")
+        except (OSError, ValueError):
+            fp = None
+        try:  # 源码和步骤都没变（比如码表重开过）：用上次的插入方案，不再调用大模型；设置里关掉"用上次结果"就不沿用
+            last = json.loads((proj / "fsw-plan.json").read_text(encoding="utf-8"))
+            cached = last["reply"] if (fp and cfg().reuse_last and last.get("fingerprint") == fp
+                                       and last.get("steps") == body.steps) else None
+        except (OSError, ValueError, KeyError):
+            cached = None
+        model = None if cached else _model()[1]
         job = {"phase": "insert", "status": "running", "pct": 0, "log": "AI 在读代码，确定每个计时点插在哪一行",
                "started": time.time(), "seconds": {}, "view": None, "err": None, "got": [], "total": 0, "port": None}
         fsw.update(job=job, args=body)
@@ -490,17 +501,24 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 def investigate(self, prompt, root, on_text=None, on_tool=None):
                     plan_text["t"] = model.investigate(prompt, root, on_text=on_text, on_tool=on_tool)
                     return plan_text["t"]
-            try:
-                t0 = time.time()
-                needs = stds.needed_values(steps, stds.find(steps))  # 问题规则要看附加值的计时点：让 AI 顺带记上
-                text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
-                                         on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
-            except llms.LLMError as e:
-                return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。")
+            t0 = time.time()
+            needs = stds.needed_values(steps, stds.find(steps))  # 问题规则要看附加值的计时点：让 AI 顺带记上
+            if cached:
+                text = cached
+                job.update(reused=True, log="源码和步骤都没变，用上次的插入方案，没调用大模型")
+            else:
+                try:
+                    text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
+                                             on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
+                except llms.LLMError as e:
+                    return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。")
             Path(body.project_dir).mkdir(parents=True, exist_ok=True)
             (Path(body.project_dir) / "fsw-plan-reply.txt").write_text(text, encoding="utf-8")  # AI 的原话留一份，出错时好查
             plan = ins.parse_plan(text, body.work, steps, needs)
             job["seconds"]["insert"] = round(time.time() - t0, 1)
+            if plan["ok"] and fp:
+                (proj / "fsw-plan.json").write_text(json.dumps({"fingerprint": fp, "steps": steps, "reply": text},
+                                                               ensure_ascii=False), encoding="utf-8")
             if not plan["ok"]:
                 return _fail(job, "insert", plan["message"])
             if not bg["job"] or bg["job"].get("work") != body.work:  # 码表重开过：原版再编一次（只是检查，很快）
