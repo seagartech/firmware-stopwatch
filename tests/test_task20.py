@@ -189,3 +189,35 @@ def test_reinsert_after_restart_reuses_the_plan(flash, tmp_path):
     start_insert(c2, r)
     j = fwait(c2, lambda j: j["status"] in ("inserted", "failed"))
     assert j["status"] == "inserted" and j.get("reused") and calls == []
+
+
+class Pauses:
+    """真机那样：收齐一轮后，人要停一会儿才说下一句（这段时间调试口只有固件自己的日志）。"""
+
+    def __init__(self, first):
+        self.first = first
+
+    def stream(self, port, on_line, stop):
+        for l in self.first:
+            on_line(l)
+        while not stop():
+            on_line("I (1234) Application: STATE: listening")
+            time.sleep(0.01)
+
+
+def test_normal_pause_between_rounds_is_not_an_error(col):
+    """一轮收齐以后等你说下一句：不算"没有计时点"，不弹提示。"""
+    from tests.test_advise_api import real_log
+    c = col(Pauses(real_log(1)))
+    time.sleep(1.0)
+    j = c.get("/api/collect").json()
+    assert len([r for r in j["rounds"] if r["ok"]]) == 1 and not j.get("hint")
+    c.post("/api/collect/stop")
+
+
+def test_stuck_in_the_middle_of_a_round_gets_a_hint(col):
+    """一轮做到一半卡住（起点有了，后面的一直没来）：才提示。"""
+    c = col(Pauses(["FSW,RESET,1000,0", "FSW,P1,1500,1"]))
+    j = wait(c, lambda j: j.get("hint"), timeout=5)
+    assert "做到一半" in j["hint"]
+    c.post("/api/collect/stop")

@@ -240,6 +240,8 @@ class SuggestBody(BaseModel):
     work: str
     name: str | None = None
     chip: str | None = None
+    project_dir: str | None = None   # 源码没变（指纹一样）就用上次的推荐，不再调用大模型
+    fingerprint: str | None = None
 
 
 class AddStepBody(BaseModel):
@@ -707,13 +709,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def ok_count():
             return len([r for r in job["rounds"] if r["ok"]])
 
-        quiet = {"since": time.time(), "lines": 0, "odd": 0}  # 上一个计时点以来：多久、收到几行别的、几行乱码
+        quiet = {"since": time.time(), "lines": 0, "odd": 0, "any": False}  # 上一个计时点以来：多久、几行别的、几行乱码；收到过计时点没有
 
         def on_line(line):
             raw.write(line + "\n")  # 设备调试口原样存一份（码表不改日志去向）
             raw.flush()
             if meas.parse_line(line):
-                quiet.update(since=time.time(), lines=0, odd=0)
+                quiet.update(since=time.time(), lines=0, odd=0, any=True)
                 job["hint"] = ""
             else:
                 quiet["lines"] += 1
@@ -740,14 +742,20 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def watch_quiet():
             """调试口开着却一直没有计时点：不停下，说人话提示是哪种情况（做了 / 插好就接着收）。"""
             while not stop() and job is col["job"]:
-                if job["status"] == "running" and time.time() - quiet["since"] > NO_DATA_SECS:
+                mid = coll.started and coll.cur and not coll.done  # 一轮做到一半
+                waiting = quiet["any"] and not mid  # 收齐一轮、等你做下一次：两次之间正常停顿，不算出错
+                if job["status"] == "running" and not waiting and time.time() - quiet["since"] > NO_DATA_SECS:
                     secs = int(time.time() - quiet["since"])
-                    job["hint"] = (f"已经 {secs} 秒设备一点输出都没有：看看线是不是插在了别的设备上，或者设备卡住了，拔插一下试试。"
+                    job["hint"] = (f"这一轮做到一半，{secs} 秒没有下一个计时点：可能这一次没走完（比如没听清、服务器没回）。"
+                                   "再做一次要测的事就行，这一轮不算、会自动补。" if mid else
+                                   f"已经 {secs} 秒设备一点输出都没有：看看线是不是插在了别的设备上，或者设备卡住了，拔插一下试试。"
                                    if not quiet["lines"] else
                                    f"已经 {secs} 秒收到的都是乱码：多半是波特率不对（码表按 115200 读），或者插的不是这块板子。"
                                    if quiet["odd"] >= quiet["lines"] / 2 else
                                    f"设备在输出，但 {secs} 秒没有计时点：照提示做一次要测的事；还是没有的话，"
                                    "设备上可能不是计时版（回到上一步重新烧录、试一次）。")
+                elif waiting:
+                    job["hint"] = ""
                 time.sleep(min(1.0, NO_DATA_SECS / 3))
 
         def run_device():
@@ -952,11 +960,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if not done:
                 continue
             meta, now, n = done[-1]
+            full = [d for d in done[:-1] if d[2] >= 10]  # 不足 10 轮（跑流程）的不拿来比，也不当"上次"
             page = meta["page"]
             metric = (page.get("measure") or "").split("→")[-1].strip() or "终点"
             out.append({"name": info.get("name", proj.name) + (f"（{info['board']}）" if info.get("board") else ""),
                         "what": meta.get("what") or "", "last": meta.get("measured_at") or "", "rounds": n, "metric": metric,
-                        "now": now, "prev": done[-2][1] if len(done) > 1 else None, "path": info.get("source"),
+                        "now": now, "prev": full[-1][1] if full and n >= 10 else None, "few": n < 10, "path": info.get("source"),
                         "project_dir": str(proj), "report": _latest_report(proj),
                         "fsw_on": _fsw_on(proj)})
         return sorted(out, key=lambda x: x["last"], reverse=True)
@@ -1193,9 +1202,23 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.post("/api/suggest")
     def suggest(body: SuggestBody):
-        """选好固件后的"AI 推荐"常用语：只给项目概况，一般十几秒。"""
+        """选好固件后的"AI 推荐"常用语：只给项目概况，一般十几秒。源码没变就用上次的，不再调用大模型。"""
+        f = Path(body.project_dir) / "suggest.json" if body.project_dir and body.fingerprint else None
+        provider = cfg().llm_provider
+        if f and cfg().reuse_last:
+            try:
+                last = json.loads(f.read_text(encoding="utf-8"))
+                if last.get("fingerprint") == body.fingerprint and last.get("provider") == provider and last.get("phrases"):
+                    return {"phrases": last["phrases"], "called": False}
+            except (OSError, ValueError):
+                pass
         _, model = _model()
-        return {"phrases": idf.suggest(model, body.work, {"name": body.name, "chip": body.chip})}
+        phrases = idf.suggest(model, body.work, {"name": body.name, "chip": body.chip})
+        if f and phrases:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps({"fingerprint": body.fingerprint, "provider": provider, "phrases": phrases},
+                                    ensure_ascii=False), encoding="utf-8")
+        return {"phrases": phrases, "called": True}
 
     @app.post("/api/identify/add")
     def identify_add(body: AddStepBody):

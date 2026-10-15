@@ -342,3 +342,15 @@ def test_round_count_is_flexible_3_to_100():
     rp = js.split("function reportPage(")[1].split("\nfunction ")[0]
     assert "适合跑流程，数字不作数" in rp and "次数少，结论只供参考" in rp
     assert "D.n<10" in js.split("function tiers(")[1].split("\nfunction ")[0]  # 少于 10 轮不显示"10 次里最慢"
+
+
+def test_acceptance_fixes_on_the_page():
+    """真机验收发现的问题（页面部分）。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "const noCode=" in js and "noCode(" in js.split("function activeFixes(")[1].split("\nfunction ")[0]  # 1
+    assert "project_dir:REAL.project_dir,fingerprint:REAL.fingerprint" in js and "REAL.aiCalled" in js       # 2
+    assert "x.missing.join" in js                                                                              # 5
+    assert "没收到：" in js                                                                                     # 6
+    assert "expandHome(" in js                                                                                  # 7
+    assert "这里只演示样子" not in js.split("function dev(")[1].split("\nfunction ")[0] or "realFlash()?" in js   # 8
+    assert "h.few" in js                                                                                        # 9

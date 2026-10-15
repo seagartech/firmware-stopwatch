@@ -187,7 +187,7 @@ function dev(D){const T=D.S.tech;
   const lineRows=D.lines.map(l=>{const [v,c]=D.verdict(l);return `<tr><td style="font-family:var(--sans)"><b>${l.name}合计</b>：${l.segs.map(k=>D.S.segs[k].name).join(' → ')}</td><td></td><td></td><td class="r">${f(l.med)}</td><td class="r">${f(Math.min(...l.ends))}～${f(l.max)}</td><td class="r">${l.ok?`${l.ok[0]}～${l.ok[1]??'不限'}`:'—'}</td><td style="font-family:var(--sans)"><span class="chip ${c}">${v}</span>${l===D.main&&D.exp?` <span class="chip ${D.exp[1]}">体验${D.exp[0]}</span>`:''}</td></tr>`}).join('');
   const bad=[...new Set([...D.reversed,...D.slowRounds])].sort((a,b)=>a.n-b.n);
   const ovLo=(T.pts*.002).toFixed(3),ovHi=(T.pts*.003).toFixed(3);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>技术细节</h1><p class="sub">在代码哪里、具体怎么改、怎么验证。单位秒。<br>段名、代码位置和合理范围来自 AI 识别结果和这个设备的标准文件；这里只演示样子。</p></div>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>技术细节</h1><p class="sub">在代码哪里、具体怎么改、怎么验证。单位秒。<br>${realFlash()?'段名和代码位置来自找关键步骤的结果，合理范围来自码表自带的标准文件。':'段名、代码位置和合理范围来自 AI 识别结果和这个设备的标准文件；这里只演示样子。'}</p></div>
   <section class="panel"><h2>测量条件</h2><dl class="kv" style="grid-template-columns:6em 1fr">${T.cond.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('')}
    <dt>计时点开销</dt><dd>每个计时点往调试口打印一行，约 0.002～0.003 秒（按调试口速度推算，未实测）。<br>一轮最多经过 ${T.pts} 个计时点，设备那几段的数字最多偏大约 ${ovLo}～${ovHi} 秒；服务器、网络那几段不受影响。<br>想确认开销，可以在"插计时点和烧录"页切回原版，各收一次比较。</dd></dl></section>
   <section class="panel scroll"><h2 style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">分段用时<button class="pill" data-go="range">合理范围依据</button></h2><table class="num"><thead><tr><th>段（计时点）</th><th>代码位置${T.locNote||''}</th><th>谁负责</th><th class="r">中位数</th><th class="r">最小～最大</th><th class="r">合理</th><th>判断</th></tr></thead><tbody>${segRows}${lineRows}</tbody></table></section>
@@ -240,7 +240,7 @@ function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="b
 let toastT=null;function toast(m){const t=document.getElementById('toast');t.textContent=m;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},1600)}
 // 首页"以前测过的"：真测过的记录（后台按结果文件夹里的原始日志重算）；演示数据只在演示入口（地址里写 ?demo=）出现
 let HIST=[];async function histLoad(){try{HIST=await (await fetch('/api/history')).json()}catch(e){}}
-const histRow=h=>`<div class="lrow"><button data-hopen="${htmlEsc(h.project_dir)}"><span><b>${htmlEsc(h.name)}</b>　<span class="note">${htmlEsc(h.what)} · ${htmlEsc(h.last)}</span></span><span class="num">${htmlEsc(h.metric)} ${f(h.now)} 秒　${h.prev!=null?arrow(h.now,h.prev):'<span class="note">第一次测</span>'}</span></button></div>${h.fsw_on?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-hrestore="${htmlEsc(h.project_dir)}">还原成原版</button></div>`:''}`;
+const histRow=h=>`<div class="lrow"><button data-hopen="${htmlEsc(h.project_dir)}"><span><b>${htmlEsc(h.name)}</b>　<span class="note">${htmlEsc(h.what)} · ${htmlEsc(h.last)}</span></span><span class="num">${htmlEsc(h.metric)} ${f(h.now)} 秒　${h.few?`<span class="note">只测了 ${h.rounds} 轮，跑流程，不比较</span>`:h.prev!=null?arrow(h.now,h.prev):'<span class="note">第一次测</span>'}</span></button></div>${h.fsw_on?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-hrestore="${htmlEsc(h.project_dir)}">还原成原版</button></div>`:''}`;
 const recentList=()=>DEMO?PROJ_LIST():HIST.length?`<div class="list">${HIST.map(histRow).join('')}</div>`:'<p class="note" style="margin:0">还没有测过。选一份固件源码开始，测完会出现在这里。</p>';
 const PROJ_LIST=()=>`<div class="list">${PROJ.map(p=>`<div class="lrow"><button data-open="${p.scene}"><span><b>${p.name}</b>　<span class="note">${p.what} · ${p.last}</span></span><span class="num">${p.metric} ${f(p.now)} 秒　${arrow(p.now,p.prev)}</span></button><button class="pill" data-retest="${p.scene}">改完了，再测一次</button></div>${p.fswOnDevice&&!restored[p.scene]?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-restore="${p.scene}">还原成原版</button></div>`:''}`).join('')}</div>`;
 let pName='',restored={},hNeed=false,hSrc='',hReading=false,hErr='',hScan=0,hScanT=null;
@@ -256,7 +256,7 @@ async function realPick(body,label,board){hErr='';envBack='home';hBoardNeed=fals
  REAL={...r.info,body,label:hSrc,work:r.work,project_dir:r.project_dir,fingerprint:r.fingerprint,ai:null};pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');IDENT=null;
  hScan=1;if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);
  // AI 推荐：只给大模型项目概况（目录、说明文件），一般十几秒；没设置大模型就不扫
- if(r.status!=='needs_board'&&envKey()){const me=REAL;fetch('/api/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:r.work,name:REAL.name,chip:REAL.chip})}).then(x=>x.ok?x.json():{phrases:[]}).catch(()=>({phrases:[]})).then(j=>{if(REAL!==me)return;REAL.ai=j.phrases||[];hScan=2;if(page==='home')render()})}
+ if(r.status!=='needs_board'&&envKey()){const me=REAL;fetch('/api/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:r.work,name:REAL.name,chip:REAL.chip,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint})}).then(x=>x.ok?x.json():{phrases:[]}).catch(()=>({phrases:[]})).then(j=>{if(REAL!==me)return;REAL.ai=j.phrases||[];REAL.aiCalled=!!j.called;hScan=2;if(page==='home')render()})}
  else{REAL.ai=[];hScan=2;render()}}
 function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
  const q=hBoardQ.trim().toLowerCase(),list=REAL.boards.filter(b=>!q||b.id.toLowerCase().includes(q)||(b.chip||'').toLowerCase().includes(q));
@@ -275,9 +275,11 @@ async function uploadDrop(items){const tok=Math.random().toString(36).slice(2,12
  let i=0;const put=async()=>{while(i<files.length){const [rel,file]=files[i++];await fetch(`/api/source/upload/${tok}/`+rel.split('/').map(encodeURIComponent).join('/'),{method:'PUT',body:file})}};
  await Promise.all([...Array(8)].map(put));
  realPick({upload:tok},label)}
+// 粘贴的 ~/… 路径：换成码表认出来的完整路径（源码根目录），再去对"以前测过的"
+const expandHome=p=>REAL&&REAL.root&&/^~(\/|$)/.test(String(p||''))?REAL.root:p;
 function chips(){const C=(t,x)=>`<button class="pill" data-fill="${x}">${x}</button>`;
  const seen=new Set(),uniq=a=>a.filter(x=>x&&!seen.has(x)&&seen.add(x));  // 同一句只出现一次：测过的 > AI 推荐 > 通用例子
- const hist=uniq((DEMO?PROJ:HIST).filter(p=>p.path===hSrc).map(p=>p.what)),ai=uniq(REAL&&REAL.ai?REAL.ai:FF[scene].ai),gen=uniq(['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成']);
+ const hist=uniq((DEMO?PROJ:HIST).filter(p=>[hSrc,expandHome(hSrc),REAL&&REAL.root].includes(p.path)).map(p=>p.what)),ai=uniq(REAL&&REAL.ai?REAL.ai:FF[scene].ai),gen=uniq(['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成']);
  const row=(lbl,arr)=>`<div class="chiprow"><span class="note">${lbl}</span><div class="pills">${arr.map(x=>C(0,x)).join('')}</div></div>`;
  return (hist.length?row('这个项目测过的',hist):'')+(hScan===2?(ai.length?row('AI 推荐',ai):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note">${REAL&&REAL.needs_board?'选好板子后，AI 会扫一遍这个固件。':envKey()?'这次没扫出来，直接写就行。':'设置好大模型后，选完固件会自动扫一遍。'}</span></div>`):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note"><span class="spin"></span> 正在扫这个固件有哪些流程，约 10～20 秒（估算）。不用等，可以直接写。</span></div>`)+row('通用例子',gen)+`<p class="note" style="margin:8px 0 0">不知道测什么，就从「AI 推荐」里挑一个。</p>`}
 const examples=`<div class="pills"><span class="note">比如：</span>${['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'].map(x=>`<button class="pill" data-fill="${x}">${x}</button>`).join('')}</div>`;
@@ -400,7 +402,9 @@ function staleBar(){if(JREP&&!JREP._none&&JREP.scenario&&JREP.scenario.standard!
   if(JREP.stale)return `<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 ${htmlEsc(JREP.stale_since)} 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`;
   return JREP._refreshed?`<p class="note" style="margin:0">✓ 已按 ${htmlEsc(JREP._refreshed)} 改过的合理范围更新。测出来的用时没变。</p>`:''}
  return flow?'':stale===1?`<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 10-13 14:20 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`:stale===2?`<p class="note" style="margin:0">✓ 已按 10-13 14:20 改过的合理范围更新。测出来的用时没变。</p>`:''}
-function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:plain(F.why),impact:plain(F.impact),rec:plain(F.rec),opts:F.opts.map(o=>({...o,name:plain(o.name),effect:plain(o.effect),cost:plain(o.cost),wn:plain(o.wn)}))})});return out}
+// 负责人看的文字不出现代码：括号里带文件名、行号、函数名的整段去掉（码表格式检查也会拦，这里兜底早先存下的建议）
+const noCode=t=>String(t||'').replace(/\s*[（(][^（）()]*?(?:[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\))[^（）()]*?[）)]/g,'');
+function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:noCode(plain(F.why)),impact:noCode(plain(F.impact)),rec:noCode(plain(F.rec)),opts:F.opts.map(o=>({...o,name:noCode(plain(o.name)),effect:noCode(plain(o.effect)),cost:noCode(plain(o.cost)),wn:noCode(plain(o.wn))}))})});return out}
 const ESTNOTE='<ul class="notes"><li><b>工作量</b>只分大、中、小，看的是要改多少、要不要别人配合，不折算成天数（码表不知道你们团队的人手和熟练度）。</li><li><span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护</li><li><b>效果</b>都是估算：依据是这次的实测数据、代码和公开资料，做完要用码表再测一次才算数。</li><li>码表只给建议，不会自动改代码。</li></ul>';
 function optTable(F,fi,pick){
   return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>`;
@@ -697,6 +701,8 @@ function flStop(){clearInterval(flT);flT=null}
 let FSWJ=null,fswT=null;
 const realFlash=()=>!!(REAL&&REAL.work&&IDENT&&IDENT.page);
 // 试一次要人做的事：真流程按你写的"测什么"说（对话类：先喊唤醒词，再说一句）；演示数据用它自己的说法
+// 试一次没收到的计时点叫什么（页面上写出来，说清为什么少）
+const tryMissing=()=>{if(!FSWJ||!FSWJ.view)return [];const nm=Object.fromEntries(live().map(x=>[fswId(x.p),x.n]));return (FSWJ.view.steps||[]).filter(k=>!(FSWJ.got||[]).includes(+k.slice(1))).map(k=>nm[k]||k)};
 const trySay=()=>{if(!realFlash())return FF[scene].big;const w=IDENT.page.mapWhat||hSay||'';const st=(IDENT.page.measure||'').split('→')[0].trim();return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':`先做一次：${htmlEsc(st||w)}`};
 // 计时点编号和后台一样：P3 → P3；你自己加的 U1、U2 → P21、P22
 const fswId=p=>{if(/^P\d+$/.test(p))return p;const u=live().filter(x=>!/^P\d+$/.test(x.p)).map(x=>x.p);return 'P'+(20+u.indexOf(p)+1)};
@@ -745,7 +751,7 @@ function flList(from=0,to=4){const n=to-from+1;
  const say=FF[scene].big;
  const N=realFlash()&&FSWJ?FSWJ.total||live().length:live().length,got=realFlash()&&FSWJ?(FSWJ.got||[]).length:Math.min(N,Math.round(fl.pct/100*N));
  const big=fl.st===6&&to>=4?`<div class="bigask"><b>试一次：${trySay()}</b><span class="note">设备烧完会重启。等它准备好（有屏幕的，等回到待命画面），再点「准备好了」；点了以后最多等 ${FSWJ&&FSWJ.try_secs||45} 秒。只是确认计时点能收到，不算进数据。</span><button class="btn pri" data-flx="trygo">准备好了</button></div>`
-  :fl.st===1&&fl.step===4&&to>=4?`<div class="bigask"><b>${realFlash()?'现在：'+trySay():'试一次：'+say}</b><span class="note">${realFlash()?`最多等 ${FSWJ&&FSWJ.try_secs||45} 秒，收到计时点就停。`:FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`:fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点（有的这一次没走到，不影响多轮实测）`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
+  :fl.st===1&&fl.step===4&&to>=4?`<div class="bigask"><b>${realFlash()?'现在：'+trySay():'试一次：'+say}</b><span class="note">${realFlash()?`最多等 ${FSWJ&&FSWJ.try_secs||45} 秒，收到计时点就停。`:FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`:fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点。没收到：${tryMissing().join("、")||"—"}。这一次没走到这一步（有的计时点只在某些情况下才走到，比如喊醒那一下设备不会判断你说完了），不影响多轮实测`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
  return `<ol class="isteps">${li}</ol>${big}${fl.st===1&&fl.step!==4?`<div class="ilog"><span class="note">最新一行</span><code>${fl.log||'…'}</code><button class="pill">完整日志</button></div>`:''}`}
 
 let diffOpen=new Set();
@@ -862,9 +868,10 @@ async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={
  try{const r=await fetch('/api/collect/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast('✕ '+(j.detail||'没开始'));col.st=0;render();return}colApply(j)}catch(e){toast('✕ 码表后台没有回应');return}
  colT=setInterval(async()=>{try{colApply(await (await fetch('/api/collect')).json())}catch(e){}},300)}
 const okRounds=()=>col.got.filter(x=>!x.bad);
-function issues(x){if(x.bad)return `<span class="chip c-gray">${CX().miss}，不计入，自动补收一轮</span>`;
+const missTxt=x=>x.missing&&x.missing.length?`没收全：缺「${x.missing.join('」「')}」`:CX().miss;
+function issues(x){if(x.bad)return `<span class="chip c-gray">${missTxt(x)}，不计入，自动补收一轮</span>`;
  return x.probs.map(p=>`<span class="chip c-${p.c}">${p.t}</span>`).join(' ')||'<span class="note">正常</span>'}
-function colSetup(){const C=CX(),D=DX();return `${justFlashed?`<div class="okbar">✓ 计时版已烧进设备，试的那一次 ${realFlash()&&FSWJ&&(FSWJ.got||[]).length<FSWJ.total?`收到了 ${(FSWJ.got||[]).length} / ${FSWJ.total} 个计时点`:`${realFlash()&&FSWJ?FSWJ.total:live().length} 个计时点都收到了`}。下面开始多轮实测。</div>`:''}<section class="panel"><h1 style="font-size:22px">多轮实测：${C.cnt} ${colN} ${C.unit}</h1>
+function colSetup(){const C=CX(),D=DX();return `${justFlashed?`<div class="okbar">✓ 计时版已烧进设备，试的那一次 ${realFlash()&&FSWJ&&(FSWJ.got||[]).length<FSWJ.total?`收到了 ${(FSWJ.got||[]).length} / ${FSWJ.total} 个计时点（没收到：${tryMissing().join('、')}，这一次没走到，不影响多轮实测）`:`${realFlash()&&FSWJ?FSWJ.total:live().length} 个计时点都收到了`}。下面开始多轮实测。</div>`:''}<section class="panel"><h1 style="font-size:22px">多轮实测：${C.cnt} ${colN} ${C.unit}</h1>
  <p style="margin:4px 0 0">同样的事做很多轮，码表从设备输出里记下每一轮各段用了多久。刚才试的那一次不算。</p>
  <div class="status" style="margin:6px 0 4px">${REAL&&!devNow().on?'<span><i class="dot" style="background:var(--warn)"></i>没看到设备：用 USB 线插上，插上会自动继续</span>':`<span><i class="dot" style="background:var(--ok)"></i>${C.dev}已连上${REAL?' '+htmlEsc(devNow().port):''}，计时点输出正常</span>`}<span><i class="dot" style="background:var(--ok)"></i>${C.mode}</span><span><i class="dot" style="background:var(--ok)"></i>量 ${D.lines.length} 条线：${D.lines.map(l=>D.S.startShort+' → '+l.end).join('；')}</span></div>
  <dl class="cform">
@@ -882,7 +889,7 @@ function colA(open=true){const g=col.got,L=DX().lines,C=CX();
  return `<section class="panel"><h2>已测 <span class="num">${okRounds().length}</span> / ${colN} 轮</h2>
  ${col.st===1?`<p class="note" style="margin-top:0">现在：第 ${col.att+1} 次，${PH()[col.phase]}……　下一${C.unit}："${C.items[okRounds().length%C.items.length]}"</p>`:''}${tab}</section>`}
 function tipOf(x){const C=CX(),L=DX().lines,at=t=>t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
- if(x.bad)return at(`<b>第 ${x.att} 次：${C.miss}</b><br>不计入，已自动补测一轮`);
+ if(x.bad)return at(`<b>第 ${x.att} 次：${missTxt(x)}</b><br>不计入，已自动补测一轮`);
  return at(`<b>第 ${x.n} 轮</b>　${C.said}“${C.items[(x.n-1)%C.items.length]}”<br>`+L.map((l,i)=>`${l.end}：<b>${f(x.e[i])} 秒</b>${l.ok&&x.e[i]>l.ok[1]?`（超出合理范围 ${l.ok[0]}～${l.ok[1]} 秒）`:''}`).join('<br>')+'<br>'+(x.probs.length?x.probs.map(p=>'⚠ '+p.t).join('　'):'✓ 没出问题'))}
 function colB(){const k=okRounds().length,cur=Math.min(k,colN-1),C=CX();
  const sq=x=>{const p=x.probs&&x.probs[0];return `<i class="sq" tabindex="0" data-tip="${tipOf(x)}" style="background:${x.bad?'var(--soft)':p?`var(--${p.c})`:'var(--ok)'}"></i>`};
@@ -1065,7 +1072,7 @@ function bgFoundSpan(){return bgFailed()?`<span><i class="dot" style="background
  :!envComp()||bgWaitTool()?`<span><i class="dot" style="background:var(--warn)"></i>${inst.st===1?'编译工具正在后台装，装好就编原版':'编译工具还没装，原版没编：烧录前装好就行'}</span>`
  :!bgDone()?`<span><i class="dot" style="background:var(--warn)"></i>后台还在编原版：${bgPct()}%（不挡下一步，编译那步会等它）</span>`
  :`<span><i class="dot" style="background:var(--ok)"></i>后台已把原版编译通过（${BGTIME()}）</span>`}
-const tookTxt=llm=>REAL&&IDENT?(IDENT.reused?'源码和要测的都没变，直接用了上次的结果，没调用大模型':`用时 ${mmss(IDENT.seconds)}，调用 1 次 ${llm}`):`用时 1 分 10 秒，调用 1 次 ${llm}`;
+const tookTxt=llm=>REAL&&IDENT?(IDENT.reused?'源码和要测的都没变，直接用了上次的结果，没调用大模型':`用时 ${mmss(IDENT.seconds)}，调用 1 次 ${llm}`)+(REAL.aiCalled?`；选源码时扫「AI 推荐」另调用了 1 次`:''):`用时 1 分 10 秒，调用 1 次 ${llm}`;
 function modalHTML(){const F=FF[scene],llm=usedLLM();
  const meant=hSay===F.ai[0]?F.measure:hSay.replace(/^从/,'').replace('到',' → ');
  if(hStage===2)return `<h2 id="dlg-t">确认要测的内容</h2>

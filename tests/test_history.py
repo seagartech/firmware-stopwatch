@@ -81,3 +81,14 @@ def test_exports_are_remembered_for_the_record(client, tmp_path):
     r = c2.post("/api/report/export", json={"html": "<!doctype html><p>x</p>", "what": "从我说完话到设备回话"}).json()
     h = c2.get("/api/history").json()
     assert h[0]["report"] == r["path"] and h[0]["what"] == "从我说完话到设备回话"
+
+
+def test_few_rounds_are_not_compared(client):
+    """不足 10 轮（跑流程）的结果不拿来比，也不当"上次"。"""
+    c, data, _ = client
+    proj = project(data, runs=1)
+    run = proj / "runs" / "20261015-2240"
+    run.mkdir(parents=True)
+    (run / "raw.log").write_text("\n".join(real_log(3)), encoding="utf-8")
+    h = c.get("/api/history").json()[0]
+    assert h["rounds"] == 3 and h["prev"] is None and h["few"]
