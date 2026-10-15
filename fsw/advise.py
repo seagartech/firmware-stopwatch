@@ -89,6 +89,7 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - 另外写一句 fine："不用改的"是哪些（设备自己哪几段正常）。
 中文、大白话。拿不准的写"推断"，不要编。why 写 2～4 句。
 说明文字里写段和计时点的中文名（比如"服务器想回答"），不要写 P2-P5 这样的编号；代码位置写文件名和行号。
+why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的：不能写文件名、行号、函数名、变量名；代码位置只写在 how 和 dev 里。
 
 ## 最后输出
 只输出一个 ```json 代码块：
@@ -157,6 +158,13 @@ def check(data, j, scenario):
                     bad.append(f"{where}方案 {oi} 没写{name}")
             if (o or {}).get("work") and o["work"] not in WORK:
                 bad.append(f"{where}方案 {oi} 的工作量只能写大、中、小、不确定")
+        for k in MANAGER_FIELDS:
+            if (hit := _code_in(f.get(k))):
+                bad.append(f"{where}给负责人看的文字里写了代码（{hit}），代码位置只能写在改法和技术细节里")
+        for oi, o in enumerate(opts, 1):
+            for k in MANAGER_OPT_FIELDS:
+                if isinstance(o, dict) and (hit := _code_in(o.get(k))):
+                    bad.append(f"{where}方案 {oi} 给负责人看的文字里写了代码（{hit}）")
         dev = f.get("dev")
         if not isinstance(dev, dict) or any(not str(dev.get(k) or "").strip() for k in DEV_FIELDS):
             bad.append(f"{where}的技术细节（数据、原因、改法、大小、风险、怎么验证）没写全")
@@ -180,6 +188,17 @@ def check(data, j, scenario):
     if missing:
         bad.append("这些问题没写卡片：" + "；".join(missing))
     return fixes, bad
+
+
+MANAGER_FIELDS = ("why", "impact", "rec")
+MANAGER_OPT_FIELDS = ("name", "effect", "cost", "wn")
+CODE_RE = re.compile(r"[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp|py|js)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\)|\b[a-z]+[A-Z]\w*|\b[A-Za-z]+_\w+")
+
+
+def _code_in(text):
+    """负责人看的文字里有没有代码（文件名、行号、函数名、变量名）。"""
+    m = CODE_RE.search(str(text or ""))
+    return m.group(0) if m else None
 
 
 def _rounds_said(text):

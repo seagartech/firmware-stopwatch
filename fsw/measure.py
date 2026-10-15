@@ -5,6 +5,7 @@
 - 有的计时点只在内存里记"最后一次"、到后面才打印，所以日志里的先后不等于发生的先后：一律按时间戳算。
 - 同一轮同一个计时点只认第一次。开始收的时候已经在一轮中间的那半轮不算。
 - 一轮要的计时点都收到了就算这一轮（不用等下一轮开始）；下一轮开始了还没收齐，就是"没收全"，不算、自动补测。
+- 连起点都没有的一轮不算一轮（比如对话类喊唤醒词那一下），不报没收全。
 设备输出原样存一份（码表不改日志去向），这里只读。纯计算，不用大模型。
 """
 
@@ -106,7 +107,8 @@ class Collector:
         name, us, val = p
         out = []
         if name == "RESET":
-            if self.started and self.cur and not self.done:
+            # 没有起点的一轮不算一轮（比如对话类喊唤醒词那一下：设备进聆听就清零，但没有"你说完"），不报没收全
+            if self.started and self.cur and not self.done and self.spec.start in self.cur:
                 out.append(self._bad())
             self.started, self.cur, self.done = True, {}, False
             return out
