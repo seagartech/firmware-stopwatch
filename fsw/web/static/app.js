@@ -32,7 +32,16 @@ function build(S){
   return S.J?withJudge(out,S.J):out;
 }
 // 报告用这次多轮实测真收到的数（演示数据回放时和演示数据一样）；选了真源码时，段、线、范围都按真步骤和对上的标准
-let JREP=null;
+let JREP=null,ADV=null,advT=null;
+// 为什么、怎么改（任务 17）：选了真源码、测完后，让 AI 读代码和这次的数据写（问题是码表按规则算的），这里每秒问一次
+const D0ok=()=>okRounds().length>0;
+async function advStart(){ADV={status:'running',read:''};fixPick=null;render();
+ const r=await fetch('/api/advise/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:REAL.work,steps:IDENT.page.steps,what:hSay,project_dir:REAL.project_dir})});
+ const j=await r.json();if(!r.ok){ADV={status:'failed',message:j.detail};render();return}ADV=j;clearInterval(advT);
+ advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render()}catch(e){}},1000)}
+function advBox(){if(!ADV||ADV.status==='done')return '';
+ if(ADV.status==='failed')return `<div class="errbox"><b>为什么、怎么改还没写出来</b><p style="margin:6px 0">${ADV.message||''}</p><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-advretry="1">重试</button></div></div>`;
+ return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(ADV.read)}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
 const repKey=()=>(realFlash()&&FSWJ&&FSWJ.status==='done'?'real':'demo:'+scene)+':'+okRounds().length;
 async function fetchReport(){const key=repKey(),u=key.startsWith('real')?'/api/report':'/api/report?demo='+encodeURIComponent(scene);
  try{const r=await fetch(u);JREP=r.ok?{...(await r.json()),_key:key}:{_key:key,_none:true}}catch(e){JREP={_key:key,_none:true}}if(page==='report')render()}
@@ -46,7 +55,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const exp=sc.experience?{fair:sc.experience.fair,label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.source||'体验标准'}）`}:null;
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:`${sShort}（${start?start.n:'起点'}）`,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
-  firstBeforeSecond:lines.length>1,fixes:[],fine:(()=>{const ok=J.segments.filter(g=>!g.outside&&g.verdict==='正常'&&!g.spiky);return ok.length?`设备自己的几段（${ok.map(g=>`${htmlEsc(g.name)} ${f(g.med)} 秒`).join('、')}）都正常，不用改。`:'设备自己的几段还没有能判的。'})(),
+  firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],fine:ADV&&ADV.status==='done'&&ADV.fine?htmlEsc(ADV.fine):(()=>{const ok=J.segments.filter(g=>!g.outside&&g.verdict==='正常'&&!g.spiky);return ok.length?`设备自己的几段（${ok.map(g=>`${htmlEsc(g.name)} ${f(g.med)} 秒`).join('、')}）都正常，不用改。`:'设备自己的几段还没有能判的。'})(),
   tech:{cond:[['项目',`${htmlEsc(REAL.name)}，${CHIP()}`],['合理范围',sc.standard?`码表自带的标准：${htmlEsc(sc.standard)}（按代码位置对上 ${Object.keys(sc.matched||{}).length} 个计时点）`:'还没有这个设备的合理范围']],pts:(IDENT.page.steps||[]).length,
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} 第 ${st[g.to].l} 行`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
@@ -439,7 +448,7 @@ function reportPage(D){
   return `<div class="stack">${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p></div>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2><p class="note" style="margin:-4px 0 8px">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、10 次里最慢、最差见「三档用时」。</p>${timeline(D)}</section>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
-  <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${fixA(D)}</section>
+  <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
   <section class="grid3" id="sec-lines">${lineCards(D)}</section>
   <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">三档用时<span class="tiernote"><i class="rdot"></i>"10 次里最慢"：每 10 次大约有 1 次会这么慢或更慢${D.n<20?'（这次只收了 '+D.n+' 轮，这一档只供参考）':''}</span></h2>${tiers(D)}</section>
@@ -769,7 +778,7 @@ function colApply(j){const C=CC(),before=col.got.length;if(j.status==='done'||j.
  for(const x of col.got.slice(before))ding(!!x.bad);
  if(j.status==='done'){colStop();col.st=2}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
  if(page==='collect')render()}
-async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,att:0,got:[],phase:0,sc:scene};
+async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,att:0,got:[],phase:0,sc:scene};ADV=null;clearInterval(advT);advT=null;fixPick=null;
  const real=realFlash()&&FSWJ&&FSWJ.status==='done';
  const body=real?{page:IDENT.page,source:'device',project_dir:REAL.project_dir,rounds:colN,resume:!!keep}
   :{demo:scene,rounds:colN,resume:!!keep,interval:.12,drop_at:keep?0:9};
@@ -1055,6 +1064,7 @@ function retestPage(){const P=PROJ.find(p=>p.scene===scene),R=RT[scene];
   <div class="acts">${C.choice?'':`<button class="btn pri" data-rtgo="1">${C.steps[1][1]?(C.steps[0][1]?'先确认计时点，再插点烧录':'开始插点、烧录'):'开始多轮实测'}</button>`}<button class="btn" data-go="report">不测了，回报告</button></div></section></div>`}
 function render(){if(!scene||!SCENES[scene])return;applyScene();
   if(page==='report'&&(!JREP||JREP._key!==repKey()))fetchReport();
+  if(page==='report'&&JREP&&JREP._key===repKey()&&repKey().startsWith('real')&&!ADV&&D0ok())advStart();
   const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
   document.getElementById('nav-home').toggleAttribute('aria-current',page==='home');document.getElementById('nav-set').toggleAttribute('aria-current',page==='settings');
   document.getElementById('flowbar').innerHTML=flowBar();bgPill();
@@ -1142,7 +1152,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-rtgo]')||rch){flow='retest';const t=document.getElementById('rt-what');rtWhat=t?t.value:null;const C=rtC();page=C.steps[0][1]?'steps':C.steps[1][1]?'flash':'collect';colStop();col={st:0,att:0,got:[],phase:0};if(page==='flash'){diffOk=false;fl={st:0,step:0,pct:0,log:''}}render();window.scrollTo(0,0);return}
   const o=e.target.closest('[data-open]');if(o){scene=o.dataset.open;flow=null;page='report';mode='boss';render();window.scrollTo(0,0);return}
   const v=e.target.closest('[data-var]');if(v){homeVar=v.dataset.var;save('fsw-home',homeVar);render();return}
-  const pk=e.target.closest('[data-pick]');if(pk){const a=pk.dataset.pick;
+  const pk=e.target.closest('button[data-pick]');if(pk){const a=pk.dataset.pick;  // 只认首页选源码的按钮（报告里方案的勾选框也叫 data-pick）
    if(a==='reset'){clearInterval(bgT);bgT=null;bgSrc='';hStage=0;hSrc='';hScan=0;REAL=null;hBoardQ='';render();return}
    if(a==='paste'){const v=(document.getElementById('h-paste').value||'').trim();if(!v){hErr='先粘贴一个路径。';render();return}realPick({path:v});return}
    api('/api/source/pick',{kind:a==='zip'?'zip':'dir'}).then(r=>{if(r.path)realPick({path:r.path})}).catch(()=>{hErr='打不开选择窗口，可以把路径粘贴到下面的框里。';render()});return}
@@ -1158,6 +1168,7 @@ document.addEventListener('click',e=>{
   const fc=e.target.closest('[data-face]');if(fc){const a=fc.dataset.face;if(a!=='reset')stepsChanged();alsoFace=a==='reset'?null:a==='yes';render();return}
   const mp=e.target.closest('[data-map]');if(mp){mapSel=mp.dataset.map;mapOpen=true;render();return}
   const mt=e.target.closest('[data-mapt]');if(mt){mapOpen=!mapOpen;return}
+  if(e.target.closest('[data-advretry]')){advStart();return}
   const rr=e.target.closest('[data-reread]');if(rr){if(REAL&&IDENT){pop='readlog';render();return}stepsRead=0;render();return}
   if(e.target.closest('[data-idretry]')){identStart(true);render();return}
   const fv=e.target.closest('[data-flashvar]');if(fv){flashVar=fv.dataset.flashvar;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';render();return}
