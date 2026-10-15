@@ -152,6 +152,14 @@ def judge(scenario, rounds):
         labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
                        "level": "必须改" if hit else "建议改",
                        "why": "偶发特别慢，而且每 10 次就有 1 次让人等太久" if hit else "偶发特别慢"})
+    # 同一个根因：某段"偶发特别慢"只发生在某个对错问题出现的那几轮里（比如回答开头被吞那一轮，解码送喇叭也特别慢），
+    # 算同一个问题：挂到那个问题上，不单独列
+    for x in labels:
+        if x["kind"] != "spiky":
+            continue
+        host = next((p for p in labels if p["kind"] == "problem" and not p["order"] and set(x["rounds"]) <= set(p["rounds"])), None)
+        if host:
+            x["with"] = host["k"]
     order = {k: i for i, k in enumerate(LEVELS)}
     out["labels"] = sorted(labels, key=lambda x: order[x["level"]])  # 同一级里：线、问题、偶发特别慢（和原型的顺序一样）
     return out

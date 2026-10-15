@@ -77,16 +77,19 @@ function headline(D){
 const LV=[['必须改','lv-must'],['建议改','lv-should'],['可以不改','lv-ok']];
 const lvTag=lv=>`<span class="lvtag ${LV[lv][1]}">${LV[lv][0]}</span>`;
 const jump=(id,t)=>`<button class="lnk" data-jump="${id}">${t}</button>`;
+// 要你拍板的一条 → 讲它的那张卡片：按问题编号对；早先的卡片把几段"偶尔特别慢"都叫 spiky，再按段对
+const cardOf=(FX,d)=>FX.findIndex(F=>F.when.includes(d.k)||(d.seg&&F.when.includes('spiky')&&F.seg===d.seg));
 function decisionsJ(D){const J=D.J,out=[];
   const src={line:['tiers','「三档用时」里“一般”那一列；各段占多少见「一次的计时图」'],spiky:['rounds',`「${D.n} 轮逐轮」图里红底的几轮`],order:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1]?D.lines[1].end:''}晚"的几轮`],problem:['rounds',`「${D.n} 轮逐轮」里出这个问题的几轮`]};
   for(const x of J.labels){const lv=['必须改','建议改','可以不改'].indexOf(x.level);
    if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=D.biggest,share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
     out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:isMain?`${l.end}要 ${f(l.med,1)} 秒，大头是"${b.name}"`:`${l.end}要 ${f(l.med,1)} 秒`,
      d:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`:`${x.why}。`,who:x.level==='可以不改'?(v==='还没有合理范围'?'还没有合理范围，先只记用时':'在合理范围里，不用改'):`找${b.owner}`})}
-   else if(x.kind==='spiky'){const s=D.allSegs.find(y=>y.k===x.segment);if(!s)continue;
-    out.push({k:'spiky',lv,src:src.spiky,tag:['偶发','c-warn'],t:`"${s.name}"偶尔特别慢`,d:`平时 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒（${roundList(x.rounds.map(n=>({n})))}）。`,who:`找${s.owner}`})}
+   else if(x.kind==='spiky'){const s=D.allSegs.find(y=>y.k===x.segment);if(!s||x.with)continue;  // 和对错问题同一根因的，合并到那条里
+    out.push({k:x.k,seg:x.segment,lv,src:src.spiky,tag:['偶发','c-warn'],t:`"${s.name}"偶尔特别慢`,d:`平时 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒（${roundList(x.rounds.map(n=>({n})))}）。`,who:`找${s.owner}`})}
    else if(x.order&&D.lines.length>1)out.push({k:'reversed',lv,src:src.order,tag:['要查','c-bad'],t:`${x.rounds.length} 轮${D.lines[0].end}反而比${D.lines[1].end}晚`,d:`${roundList(x.rounds.map(n=>({n})))}。"先给反应"这个设计在这几轮白做了。`,who:'先查是哪一段变慢'});
-   else out.push({k:x.k,lv,src:src.problem,tag:['要查','c-bad'],t:`${D.n} 轮里 ${x.rounds.length} 轮${x.name}`,d:`${roundList(x.rounds.map(n=>({n})))}。${x.why}。`,who:'先查是哪里出的问题'})}
+   else{const also=J.labels.filter(y=>y.kind==='spiky'&&y.with===x.k).map(y=>D.allSegs.find(s=>s.k===y.segment)).filter(s=>s&&!x.name.includes(s.name)).map(s=>`同一轮"${s.name}"也特别慢（最慢 ${f(s.max)} 秒，平时 ${f(s.med)} 秒），是同一个问题。`).join('');
+    out.push({k:x.k,lv,src:src.problem,tag:['要查','c-bad'],t:`${D.n} 轮里 ${x.rounds.length} 轮${x.name}`,d:`${roundList(x.rounds.map(n=>({n})))}。${x.why}。${also}`,who:'先查是哪里出的问题'})}}
   return out}
 function decisions(D){if(D.J)return decisionsJ(D);
   const out=[];
@@ -164,7 +167,7 @@ function lineCards(D){
      <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
 }
 function decideList(D){const FX=activeFixes(D);
-  return `<ul class="decide">${decisions(D).map(x=>{const n=FX.findIndex(F=>F.when.includes(x.k));return `<li>${lvTag(x.lv)}<span><b>${x.t}</b>　${x.d}${x.who}。<br><span class="src">出处：${jump('sec-'+x.src[0],'见下方'+x.src[1])}${n>=0?`　为什么、怎么改：${jump('fix-'+n,'问题 '+(n+1))}`:''}</span></span></li>`}).join('')}</ul>
+  return `<ul class="decide">${decisions(D).map(x=>{const n=cardOf(FX,x);return `<li>${lvTag(x.lv)}<span><b>${x.t}</b>　${x.d}${x.who}。<br><span class="src">出处：${jump('sec-'+x.src[0],'见下方'+x.src[1])}${n>=0?`　为什么、怎么改：${jump('fix-'+n,'问题 '+(n+1))}`:''}</span></span></li>`}).join('')}</ul>
   <ul class="notes"><li>这里的数字都是码表按这次 ${D.n} 轮数据直接算出来的，不经过 AI。</li><li>"为什么、怎么改"的文字是 AI 读代码写的。</li><li>要做哪些方案：在下方每个问题的方案表里勾选，结果汇总在 ${jump('my-pick','你的决定')}。</li></ul>
   <details class="lvwhy"><summary>标签规则</summary><ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
   <li><b class="lvtag lv-must">必须改</b>一般用时（中位数）超过"算慢"线，或体验标准判"差"，或"10 次里最慢"超过"算慢"线（每 10 次就有 1 次让人等太久）。</li>
@@ -395,7 +398,7 @@ function staleBar(){if(JREP&&!JREP._none&&JREP.scenario&&JREP.scenario.standard!
   if(JREP.stale)return `<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 ${htmlEsc(JREP.stale_since)} 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`;
   return JREP._refreshed?`<p class="note" style="margin:0">✓ 已按 ${htmlEsc(JREP._refreshed)} 改过的合理范围更新。测出来的用时没变。</p>`:''}
  return flow?'':stale===1?`<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 10-13 14:20 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`:stale===2?`<p class="note" style="margin:0">✓ 已按 10-13 14:20 改过的合理范围更新。测出来的用时没变。</p>`:''}
-function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[]).find(x=>x.when.includes(d.k));if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:plain(F.why),impact:plain(F.impact),rec:plain(F.rec),opts:F.opts.map(o=>({...o,name:plain(o.name),effect:plain(o.effect),cost:plain(o.cost),wn:plain(o.wn)}))})});return out}
+function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:plain(F.why),impact:plain(F.impact),rec:plain(F.rec),opts:F.opts.map(o=>({...o,name:plain(o.name),effect:plain(o.effect),cost:plain(o.cost),wn:plain(o.wn)}))})});return out}
 const ESTNOTE='<ul class="notes"><li><b>工作量</b>只分大、中、小，看的是要改多少、要不要别人配合，不折算成天数（码表不知道你们团队的人手和熟练度）。</li><li><span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护</li><li><b>效果</b>都是估算：依据是这次的实测数据、代码和公开资料，做完要用码表再测一次才算数。</li><li>码表只给建议，不会自动改代码。</li></ul>';
 function optTable(F,fi,pick){
   return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>`;
@@ -685,7 +688,7 @@ const FST=()=>{const F=FF[scene];return [
  ['让 AI 插计时点',`按你确认的步骤插入计时语句，再调用一次大模型；码表自己检查"只加不删"`,FSWJ&&FSWJ.view?`改了 ${FSWJ.view.files} 个文件：新增 ${FSWJ.view.added} 行，删除 ${FSWJ.view.deleted} 行 ✓`:F.ins],
  ['编译',`${bgDone()?'原始代码已经编过':'等后台把原始代码编完后'}，只重编改过的文件，一般 1 分钟左右（按改动的文件数估算）`,F.build],
  ['烧录到设备','通过 USB 线写进设备','Writing at 0x0012c000... ({p} %)'],
- ['试一次：确认计时点有输出',`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
+ ['试一次：确认计时点有输出',realFlash()?`烧好后设备会重启、连网。等屏幕回到待命，点「准备好了」，然后${trySay()}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`:`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
 let demoErr=FAIL==='nodev'?'':FAIL,justFlashed=false,flashVar='b',fl={st:0,step:0,pct:0,log:''},flT=null,flNoDev=false,diffOk=false,diffFile=0,swOn=true,onDev='orig';
 function flStop(){clearInterval(flT);flT=null}
 // 真插计时点（选了真源码、真找完步骤时）：后台做"插 → 等你确认 → 编译 → 烧录 → 试一次"，这里每 0.7 秒问一次

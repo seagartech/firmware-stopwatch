@@ -6,6 +6,7 @@ AI 只读源码（只读工具），码表只给建议，不改代码。回来�
 """
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -21,7 +22,12 @@ DEV_FIELDS = ("data", "cause", "change", "size", "rk", "verify")
 def problems(j, scenario):
     """要写卡片的问题：任务 16 判成"必须改""建议改"的，按标签的先后。key 和网页"要你拍板"里的一样。"""
     main = j["lines"][-1]["name"] if j["lines"] else None
-    spiky = next((x["segment"] for x in j["labels"] if x["kind"] == "spiky"), None)
+    spiky = next((x["segment"] for x in j["labels"] if x["kind"] == "spiky" and not x.get("with")), None)
+    merged = {}  # 同一个根因合并进来的"偶发特别慢"：问题 → [(段, 那几轮)]
+    for x in j["labels"]:
+        if x["kind"] == "spiky" and x.get("with"):
+            merged.setdefault(x["with"], []).append(x)
+    names = {g["k"]: g for g in j["segments"]}
     out = []
     for x in j["labels"]:
         if x["level"] == "可以不改":
@@ -35,15 +41,21 @@ def problems(j, scenario):
                 seg = max(segs, key=lambda g: g["med"])["k"] if segs else None
             out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}"})
         elif x["kind"] == "spiky":
-            out.append({"key": "spiky", "seg": x["segment"], "level": x["level"],
+            if x.get("with"):
+                continue
+            out.append({"key": x["k"], "seg": x["segment"], "level": x["level"], "rounds": x["rounds"],
                         "what": f"「{scenario['segments'][x['segment']]['name']}」偶尔特别慢（第 {'、'.join(map(str, x['rounds']))} 轮）"})
         elif x.get("order"):
-            out.append({"key": "reversed", "seg": spiky, "level": x["level"],
+            out.append({"key": "reversed", "seg": spiky, "level": x["level"], "rounds": x["rounds"],
                         "what": f"{x['name']}（第 {'、'.join(map(str, x['rounds']))} 轮）"})
         else:
             rule = next((p["rule"] for p in scenario.get("problems") or [] if f"problem:{p['key']}" == x["k"]), {})
-            out.append({"key": x["k"], "seg": rule.get("segment"), "level": x["level"],
-                        "what": f"{x['name']}（第 {'、'.join(map(str, x['rounds']))} 轮）"})
+            also = "".join(f"；同一轮「{scenario['segments'][m['segment']]['name']}」也特别慢"
+                           f"（最慢 {names[m['segment']]['max']:.2f} 秒，平时 {names[m['segment']]['med']:.2f} 秒），是同一个问题"
+                           for m in merged.get(x["k"], []) if m["segment"] in names and m["segment"] != rule.get("segment"))
+            seg = rule.get("segment") or next((m["segment"] for m in merged.get(x["k"], [])), None)
+            out.append({"key": x["k"], "seg": seg, "level": x["level"], "rounds": x["rounds"],
+                        "what": f"{x['name']}（第 {'、'.join(map(str, x['rounds']))} 轮）{also}"})
     return out
 
 
@@ -65,6 +77,8 @@ PROMPT = """你是"固件码表"工具里的改进建议助手。固件源码就
 
 ## 你的任务
 读相关代码（看计时点附近、这几段经过的代码），给上面每个问题写一张卡片；同一个原因的几个问题可以合成一张（when 里写几个编号）。
+when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的问题不要写进来，每个"偶尔特别慢"的段是单独一个编号；
+写进 when 的问题，要在 why 或 dev.data 里写出它是第几轮（比如"第 1、6、16 轮"），码表按这个核对。
 - why：为什么慢（大白话，带上数据），对设备外的段只说码表看到了什么、看不到什么，不要编服务器里面的原因。
 - impact：对用户的影响。
 - opts：2～3 个方案。每个方案写 name、how（具体改法，固件改动写到文件和行号附近）、size（改动大小，比如"约 20 行，只加不改"）、
@@ -149,12 +163,34 @@ def check(data, j, scenario):
         if opts and not any(o.get("rec") for o in opts if isinstance(o, dict)):
             opts[0]["rec"] = 1  # 一个都没标建议：把第一个当建议（默认勾上）
         fixes.append(f)
+    rounds = {p["key"]: p.get("rounds") or [] for p in probs}
+    for i, f in enumerate(fixes, 1):
+        if not isinstance(f, dict):
+            continue
+        dev = f.get("dev") if isinstance(f.get("dev"), dict) else {}
+        said = _rounds_said(" ".join(str(x or "") for x in (f.get("why"), f.get("impact"), dev.get("data"), dev.get("cause"))))
+        for k in f.get("when") or []:
+            miss = [n for n in rounds.get(k, []) if n not in said]
+            if miss:
+                bad.append(f"第 {i} 张卡片挂了「{next(p['what'] for p in probs if p['key'] == k)}」，但没写这个问题是第几轮"
+                           f"（缺第 {'、'.join(map(str, miss))} 轮），可能不是在讲它")
     covered = {k for f in fixes if isinstance(f, dict) for k in (f.get("when") or [])}
     segs = {f.get("seg") for f in fixes if isinstance(f, dict)}
     missing = [p["what"] for p in probs if p["key"] not in covered and not (p.get("seg") and p["seg"] in segs)]
     if missing:
         bad.append("这些问题没写卡片：" + "；".join(missing))
     return fixes, bad
+
+
+def _rounds_said(text):
+    """文字里写到的轮次：认"第 1、6、16 轮""第 4 轮和第 11 轮""第 1～3 轮"这类写法。"""
+    out = set()
+    for m in re.finditer(r"第\s*([0-9０-９][0-9０-９、,，\s和及～~\-—至到]*)\s*轮", text):
+        part = m.group(1)
+        for a, b in re.findall(r"(\d+)\s*[～~\-—至到]\s*(\d+)", part):
+            out.update(range(int(a), int(b) + 1))
+        out.update(int(x) for x in re.findall(r"\d+", part))
+    return out
 
 
 def advise(llm, root, j, scenario, steps=None, what="", save_to=None, on_progress=None):

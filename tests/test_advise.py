@@ -44,7 +44,7 @@ def judged(name):
 def test_problems_come_from_the_labels_not_from_ai():
     d, j = judged("voice")
     probs = adv.problems(j, d["scenario"])
-    assert [p["key"] for p in probs] == ["main", "problem:sw", "reversed", "spiky"]
+    assert [p["key"] for p in probs] == ["main", "problem:sw", "reversed", "spiky:dec"]
     assert probs[0]["seg"] == "think" and probs[3]["seg"] == "dec"
 
 
@@ -116,3 +116,56 @@ def test_prompt_asks_for_names_not_codes_and_short_why():
     d, j = judged("voice")
     p = adv.build_prompt(j, d["scenario"])
     assert "不要写 P2-P5 这样的编号" in p and "2～4 句" in p
+
+
+# ---- 真测修复 5：同一个根因合并；每条现象挂到真正讨论它的卡片上 ----
+
+def real_like():
+    """照真测那次的样子：第 6 轮回答开头被吞，同一轮"解码送喇叭"特别慢（同一个原因）；
+    "选表情"在第 1、6、16 轮偶尔慢（另一回事）。"""
+    d = demo("voice")
+    rounds = demo_rounds(d)
+    for r in rounds:
+        r["probs"] = [p for p in r["probs"] if p != "rev"]
+        if r["n"] == 6:
+            r["probs"].append("sw")
+            r["segs"]["dec"] = 1.9
+    for r in rounds:  # "播放"那段换成只在第 6 轮特别慢
+        r["segs"]["play"] = 7.43 if r["n"] == 6 else 0.01
+    return d, J.judge(d["scenario"], rounds)
+
+
+def test_spiky_in_the_same_rounds_as_a_problem_is_merged_into_it():
+    d, j = real_like()
+    sp = {x["segment"]: x for x in j["labels"] if x["kind"] == "spiky"}
+    assert sp["play"]["with"] == "problem:sw"          # 只在吞字那一轮慢：同一个原因
+    assert "with" not in sp.get("dec", {"x": 1}) or sp["dec"].get("with") is None
+    probs = adv.problems(j, d["scenario"])
+    keys = [p["key"] for p in probs]
+    assert "spiky:play" not in keys and "problem:sw" in keys   # 合并进吞字那条，不单独写卡片
+    sw = next(p for p in probs if p["key"] == "problem:sw")
+    assert d["scenario"]["segments"]["play"]["name"] in sw["what"] and "同一个" in sw["what"]
+
+
+def test_each_spiky_segment_has_its_own_key():
+    d, j = real_like()
+    keys = [p["key"] for p in adv.problems(j, d["scenario"])]
+    assert "spiky" not in keys and any(k.startswith("spiky:") for k in keys)
+
+
+def test_card_must_name_the_rounds_of_every_problem_it_claims(tmp_path):
+    """卡片 when 里写了哪个问题，就要在文字里写出它是第几轮；挂了不讨论的问题，整份不用。"""
+    d, j = judged("door")
+    fixes = copy.deepcopy(d["page"]["fixes"])
+    fixes[0]["why"] = fixes[0]["why"].replace("第 1、9、17 轮", "有几轮")
+    for k in ("data", "cause"):
+        fixes[0]["dev"][k] = fixes[0]["dev"][k].replace("第 1、9、17 轮", "有几轮")
+    text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
+    r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], save_to=tmp_path / "a")
+    assert not r["ok"] and "第几轮" in r["message"]
+
+
+def test_prompt_says_only_put_problems_the_card_discusses():
+    d, j = judged("voice")
+    p = adv.build_prompt(j, d["scenario"])
+    assert "真正讨论" in p and "第几轮" in p
