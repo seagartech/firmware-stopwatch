@@ -473,22 +473,74 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job["log"] = f"等后台把原始代码编完再插（{b.get('pct', 0)}%），原版要先存一份"
             time.sleep(wait_step / 4)
 
-    @app.post("/api/fsw/insert")
-    def fsw_insert(body: FswInsertBody):
+    def _plan_cache(body):
+        """源码和步骤都没变（比如码表重开过）：用上次的插入方案，不再调用大模型；设置里关掉"用上次结果"就不沿用。"""
         proj = Path(body.project_dir)
         try:
             fp = json.loads((proj / "project.json").read_text(encoding="utf-8")).get("fingerprint")
         except (OSError, ValueError):
             fp = None
-        try:  # 源码和步骤都没变（比如码表重开过）：用上次的插入方案，不再调用大模型；设置里关掉"用上次结果"就不沿用
+        try:
             last = json.loads((proj / "fsw-plan.json").read_text(encoding="utf-8"))
             cached = last["reply"] if (fp and cfg().reuse_last and last.get("fingerprint") == fp
                                        and last.get("steps") == body.steps) else None
         except (OSError, ValueError, KeyError):
             cached = None
-        model = None if cached else _model()[1]
-        job = {"phase": "insert", "status": "running", "pct": 0, "log": "AI 在读代码，确定每个计时点插在哪一行",
-               "started": time.time(), "seconds": {}, "view": None, "err": None, "got": [], "total": 0, "port": None}
+        return fp, cached
+
+    def _prep_view(p):
+        return {k: v for k, v in p.items() if k not in ("text", "work", "steps")}
+
+    # 插计时点提前（决策 96）：找完关键步骤、人核对步骤时，后台先按这些步骤生成插法（大模型只读）；
+    # 人没改步骤，点"确认"就直接用；改了就作废、按新步骤重新生成
+    @app.post("/api/fsw/prepare")
+    def fsw_prepare(body: FswInsertBody):
+        if _plan_cache(body)[1]:
+            return {"status": "reuse"}
+        backup, _, _ = _fsw_dirs(body)
+        if ins.current(backup):  # 这份代码上已经插过（改了步骤要重插）：等点确认、先还原再生成，免得行号对不上
+            return {"status": "skip"}
+        p = fsw.get("prep")
+        if p and p["work"] == body.work and p["steps"] == body.steps and p["status"] in ("running", "ready"):
+            return _prep_view(p)
+        model = _model()[1]
+        p = {"status": "running", "work": body.work, "steps": body.steps, "started": time.time(), "text": None, "seconds": None,
+             "read": ""}
+        fsw["prep"] = p
+
+        def run():
+            needs = stds.needed_values(body.steps, stds.find(body.steps))
+            try:
+                text = model.investigate(ins.build_prompt(body.steps, ins.default_header(body.work), needs), body.work,
+                                         on_tool=lambda d: p.update(read=d))
+                p.update(status="ready", text=text)
+            except Exception as e:
+                p.update(status="failed", message=str(getattr(e, "message", e)))
+            p["seconds"] = round(time.time() - p["started"], 1)
+        threading.Thread(target=run, daemon=True).start()
+        return _prep_view(p)
+
+    @app.get("/api/fsw/prepare")
+    def fsw_prepare_status():
+        p = fsw.get("prep")
+        return _prep_view(p) if p else {"status": "idle"}
+
+    @app.post("/api/fsw/insert")
+    def fsw_insert(body: FswInsertBody):
+        proj = Path(body.project_dir)
+        fp, cached = _plan_cache(body)
+        prep, use_prep, redo = fsw.get("prep"), False, None
+        if not cached and prep and prep["work"] == body.work and prep["status"] in ("running", "ready", "failed"):
+            if prep["steps"] == body.steps and prep["status"] != "failed":
+                use_prep = True
+            elif prep["steps"] != body.steps:
+                redo = "你改了步骤，AI 提前按原来的步骤准备的插法作废了，按你改过的步骤重新生成"
+        fsw["prep"] = None
+        calls = 1 if prep and not cached and prep["work"] == body.work else 0  # 提前准备的那次也算一次调用
+        model = None if cached or use_prep else _model()[1]
+        job = {"phase": "insert", "status": "running", "pct": 0, "log": redo or "AI 在读代码，确定每个计时点插在哪一行",
+               "started": time.time(), "seconds": {}, "view": None, "err": None, "got": [], "total": 0, "port": None,
+               "prepared": use_prep, "redo": redo, "calls": calls}
         fsw.update(job=job, args=body)
         backup, orig_fw, _ = _fsw_dirs(body)
         steps = body.steps
@@ -508,7 +560,23 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if cached:
                 text = cached
                 job.update(reused=True, log="源码和步骤都没变，用上次的插入方案，没调用大模型")
+            elif use_prep:
+                while prep["status"] == "running":
+                    job["log"] = f"你核对步骤时 AI 已经在后台按这些步骤准备插法，还差一点（已准备 {int(time.time() - prep['started'])} 秒）"
+                    time.sleep(wait_step / 4)
+                if prep["status"] == "ready":
+                    text = prep["text"]
+                    job["log"] = "用你核对步骤时 AI 提前准备好的插法"
+                else:
+                    job.update(prepared=False, log="提前准备的那次没成，重新生成")
+                    try:
+                        job["calls"] += 1
+                        text = _model()[1].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
+                                                       on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
+                    except llms.LLMError as e:
+                        return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。")
             else:
+                job["calls"] += 1
                 try:
                     text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
                                              on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
