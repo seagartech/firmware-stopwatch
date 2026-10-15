@@ -43,7 +43,8 @@ class Spec:
     def from_scenario(cls, s):
         segs = {k: [g["from"], g["to"]] for k, g in s["segments"].items()}
         lines = [{"name": l["name"], "segs": [segs[k] for k in l["segments"]]} for l in s["lines"]]
-        names = {s["start"]["point"]: s["start"]["name"]}
+        names = dict(s.get("point_names") or {})
+        names.setdefault(s["start"]["point"], s["start"]["name"])
         for p in (s.get("per_round") or {}).get("phases") or []:
             names.setdefault(p["point"], p["name"])
         for g in s["segments"].values():
@@ -51,17 +52,10 @@ class Spec:
         return cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names)
 
     @classmethod
-    def from_page(cls, page, steps=None):
-        """真找完步骤的结果页数据（任务 13）：要测的这条线、顺带的那条线。"""
-        def segs_of(items):
-            return [[g["a"], g["b"]] for g in items]
-        main = segs_of(page.get("segs") or [])
-        side = segs_of(page.get("fsegs") or [])
-        lines = ([{"name": page["ln"]["face"], "segs": side}] if side else []) + [{"name": page["ln"]["talk"], "segs": main}]
-        segments = {f"{a}-{b}": [a, b] for a, b in main + side}
-        start = main[0][0] if main else (page.get("main") or ["P1"])[0]
-        names = {s["p"]: s["n"] for s in (steps or page.get("steps") or [])}
-        return cls(start=start, segments=segments, lines=lines, names=names)
+    def from_page(cls, page, standard=None):
+        """真找完的步骤（结果页数据）：顺带那条线也从起点算；有标准时接上合理范围（见 fsw/standards.py）。"""
+        from fsw.standards import real_scenario
+        return cls.from_scenario(real_scenario(page, standard))
 
 
 def _rule(rule, t, vals, segs, ends):

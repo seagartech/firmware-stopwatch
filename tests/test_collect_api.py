@@ -148,7 +148,7 @@ def test_real_steps_spec_from_page(make, tmp_path):
     c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3, "project_dir": str(tmp_path / "proj")})
     j = wait(c, lambda j: j["status"] == "done")
     rs = ok_rounds(j)
-    assert len(rs) == 3 and rs[0]["ends"] == [pytest.approx(0.0002), pytest.approx(0.0008)]
+    assert len(rs) == 3 and rs[0]["ends"] == [pytest.approx(0.0003), pytest.approx(0.0008)]  # 表情这条也从起点算
     assert Path(j["raw_log"]).parent.parent == tmp_path / "proj" / "runs"
 
 
@@ -170,3 +170,44 @@ def test_unplugged_message_stays_while_waiting(make):
     assert "断开" in j["message"] and "留着" in j["message"]
     ports.append("/dev/cu.usbmodem1101")
     assert len(ok_rounds(wait(c, lambda j: j["status"] == "done"))) == 20
+
+
+def test_report_judges_this_run_with_fixed_rules(make):
+    c, _ = make()
+    assert c.get("/api/report").status_code == 404  # 还没测
+    c.post("/api/collect/start", json={"demo": "voice", "rounds": 20, "interval": 0})
+    wait(c, lambda j: j["status"] == "done")
+    r = c.get("/api/report").json()
+    assert r["n"] == 20 and not r["few"]
+    speak = r["lines"][-1]
+    assert speak["exp"] == "差" and speak["combo"] == "每段都没做坏，是做法本身慢，要换做法才会快"
+    assert {x["k"]: x["level"] for x in r["labels"]}["problem:sw"] == "必须改"
+    assert len(r["rounds"]) == 20 and r["scenario"]["lines"][0]["name"] == "表情线"
+
+
+def test_report_for_real_steps_reads_the_xiaozhi_standard(make, tmp_path):
+    from tests.test_standards import PAGE
+    log = []
+    for r in range(12):
+        b = 10_000_000 * (r + 1)
+        t = {"P1": 0, "P2": 0.75, "P3": 1.15, "P4": 1.162, "P5": 2.1, "P6": 2.11, "P7": 2.16, "P8": 2.17, "P9": 2.175}
+        log += [f"FSW,RESET,{b},0"] + [f"FSW,{p},{b + 100_000 + int(v * 1e6)},0" for p, v in t.items()]
+    c, _ = make(device=FakeSerialDevice(log))
+    c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 12, "project_dir": str(tmp_path / "p")})
+    wait(c, lambda j: j["status"] == "done")
+    r = c.get("/api/report").json()
+    assert r["few"] and r["scenario"]["standard"].startswith("小智")
+    seg = {g["k"]: g for g in r["segments"]}
+    assert seg["P2-P5"]["verdict"] == "正常" and seg["P2-P5"]["med"] == pytest.approx(1.35)  # 大模型想回答 0.4～1.5 秒
+    talk = r["lines"][-1]
+    assert talk["name"] == "开口这条" and talk["exp"] == "差" and talk["verdict"] == "正常"
+
+
+def test_report_for_demo_data_without_a_run(make):
+    """没测过时，报告用演示数据的数，也按同一套固定规则判。"""
+    c, _ = make()
+    r = c.get("/api/report?demo=door").json()
+    door = json.loads((DEMO / "door.json").read_text(encoding="utf-8"))
+    assert r["n"] == 20 and r["lines"][-1]["name"] == "开门线"
+    assert {x["k"]: x["rounds"] for x in r["labels"] if x["kind"] == "problem"}["problem:to"] == door["result"]["problems"]["to"]
+    assert c.get("/api/report?demo=nope").status_code == 404
