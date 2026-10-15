@@ -683,20 +683,28 @@ function stepsC(){const segRow=(sg,c)=>{const off=dropped.has(sg.a)||dropped.has
 const STEPVAR={a:{label:'A 清单',idea:'A 清单：按发生顺序一条条列，每条有代码位置、为什么在这、可信度高低，研发逐条打勾。最直接，适合研发核对。'},
  b:{label:'B 流程地图',idea:'B 流程地图：画出一次对话在代码里怎么走、经过哪些文件，点圆点看详情。顺带满足需求 17（关键流程地图），也最适合录视频展示。'},
  c:{label:'C 切成几段',idea:'C 切成几段：不看点，看点之间切出来的段（报告里就按这些段算用时）。不写代码的人也能判断"这样切对不对"。'}};
+// 插计时点提前（决策 96）：步骤一找完，后台就按 AI 找到的步骤准备插法；人没改步骤，点确认直接用
+let PREP=null,PREPI=null,PREPK='',prepT=null;
+async function prepKick(){if(!realFlash()||PREPI===IDENT)return;PREPI=IDENT;PREP=null;PREPK=JSON.stringify(fswSteps());clearInterval(prepT);
+ try{const r=await fetch('/api/fsw/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:REAL.work,project_dir:REAL.project_dir,steps:fswSteps(),chip:REAL.chip,board:REAL.board})});if(!r.ok)return;PREP=await r.json()}catch(e){return}
+ if(PREP.status==='running')prepT=setInterval(async()=>{try{PREP=await (await fetch('/api/fsw/prepare')).json()}catch(e){}if(!PREP||PREP.status!=='running'){clearInterval(prepT);prepT=null}if(page==='steps')render()},1000);if(page==='steps')render()}
+const prepNote=()=>{if(!PREP||!['running','ready'].includes(PREP.status))return '';if(JSON.stringify(fswSteps())!==PREPK)return '<br>你改了步骤：AI 提前按原来的步骤准备的插法会作废，点确认后按新步骤重新生成（多调用一次大模型）。';
+ return PREP.status==='running'?`<br><span class="spin"></span> 你核对的时候，AI 已经在后台按这些步骤准备插法（${Math.max(0,Math.round(Date.now()/1000-PREP.started))} 秒）；没改步骤的话，点确认就直接用。`:'<br>✓ 插法已经在后台准备好了：没改步骤的话，点确认马上插，不用等。'};
 function stepsPage(){
  if(stepsRead===0)readStart();
+ if(stepsRead===2)prepKick();
  if(stepsRead!==2)return `<div class="stack"><section class="panel"><h1 style="font-size:22px">${stepsRead===3?'没找完':'正在读代码找关键步骤'}</h1><p class="note" style="margin-top:0">测的是：${hSay?hSay.replace(/^从/,'').replace('到',' → '):FF[scene].measure}　固件：${hSrc||FF[scene].pick.dir}</p><div id="readbox">${readBox()}</div></section></div>`;
  const warn=(REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad)">${htmlEsc(IDENT.page.warn)}</div>`:'')+((REAL&&IDENT?IDENT.provider:setLLM)==='deepseek'?`<div class="why" style="border-left-color:var(--warn)">这次用的是 DeepSeek，验证期它 9 个只找对 4 个，请每条都仔细核对。</div>`:'');
  const body=stepsB()+stepsA();
  const n=live().length,ch=dropped.size;
  return `<div class="stack">${warn}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${REAL&&IDENT?(IDENT.reused?'源码和要测的都没变，直接用了上次的结果，没调用大模型':`读完了，用了 ${mmss(IDENT.seconds)}，调用 1 次 ${usedLLM()}`):`读完了，用了 1 分 10 秒，调用 1 次 ${usedLLM()}`}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${REAL?`${htmlEsc(REAL.name)}，${CHIP()}`:FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
  ${body}
- ${flow==='first'&&flowMax>=2?`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">回到插计时点和烧录</button></div></section></div>`:`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch||Object.keys(edits).length||added.length?'；你的删除、修改、添加都会记下来':''}。</span><button class="btn pri" data-goins="1" >确认，插入计时点</button></div></section></div>`}`}
+ ${flow==='first'&&flowMax>=2?`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">回到插计时点和烧录</button></div></section></div>`:`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch||Object.keys(edits).length||added.length?'；你的删除、修改、添加都会记下来':''}。${prepNote()}</span><button class="btn pri" data-goins="1" >确认，插入计时点</button></div></section></div>`}`}
 
 // ===== 插计时点和烧录 =====（数字来自验证 02：4 个文件 +154 −0；编译 119 秒/增量 80 秒；程序多 784 字节）
 const FST=()=>{const F=FF[scene];return [
  ['复制一份源码',`开始找关键步骤时已经复制好${bgDone()?'、原始代码也编好了':''}；在这份上改，你原来的文件夹一个字都不动`,`已复制 ${F.files} 个文件到 ~/firmware-stopwatch-data/${F.slug}/work`],
- ['让 AI 插计时点',FSWJ&&FSWJ.reused?'源码和步骤都没变，用上次的插入方案，没调用大模型（设置页可以关掉）；码表自己检查"只加不删"':`按你确认的步骤插入计时语句，再调用一次大模型；码表自己检查"只加不删"`,FSWJ&&FSWJ.view?`改了 ${FSWJ.view.files} 个文件：新增 ${FSWJ.view.added} 行，删除 ${FSWJ.view.deleted} 行 ✓`:F.ins],
+ ['让 AI 插计时点',FSWJ&&FSWJ.reused?'源码和步骤都没变，用上次的插入方案，没调用大模型（设置页可以关掉）；码表自己检查"只加不删"':FSWJ&&FSWJ.prepared?'用你核对步骤时 AI 在后台提前准备好的插法（调用 1 次大模型），不用再等；码表自己检查"只加不删"':FSWJ&&FSWJ.redo?`${htmlEsc(FSWJ.redo)}（这一步一共调用 ${FSWJ.calls} 次大模型）；码表自己检查"只加不删"`:`按你确认的步骤插入计时语句，再调用一次大模型；码表自己检查"只加不删"`,FSWJ&&FSWJ.view?`改了 ${FSWJ.view.files} 个文件：新增 ${FSWJ.view.added} 行，删除 ${FSWJ.view.deleted} 行 ✓`:F.ins],
  ['编译',`${bgDone()?'原始代码已经编过':'等后台把原始代码编完后'}，只重编改过的文件，一般 1 分钟左右（按改动的文件数估算）`,F.build],
  ['烧录到设备','通过 USB 线写进设备','Writing at 0x0012c000... ({p} %)'],
  ['试一次：确认计时点有输出',realFlash()?`烧好后设备会重启。等它准备好，点「准备好了」，然后${trySay()}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`:`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
