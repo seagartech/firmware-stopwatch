@@ -161,6 +161,14 @@ def _open_file(path):
         subprocess.Popen(["xdg-open", path])
 
 
+def _garbled(line):
+    """一行像不像乱码（波特率不对时设备输出就是这样）。"""
+    if not line:
+        return False
+    bad = sum(1 for ch in line if ch == "\ufffd" or (ord(ch) < 32 and ch not in "\t"))
+    return bad / len(line) > 0.3
+
+
 class AdviseBody(BaseModel):
     work: str
     steps: list[dict] | None = None
@@ -174,6 +182,13 @@ class FswInsertBody(BaseModel):
     steps: list[dict]
     chip: str | None = None
     board: str | None = None
+
+
+NO_DATA_SECS = 20  # 多轮实测：调试口开着，这么久没收到计时点就说人话提示（不停下，做了就接着收）
+
+
+class RestoreBody(BaseModel):
+    project_dir: str | None = None   # 码表重开过：按项目文件夹里存的插入记录还原
 
 
 TRY_SECONDS = 45   # 试一次最多等多久：设备烧完重启、连网，人还要喊唤醒词再说一句
@@ -442,6 +457,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def _fail(job, kind, message, **extra):
         job.update(status="failed", err={"kind": kind, "message": message, **extra})
 
+    def _on_device(project_dir, fsw_on):
+        """设备上现在是计时版还是原版（存在项目文件夹里，码表重开也认得）。"""
+        (Path(project_dir) / "on-device.json").write_text(json.dumps({"fsw": fsw_on, "at": time.strftime("%Y-%m-%d %H:%M")}),
+                                                          encoding="utf-8")
+
     def _wait_bg(job, work):
         """插之前等后台把原始代码编完：原版编好的固件要先存下来，还原时烧它。"""
         while True:
@@ -459,6 +479,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         fsw.update(job=job, args=body)
         backup, orig_fw, _ = _fsw_dirs(body)
         steps = body.steps
+        Path(body.project_dir).mkdir(parents=True, exist_ok=True)
+        (Path(body.project_dir) / "fsw-args.json").write_text(json.dumps(body.model_dump(), ensure_ascii=False), encoding="utf-8")
 
         def run():
             ins.restore(body.work, backup)  # 上次插过的先还原
@@ -544,6 +566,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job["seconds"]["flash"] = r.get("seconds")
             if not r.get("ok"):
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))
+            _on_device(a.project_dir, True)
             return True
 
         def ready():
@@ -572,8 +595,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             got = ins.count_marks(lines) & want
             job["got"] = sorted(got)
             if not got:
-                return _fail(job, "try", f"{TRY_SECONDS} 秒内没收到计时点。重来：点「再试一次」，等设备屏幕回到待命，"
-                                        "先喊唤醒词，再说一句。", error=f"（{TRY_SECONDS} 秒内没有计时点输出）")
+                job["try_fails"] = job.get("try_fails", 0) + 1
+                odd = sum(1 for l in lines if _garbled(l))
+                why = ("收到的都是乱码，多半是波特率不对（码表按 115200 读）。" if lines and odd >= len(lines) / 2 else
+                       "常见原因：没触发到；串口被别的软件占着（比如串口监视器）；波特率不对（码表按 115200 读）。")
+                return _fail(job, "try", f"{TRY_SECONDS} 秒内没收到计时点。重来：点「再试一次」，等设备准备好，"
+                                        f"先喊唤醒词，再说一句（或做一次要测的事）。{why}",
+                             error=f"（{TRY_SECONDS} 秒内没有计时点输出）", offer_restore=job["try_fails"] >= 2)
             job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
             return True
 
@@ -659,9 +687,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def ok_count():
             return len([r for r in job["rounds"] if r["ok"]])
 
+        quiet = {"since": time.time(), "lines": 0, "odd": 0}  # 上一个计时点以来：多久、收到几行别的、几行乱码
+
         def on_line(line):
             raw.write(line + "\n")  # 设备调试口原样存一份（码表不改日志去向）
             raw.flush()
+            if meas.parse_line(line):
+                quiet.update(since=time.time(), lines=0, odd=0)
+                job["hint"] = ""
+            else:
+                quiet["lines"] += 1
+                quiet["odd"] += _garbled(line)
             for r in coll.feed(line):
                 job["rounds"].append(r)
             job["progress"], job["last"] = list(coll.progress()), coll.last
@@ -681,7 +717,21 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if body.interval:
                     time.sleep(body.interval)
 
+        def watch_quiet():
+            """调试口开着却一直没有计时点：不停下，说人话提示是哪种情况（做了 / 插好就接着收）。"""
+            while not stop() and job is col["job"]:
+                if job["status"] == "running" and time.time() - quiet["since"] > NO_DATA_SECS:
+                    secs = int(time.time() - quiet["since"])
+                    job["hint"] = (f"已经 {secs} 秒设备一点输出都没有：看看线是不是插在了别的设备上，或者设备卡住了，拔插一下试试。"
+                                   if not quiet["lines"] else
+                                   f"已经 {secs} 秒收到的都是乱码：多半是波特率不对（码表按 115200 读），或者插的不是这块板子。"
+                                   if quiet["odd"] >= quiet["lines"] / 2 else
+                                   f"设备在输出，但 {secs} 秒没有计时点：照提示做一次要测的事；还是没有的话，"
+                                   "设备上可能不是计时版（回到上一步重新烧录、试一次）。")
+                time.sleep(min(1.0, NO_DATA_SECS / 3))
+
         def run_device():
+            threading.Thread(target=watch_quiet, daemon=True).start()
             while not stop():
                 ports = port_finder()
                 if not ports:
@@ -689,13 +739,18 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     time.sleep(wait_step)
                     continue
                 job.update(status="running", message="", port=ports[0])
+                quiet.update(since=time.time(), lines=0, odd=0)
+                got0 = quiet["lines"] + len(job["rounds"])
                 try:
                     device.stream(ports[0], on_line, stop)
                 except Exception as e:  # 拔线了：已测的留着，插回后接着测
                     coll.finish()
                     job["pauses"] = job.get("pauses", 0) + 1
-                    job.update(status="paused", message=f"设备断开了，已测的 {ok_count()} 轮都留着；插回去会自动接着测。",
-                               error=str(e))
+                    opened = quiet["lines"] + len(job["rounds"]) > got0 or job.get("progress", [0])[0]
+                    job.update(status="paused", error=str(e), hint="",
+                               message=f"设备断开了，已测的 {ok_count()} 轮都留着；插回去会自动接着测。" if opened else
+                               f"打不开设备的调试口（{ports[0]}）：可能被别的软件占着（比如串口监视器、另一个码表窗口），"
+                               f"关掉它，码表会自动重试。已测的 {ok_count()} 轮都留着。")
                     time.sleep(wait_step)
 
         def run():
@@ -847,6 +902,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         cands = [x for x in cands if x.exists()]
         return str(max(cands, key=lambda x: x.stat().st_mtime)) if cands else None
 
+    def _fsw_on(proj):
+        try:
+            return bool(json.loads((proj / "on-device.json").read_text(encoding="utf-8"))["fsw"])
+        except (OSError, ValueError, KeyError):
+            return (proj / "fsw-backup" / "record.json").exists()
+
     @app.get("/api/history")
     def history():
         """首页"以前测过的"：只列真测过的（结果文件夹里有原始日志的项目），每条按原始日志重算，不混演示数据。"""
@@ -876,7 +937,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             out.append({"name": info.get("name", proj.name) + (f"（{info['board']}）" if info.get("board") else ""),
                         "what": meta.get("what") or "", "last": meta.get("measured_at") or "", "rounds": n, "metric": metric,
                         "now": now, "prev": done[-2][1] if len(done) > 1 else None, "path": info.get("source"),
-                        "project_dir": str(proj), "report": _latest_report(proj)})
+                        "project_dir": str(proj), "report": _latest_report(proj),
+                        "fsw_on": _fsw_on(proj)})
         return sorted(out, key=lambda x: x["last"], reverse=True)
 
     @app.post("/api/history/open")
@@ -967,9 +1029,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return fsw["job"] or {"status": "idle"}
 
     @app.post("/api/fsw/restore")
-    def fsw_restore():
-        """还原成原版：源码放回去（和你原来的源码逐字节比对），设备插着就把后台编好的原版烧回去。"""
+    def fsw_restore(body: RestoreBody | None = None):
+        """还原成原版：源码放回去（和你原来的源码逐字节比对），设备插着就把后台编好的原版烧回去。
+        码表重开过（内存里没有这次的记录）：按项目文件夹里存的插入记录还原。"""
         a = fsw["args"]
+        if body and body.project_dir and (not a or Path(a.project_dir).resolve() != Path(body.project_dir).resolve()):
+            try:
+                a = FswInsertBody(**json.loads((Path(body.project_dir) / "fsw-args.json").read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                a = None
         if not a:
             raise HTTPException(409, "还没插过计时点，不用还原")
         backup, orig_fw, _ = _fsw_dirs(a)
@@ -986,6 +1054,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if ports and orig_fw.exists():
             r = device.flash(orig_fw, ports[0], lambda pct, msg: None)
             out.update(flashed=bool(r.get("ok")), port=ports[0], error=r.get("error"))
+            if r.get("ok"):
+                _on_device(a.project_dir, False)
         if fsw["job"]:
             fsw["job"].update(status="restored", restore=out)
         return out
