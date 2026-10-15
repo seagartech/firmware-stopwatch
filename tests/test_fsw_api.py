@@ -41,7 +41,8 @@ class FakeDevice:
         on_progress(100, "烧录完成")
         return {"ok": True, "seconds": 0.1}
 
-    def read(self, port, seconds, on_line):
+    def read(self, port, seconds, on_line, stop=None):
+        self.read_secs = seconds
         if self.read_fail:
             self.read_fail -= 1
             return ["boot ok"]
@@ -100,12 +101,21 @@ def test_insert_shows_changes_and_waits_for_confirm(setup):
     assert sorted(j["view"]["steps"]) == ["P1", "P2", "P5"]
 
 
+def run_to_try(c, start="build"):
+    """编译、烧录完先停下，等你点"准备好了"（先喊唤醒词，再说一句）才开始试一次。"""
+    c.post("/api/fsw/run", json={"from": start})
+    j = wait(c, lambda j: j["status"] in ("ready_try", "failed"))
+    if j["status"] == "failed":
+        return j
+    c.post("/api/fsw/run", json={"from": "try"})
+    return wait(c, lambda j: j["status"] in ("done", "failed"))
+
+
 def test_confirm_runs_build_flash_try_to_done(setup):
     c, r, dev, _, builds, src = setup()
     start_insert(c, r)
     wait(c, lambda j: j["status"] == "inserted")
-    c.post("/api/fsw/run", json={"from": "build"})
-    j = wait(c, lambda j: j["status"] in ("done", "failed"))
+    j = run_to_try(c)
     assert j["status"] == "done" and j["got"] == [1, 2, 5] and j["total"] == 3
     assert j["port"] == "/dev/cu.usbmodem1101" and dev.flashed[-1].endswith("firmware/fsw")
     assert len(builds) == 2  # 原版一次（后台），计时版一次
@@ -119,6 +129,8 @@ def test_no_device_waits_then_continues(setup):
     j = wait(c, lambda j: j["status"] == "waiting_device")
     assert j["phase"] == "flash"
     ports.append("/dev/cu.usbmodem1101")
+    assert wait(c, lambda j: j["status"] == "ready_try")["port"] == "/dev/cu.usbmodem1101"
+    c.post("/api/fsw/run", json={"from": "try"})
     assert wait(c, lambda j: j["status"] == "done")["got"] == [1, 2, 5]
 
 
@@ -140,6 +152,8 @@ def test_build_error_points_to_the_step_and_drop_rebuilds(setup):
     assert j["err"]["step_name"] == "卡号读完" and "rfid_task.c" in j["err"]["where"]
     assert j["err"]["error"].startswith("main/rfid_task.c:137")  # 报错里的路径只留项目里的那段
     c.post("/api/fsw/drop", json={"step": "P2"})
+    j = wait(c, lambda j: j["status"] in ("failed", "ready_try"))
+    c.post("/api/fsw/run", json={"from": "try"})
     j = wait(c, lambda j: j["status"] in ("failed", "done"))
     assert j["status"] == "done" and "P2" not in j["view"]["steps"]
 
@@ -151,27 +165,38 @@ def test_burn_interrupted_then_reburn(setup):
     c.post("/api/fsw/run", json={"from": "build"})
     j = wait(c, lambda j: j["status"] in ("failed", "done"))
     assert j["err"]["kind"] == "burn" and "stopped responding" in j["err"]["error"]
-    c.post("/api/fsw/run", json={"from": "flash"})
-    assert wait(c, lambda j: j["status"] in ("failed", "done"))["status"] == "done"
+    assert run_to_try(c, "flash")["status"] == "done"
 
 
 def test_try_got_nothing_then_retry(setup):
     c, r, dev, *_ = setup(device=FakeDevice(read_fail=1))
     start_insert(c, r)
     wait(c, lambda j: j["status"] == "inserted")
-    c.post("/api/fsw/run", json={"from": "build"})
-    j = wait(c, lambda j: j["status"] in ("failed", "done"))
+    j = run_to_try(c)
     assert j["err"]["kind"] == "try"
+    assert dev.read_secs >= 40  # 等得够久：设备烧完会重启、连网，人还要喊唤醒词再说一句
+    assert "再试一次" in j["err"]["message"] and "唤醒" in j["err"]["message"]  # 超时了说清楚怎么重来
     c.post("/api/fsw/run", json={"from": "try"})
     assert wait(c, lambda j: j["status"] in ("failed", "done"))["status"] == "done"
+
+
+def test_flash_then_waits_for_ready_before_trying(setup):
+    """烧完不马上计时：先停在"准备好了"，人准备好再开始读。"""
+    c, r, dev, *_ = setup()
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    c.post("/api/fsw/run", json={"from": "build"})
+    j = wait(c, lambda j: j["status"] in ("ready_try", "failed", "done"))
+    assert j["status"] == "ready_try" and j["phase"] == "try"
+    time.sleep(0.1)
+    assert c.get("/api/fsw").json()["status"] == "ready_try"  # 一直等着，不自己开始
 
 
 def test_restore_puts_source_back_byte_for_byte_and_flashes_original(setup):
     c, r, dev, _, _, src = setup()
     start_insert(c, r)
     wait(c, lambda j: j["status"] == "inserted")
-    c.post("/api/fsw/run", json={"from": "build"})
-    wait(c, lambda j: j["status"] == "done")
+    run_to_try(c)
     j = c.post("/api/fsw/restore").json()
     assert j["same"] and j["flashed"] and dev.flashed[-1].endswith("firmware/orig")
     assert ins.compare(r["work"], src)["same"]

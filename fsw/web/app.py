@@ -90,10 +90,10 @@ class EspDevice:
             return {"ok": False, "error": "没找到乐鑫编译工具，烧录要用它带的 esptool。"}
         return EspIdf(found["path"]).flash_saved(fw, port, on_progress=on_progress)
 
-    def read(self, port, seconds, on_line):
+    def read(self, port, seconds, on_line, stop=None):
         ser = EspIdf.open_port(port)
         try:
-            return EspIdf.read_for(ser, seconds, on_line)
+            return EspIdf.read_for(ser, seconds, on_line, stop=stop)
         finally:
             ser.close()
 
@@ -160,6 +160,10 @@ class FswInsertBody(BaseModel):
     steps: list[dict]
     chip: str | None = None
     board: str | None = None
+
+
+TRY_SECONDS = 45   # 试一次最多等多久：设备烧完重启、连网，人还要喊唤醒词再说一句
+TRY_SETTLE = 4     # 收到一些计时点后，几秒没有新的就算试通
 
 
 class FswRunBody(BaseModel):
@@ -528,30 +532,42 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))
             return True
 
+        def ready():
+            """烧完先停下：设备会重启、连网，人要先喊唤醒词再说一句，等点了"准备好了"才开始试一次。"""
+            job.update(phase="try", status="ready_try", pct=0, got=[], log="等你准备好：先喊唤醒词，再说一句")
+            return None
+
         def try_once():
-            job.update(phase="try", pct=0, got=[], log="等计时点")
+            job.update(phase="try", pct=0, got=[], log="等计时点", try_secs=TRY_SECONDS)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
-            seen = set()
+            seen, last = set(), {"t": None}
 
             def on_line(line):
-                seen.update(ins.count_marks([line]) & want)
+                new = ins.count_marks([line]) & want
+                if new - seen:
+                    last["t"] = time.time()
+                seen.update(new)
                 job.update(got=sorted(seen), log=line[:200])
+
+            def enough():  # 都收到了；或者收到了一些、之后几秒再没有新的，就算试通
+                return seen == want or (seen and last["t"] and time.time() - last["t"] > TRY_SETTLE)
             try:
-                lines = device.read(job["port"] or port_finder()[0], 15, on_line)
+                lines = device.read(job["port"] or port_finder()[0], TRY_SECONDS, on_line, stop=enough)
             except Exception as e:
                 return _fail(job, "try", "试一次没收到计时点", error=f"打不开调试口：{e}")
             got = ins.count_marks(lines) & want
             job["got"] = sorted(got)
             if not got:
-                return _fail(job, "try", "试一次没收到计时点", error="（15 秒内没有计时点输出）")
+                return _fail(job, "try", f"{TRY_SECONDS} 秒内没收到计时点。重来：点「再试一次」，等设备屏幕回到待命，"
+                                        "先喊唤醒词，再说一句。", error=f"（{TRY_SECONDS} 秒内没有计时点输出）")
             job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
             return True
 
-        order = ["build", "flash", "try"]
+        order = ["build", "flash", "ready"] if start != "try" else ["try"]
 
         def run():
-            for name in order[order.index(start):]:
-                if {"build": build, "flash": flash, "try": try_once}[name]() is not True:
+            for name in order[order.index(start) if start in order else 0:]:
+                if {"build": build, "flash": flash, "ready": ready, "try": try_once}[name]() is not True:
                     return
 
         threading.Thread(target=run, daemon=True).start()
@@ -560,7 +576,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.post("/api/fsw/run")
     def fsw_run(body: FswRunBody):
         job = fsw["job"]
-        if not job or job["status"] in ("running", "waiting_device") or (job["status"] == "failed" and job["err"]["kind"] == "insert"):
+        if not job or job["status"] in ("running", "waiting_device") or (job["status"] == "failed" and job["err"]["kind"] == "insert") \
+                or (body.from_ == "try" and not job.get("port") and not port_finder()):
             raise HTTPException(409, "还没插好计时点，或者正在做")
         return _run_from(body.from_ if body.from_ in ("build", "flash", "try") else "build")
 

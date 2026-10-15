@@ -182,7 +182,7 @@ def to_page(demo):
     }
     pr = s["per_round"]
     C = {k: pr[k] for k in ("dev", "act", "unit", "cnt", "say", "said", "mode", "who", "listName",
-                            "per", "why", "wait", "items", "miss", "beepNote")}
+                            "per", "why", "wait", "items", "itemsFrom", "miss", "beepNote")}
     C["ph"] = [p["name"] for p in pr["phases"]]
     C["pcode"] = [int(p["point"].lstrip("P")) for p in pr["phases"]]
     C["probs"] = [{"k": p["key"], "t": p["name"], "c": p["level"], "rounds": res["problems"].get(p["key"], [])}

@@ -219,3 +219,11 @@ def test_voice_scenario_says_the_fixed_20_for_real_tests(client, sid):
     """真机实测要说的 20 句（项目文档"真机实测20句"）：去掉会结束对话、触发工具、回答太长的几句，改完再测也用这份。"""
     d = client.get(f"/api/demo/{sid}").json()
     assert d["C"]["items"] == SAY20
+
+
+@pytest.mark.parametrize("sid", ["voice", "dialog", "door"])
+def test_prep_page_says_the_list_is_fixed_not_made_by_ai(client, sid):
+    """准备页：要说 / 要刷的清单是固定清单，不是"AI 读完代码生成的"。"""
+    assert "固定清单" in client.get(f"/api/demo/{sid}").json()["C"]["itemsFrom"]
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'AI 读完代码、按"测从什么到什么"生成的' not in js and "C.itemsFrom" in js
