@@ -129,6 +129,12 @@ class PathBody(BaseModel):
     path: str
 
 
+class ExportBody(BaseModel):
+    html: str
+    what: str = "报告"
+    demo: str | None = None
+
+
 def _open_in_finder(path):
     """在 Finder / 资源管理器里打开文件所在的文件夹，并选中它。"""
     import subprocess
@@ -713,6 +719,33 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job["_scenario"] = stds.real_scenario(job["_page"], standard)
         job["_std"] = stds.digest(standard)
         return report()
+
+    KEYLIKE = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
+    OUTSIDE = re.compile(r"""<(?:script|link|img|iframe|source|video|audio)\b[^>]*\b(?:src|href)\s*=\s*["']?(?:https?:)?//|url\(\s*["']?(?:https?:)?//""", re.I)
+
+    @app.post("/api/report/export")
+    def report_export(body: ExportBody):
+        """导出：网页把报告拼成一个 HTML 文件（样式、切换都在文件里，断网能开），这里只核对后存下。
+        真测的存在项目文件夹的 reports/，演示数据的存在结果文件夹的 demo-reports/；文件名"场景_测完时间.html"，不覆盖。"""
+        html = body.html
+        if not html.lstrip().lower().startswith("<!doctype html"):
+            raise HTTPException(400, "导出的内容不是网页")
+        if KEYLIKE.search(html):
+            raise HTTPException(400, "导出的内容里像有密钥，没有存")
+        if OUTSIDE.search(html):
+            raise HTTPException(400, "导出的内容引用了外面的文件，断网打不开，没有存")
+        job = col["job"]
+        real = body.demo is None and job and job.get("demo") is None and job.get("raw_log")
+        folder = Path(job["raw_log"]).parent.parent.parent / "reports" if real else live["data"] / "demo-reports"
+        when = (job or {}).get("measured_at") if job and (real or job.get("demo") == body.demo) else None
+        stamp = (when or time.strftime("%Y-%m-%d %H:%M")).replace("-", "").replace(" ", "-").replace(":", "")
+        name = re.sub(r'[\\/:*?"<>|\s]+', "-", body.what.strip()).strip("-")[:40] or "报告"
+        folder.mkdir(parents=True, exist_ok=True)
+        p, n = folder / f"{name}_{stamp}.html", 2
+        while p.exists():
+            p, n = folder / f"{name}_{stamp}-{n}.html", n + 1
+        p.write_text(html, encoding="utf-8")
+        return {"ok": True, "path": str(p)}
 
     allowed_roots = lambda: [Path(live["data"]).resolve(), Path(data_dir).resolve()]
 

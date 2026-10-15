@@ -196,3 +196,13 @@ def test_report_text_uses_names_not_codes_and_open_folder():
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert "function plain(" in js and "plain(F.why)" in js and "为什么：${F.title}。${F.dev.data}" not in js
     assert "/api/open-folder" in js and "/api/report/refresh" in js
+
+
+def test_report_export_button_next_to_the_toggle(client):
+    """任务 18：导出按钮在报告右上角"结论建议 / 技术细节"旁边；导出的文件把样式和切换都放进去，按钮换掉、勾选换成 ☑ / ☐。"""
+    html = client.get("/").text
+    head = re.search(r'<header class="top">.*?</header>', html, re.S).group(0)
+    assert 'id="v-exp"' in head and ">导出<" in head
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "async function exportReport(" in js and "/api/report/export" in js
+    assert "'☑':'☐'" in js and "fetch('/static/style.css')" in js

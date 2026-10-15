@@ -403,6 +403,37 @@ function plain(t){if(!t)return t;const D=build(page==='report'&&JREP&&JREP._key=
  return String(t).replace(/\s*[（(]\s*P\d+\s*(?:[-→～~]\s*P\d+\s*)?[）)]/g,'')
   .replace(/\b(P\d+)\s*[-→～~]\s*(P\d+)\b/g,(m,a,b)=>seg[a+'-'+b]?`“${seg[a+'-'+b]}”`:pt[a]&&pt[b]?`“${pt[a]}”到“${pt[b]}”`:m)
   .replace(/\b(P\d+)\b/g,(m,a)=>pt[a]?`“${pt[a]}”`:m)}
+// 导出：把这份报告存成一个 HTML 文件（样式和"结论建议 / 技术细节"切换都在文件里，断网能开，不引用外面的文件）。
+// 按钮去掉、勾选换成 ☑ / ☐（导出那一刻勾的）、待办展开；"合理范围改过"提示条和"改完以后 / 还原"不放进去。
+function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
+  d.querySelectorAll('.stale').forEach(x=>x.remove());
+  d.querySelectorAll('section').forEach(x=>{const t=(x.querySelector('h2')||{}).textContent||'';if(t.startsWith('改完以后')||t.startsWith('设备上现在是'))x.remove()});
+  d.querySelectorAll('input[type=checkbox],input[type=radio]').forEach(i=>{const s=document.createElement('span');s.textContent=i.checked?'☑':'☐';s.className='ck';i.replaceWith(s)});
+  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else b.remove()});
+  d.querySelectorAll('[id]').forEach(x=>x.id=pre+x.id);d.querySelectorAll('.flash').forEach(x=>x.classList.remove('flash'));
+  d.querySelectorAll('details').forEach(x=>x.open=true);return d.innerHTML}
+async function exportReport(){
+  const keep={mode,fixTodo},m=document.getElementById('main');
+  mode='boss';fixTodo=true;render();const boss=m.innerHTML;mode='dev';render();const dev=m.innerHTML;mode=keep.mode;fixTodo=keep.fixTodo;render();
+  const css=await (await fetch('/static/style.css')).text();
+  const crumb=document.getElementById('crumb').cloneNode(true);crumb.querySelectorAll('button,.mock').forEach(x=>x.remove());
+  const info=crumb.textContent.replace(/^\s*›\s*/,'').trim(),parts=info.split('·').map(x=>x.trim()),what=parts[1]||parts[0]||'报告';
+  const real=repKey().startsWith('real')&&JREP&&!JREP._none,mock=!!document.querySelector('#crumb .mock');
+  const at=real&&JREP.measured_at?'测于 '+JREP.measured_at:'导出于 '+new Date().toLocaleString('zh-CN',{hour12:false}).replace(/\//g,'-').slice(0,-3);
+  const log=real&&JREP.raw_log?`原始日志在：${htmlEsc(JREP.raw_log)}`:'这份是模拟数据，没有原始日志文件。';
+  const html=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>码表报告 · ${htmlEsc(info)}</title><style>${css}
+.exphead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin:16px 0 8px}.exphead h1{font-size:15px;margin:0;color:var(--muted);font-weight:500}.ck{font-size:16px;margin-right:4px}
+.expnote{font-size:13px;color:var(--muted);border-top:1px solid var(--line);margin-top:24px;padding-top:10px}
+@media print{.tabs{display:none}#v-dev-body{display:block!important;page-break-before:always}}</style></head>
+<body><div class="wrap" style="max-width:960px;margin:0 auto;padding:0 16px">
+<div class="exphead"><div><h1>⏱ 固件码表 · 测量报告（导出）</h1><div class="note">${htmlEsc(info)} · ${at}${mock?'<span class="mock">模拟数据，不是实测</span>':''}</div></div>
+<div class="tabs seg" role="group" aria-label="报告版本"><button id="tb-b" aria-pressed="true" onclick="sw('b')">结论建议</button><button id="tb-d" aria-pressed="false" onclick="sw('d')">技术细节</button></div></div>
+<div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
+<p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。勾选的方案和待办是导出那一刻的样子；要改勾选，请在码表里打开这份报告。${log}</p></div>
+<script>function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
+  const r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene})});const j=await r.json();
+  if(!r.ok){toast('✕ '+(j.detail||'导出没成功'));return}
+  toast('✓ 已导出：'+j.path.split(/[\\/]/).pop());api('/api/open-folder',{path:j.path});return j.path}
 function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
   return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${F.title}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
 function myPick(D,FX){initPick(FX);
@@ -1081,7 +1112,7 @@ function render(){if(!scene||!SCENES[scene])return;applyScene();
   document.getElementById('nav-home').toggleAttribute('aria-current',page==='home');document.getElementById('nav-set').toggleAttribute('aria-current',page==='settings');
   document.getElementById('flowbar').innerHTML=flowBar();bgPill();
   const isReport=page==='report',isHome=page==='home';
-  document.getElementById('verseg').hidden=!isReport;
+  document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
   const PN=(PROJ.find(p=>p.scene===scene)||{}).name;document.getElementById('crumb').innerHTML=isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${D.S.crumb}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'';
   let body;
   if(isHome)body=HOME[homeVar].html();
@@ -1207,6 +1238,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-stale]')){if(repKey().startsWith('real')&&JREP&&JREP.stale){const since=JREP.stale_since,key=JREP._key;api('/api/report/refresh',{}).then(j=>{JREP={...j,_key:key,_refreshed:since};ADV=null;fixPick=null;render()});return}stale=2;render();return}
   if(e.target.closest('[data-openlog]')){if(repKey().startsWith('real')&&JREP&&JREP.raw_log)api('/api/open-folder',{path:JREP.raw_log}).then(j=>toast(j.ok?'✓ 已在访达里打开':'✕ '+(j.detail||'打不开')));else toast('演示数据没有原始日志文件：真测完才有');return}
   const cp=e.target.closest('[data-copy]');if(cp){const el=document.getElementById(cp.dataset.copy);if(el){try{navigator.clipboard.writeText(el.textContent)}catch(_){};copied=el.dataset.who;render();setTimeout(()=>{copied=null;if(page==='report')render()},1500)}return}
+  if(e.target.closest('#v-exp')){exportReport();return}
   const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}
   const rpv=e.target.closest('[data-repvar]');if(rpv){repVar=rpv.dataset.repvar;render();return}
   const td=e.target.closest('[data-todo]');if(td){fixTodo=!fixTodo;render();return}
