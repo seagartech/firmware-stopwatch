@@ -63,11 +63,15 @@ const VCLS={'慢':'c-bad','偏慢':'c-warn','正常':'c-ok','推算':'c-gray','�
 function withJudge(D,J){const L=n=>J.lines.find(x=>x.name===n)||{};
   D.verdict=l=>{const v=L(l.name).verdict||'正常';return [v==='没有范围'?'还没有合理范围':v,VCLS[v]||'c-gray']};
   const e=L(D.main.name).exp;D.exp=e?[e,e==='差'?'c-bad':'c-ok']:null;
-  const sp=J.labels.find(x=>x.kind==='spiky');D.spiky=sp?D.allSegs.find(s=>s.k===sp.segment)||null:null;
+  const sp=J.labels.find(x=>x.kind==='spiky'&&!x.with);  // 和对错问题同一根因的，算进那条
+  D.probs=J.labels.filter(x=>x.kind==='problem'&&!x.order);D.spiky=sp?D.allSegs.find(s=>s.k===sp.segment)||null:null;
   const ord=J.labels.find(x=>x.kind==='problem'&&x.order);D.reversed=ord?D.rounds.filter(r=>ord.rounds.includes(r.n)):[];
   if(J.biggest&&D.allSegs.find(s=>s.k===J.biggest))D.biggest=D.allSegs.find(s=>s.k===J.biggest);
   D.J=J;return D}
 const roundList=a=>'第 '+a.map(r=>r.n).join('、')+' 轮';
+// 分段用时的范围：某轮后一个点比前一个点先到（如回答开头被吞），算出来是负数，不写负数，写这一轮先后反了
+function rangeTxt(v,ns){const pos=v.filter(x=>x>=0),neg=ns.filter((n,i)=>v[i]<0);
+  return (pos.length?`${f(Math.min(...pos))}～${f(Math.max(...pos))}`:'—')+(neg.length?`（第 ${neg.join('、')} 轮先后反了）`:'')}
 function headline(D){
   const L=D.lines;
   if(L.length===1)return `${D.S.startShort} ${f(L[0].med,1)} 秒${L[0].phrase}`;
@@ -178,13 +182,14 @@ function subline(D){
   if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med,1)} 秒`);
   if(D.exp)bits.push(`按体验标准算<span class="chip ${D.exp[1]}">${D.exp[0]}</span>`);else bits.push('这个场景还没有体验标准');
   if(D.reversed.length)bits.push(`${roundList(D.reversed)}${D.lines[0].end}反而晚了`);
+  for(const x of D.probs||[])bits.push(`${roundList(x.rounds.map(n=>({n})))}${x.name}`);
   if(D.spiky)bits.push(`"${D.spiky.name}"偶尔特别慢`);
   return bits.join('；')+'。';
 }
 
 function dev(D){const T=D.S.tech;
-  const segRows=D.allSegs.map(s=>{const over=s.max>s.med*2.5&&s.max-s.med>.3;return `<tr><td style="font-family:var(--sans)">${s.name}（${s.code}）</td><td><span class="code">${T.loc[s.k]}</span></td><td style="font-family:var(--sans)">${s.owner}</td><td class="r">${f(s.med)}</td><td class="r">${f(Math.min(...s.v))}～${f(s.max)}</td><td class="r">${s.ok}</td><td style="font-family:var(--sans)">${D.J?(()=>{const [v,c]=segJudge(D,s),j=D.J.segments.find(x=>x.k===s.k);return `<span class="chip ${c}">${v}</span>${j&&j.outside?' <span class="chip c-gray">设备外</span>':''}`})():over?'<span class="chip c-warn">偶发特别慢</span>':'<span class="chip c-ok">正常</span>'}</td></tr>`}).join('');
-  const lineRows=D.lines.map(l=>{const [v,c]=D.verdict(l);return `<tr><td style="font-family:var(--sans)"><b>${l.name}合计</b>：${l.segs.map(k=>D.S.segs[k].name).join(' → ')}</td><td></td><td></td><td class="r">${f(l.med)}</td><td class="r">${f(Math.min(...l.ends))}～${f(l.max)}</td><td class="r">${l.ok?`${l.ok[0]}～${l.ok[1]??'不限'}`:'—'}</td><td style="font-family:var(--sans)"><span class="chip ${c}">${v}</span>${l===D.main&&D.exp?` <span class="chip ${D.exp[1]}">体验${D.exp[0]}</span>`:''}</td></tr>`}).join('');
+  const segRows=D.allSegs.map(s=>{const over=s.max>s.med*2.5&&s.max-s.med>.3;return `<tr><td style="font-family:var(--sans)">${s.name}（${s.code}）</td><td><span class="code">${T.loc[s.k]}</span></td><td style="font-family:var(--sans)">${s.owner}</td><td class="r">${f(s.med)}</td><td class="r">${rangeTxt(s.v,s.v.map((x,i)=>(D.rounds[i]||{}).n||i+1))}</td><td class="r">${s.ok}</td><td style="font-family:var(--sans)">${D.J?(()=>{const [v,c]=segJudge(D,s),j=D.J.segments.find(x=>x.k===s.k);return `<span class="chip ${c}">${v}</span>${j&&j.outside?' <span class="chip c-gray">设备外</span>':''}`})():over?'<span class="chip c-warn">偶发特别慢</span>':'<span class="chip c-ok">正常</span>'}</td></tr>`}).join('');
+  const lineRows=D.lines.map(l=>{const [v,c]=D.verdict(l);return `<tr><td style="font-family:var(--sans)"><b>${l.name}合计</b>：${l.segs.map(k=>D.S.segs[k].name).join(' → ')}</td><td></td><td></td><td class="r">${f(l.med)}</td><td class="r">${rangeTxt(l.ends,l.ends.map((x,i)=>(D.rounds[i]||{}).n||i+1))}</td><td class="r">${l.ok?`${l.ok[0]}～${l.ok[1]??'不限'}`:'—'}</td><td style="font-family:var(--sans)"><span class="chip ${c}">${v}</span>${l===D.main&&D.exp?` <span class="chip ${D.exp[1]}">体验${D.exp[0]}</span>`:''}</td></tr>`}).join('');
   const bad=[...new Set([...D.reversed,...D.slowRounds])].sort((a,b)=>a.n-b.n);
   const ovLo=(T.pts*.002).toFixed(3),ovHi=(T.pts*.003).toFixed(3);
   return `<div class="stack">${expDone()}${staleBar()}<div><h1>技术细节</h1><p class="sub">在代码哪里、具体怎么改、怎么验证。单位秒。<br>${realFlash()?'段名和代码位置来自找关键步骤的结果，合理范围来自码表自带的标准文件。':'段名、代码位置和合理范围来自 AI 识别结果和这个设备的标准文件；这里只演示样子。'}</p></div>
