@@ -1,0 +1,303 @@
+{
+ "format": "fsw-scenario/1",
+ "name": "小智（xiaozhi-esp32 c0fe42a）对话：先换表情、再开口",
+ "recognized": "读代码认出来的",
+ "what": "从说完话到先换表情、再开口",
+ "mode": "round",
+ "start": {
+  "name": "设备发现你停了",
+  "point": "P2",
+  "short": "你说完",
+  "title": "你说完（设备发现安静了）",
+  "unseen": {
+   "name": "真正说完到设备发现安静",
+   "note": "看不见，不计入",
+   "range": [
+    0,
+    null
+   ],
+   "take": null
+  }
+ },
+ "segments": {
+  "asr": {
+   "name": "服务器判断你说完 + 听写",
+   "what": "服务器判断你说完 + 听写",
+   "owner": "服务器",
+   "side": "outside",
+   "from": "P2",
+   "to": "P4",
+   "range": [
+    0.3,
+    1.0
+   ],
+   "slow": 1.2,
+   "basis": "measured"
+  },
+  "think": {
+   "name": "服务器想回答、合成第一句",
+   "what": "服务器想回答、合成第一句",
+   "owner": "服务器（大模型）",
+   "side": "outside",
+   "from": "P4",
+   "to": "P5",
+   "range": [
+    0.4,
+    1.5
+   ],
+   "slow": 2.0,
+   "basis": "measured"
+  },
+  "net": {
+   "name": "第一包声音传到设备",
+   "what": "第一包声音传到设备",
+   "owner": "服务器 + 网络",
+   "side": "outside",
+   "from": "P5",
+   "to": "P7",
+   "range": [
+    0.0,
+    0.2
+   ],
+   "slow": 0.3,
+   "basis": "measured"
+  },
+  "queue": {
+   "name": "第一包排进解压队列",
+   "what": "验证 03 没给这一段的范围，按代码推算",
+   "owner": "固件",
+   "side": "device",
+   "from": "P7",
+   "to": "P8",
+   "range": [
+    0.0,
+    0.01
+   ],
+   "slow": 0.03,
+   "basis": "estimated"
+  },
+  "decode": {
+   "name": "解压第一段声音",
+   "what": "解压第一段声音",
+   "owner": "固件",
+   "side": "device",
+   "from": "P8",
+   "to": "P9",
+   "range": [
+    0.002,
+    0.015
+   ],
+   "slow": 0.03,
+   "basis": "measured"
+  },
+  "speak": {
+   "name": "把声音交给喇叭芯片",
+   "what": "把声音交给喇叭芯片",
+   "owner": "固件",
+   "side": "device",
+   "from": "P9",
+   "to": "P10",
+   "range": [
+    0.0,
+    0.005
+   ],
+   "slow": 0.02,
+   "basis": "measured"
+  },
+  "state": {
+   "name": "设备切到说话状态",
+   "what": "设备切到说话状态",
+   "owner": "固件",
+   "side": "device",
+   "from": "P5",
+   "to": "P6",
+   "range": [
+    0.001,
+    0.01
+   ],
+   "slow": 0.03,
+   "basis": "measured"
+  },
+  "clear": {
+   "name": "清空播放器",
+   "what": "清空播放器",
+   "owner": "固件",
+   "side": "device",
+   "from": "P6",
+   "to": "P13",
+   "range": [
+    0.001,
+    0.015
+   ],
+   "slow": 0.04,
+   "basis": "measured"
+  },
+  "dec": {
+   "name": "决策模型选表情并发回",
+   "what": "决策模型选表情并发回",
+   "owner": "服务器（决策模型）+ 网络",
+   "side": "outside",
+   "from": "P4",
+   "to": "P11",
+   "range": [
+    0.2,
+    0.6
+   ],
+   "slow": 1.0,
+   "basis": "estimated"
+  },
+  "face": {
+   "name": "换表情",
+   "what": "换表情",
+   "owner": "固件",
+   "side": "device",
+   "from": "P11",
+   "to": "P12",
+   "range": [
+    0.001,
+    0.02
+   ],
+   "slow": 0.05,
+   "basis": "measured"
+  }
+ },
+ "lines": [
+  {
+   "name": "表情线",
+   "end": "换表情",
+   "phrase": "先换表情",
+   "segments": [
+    "asr",
+    "dec",
+    "face"
+   ],
+   "range": [
+    0.5,
+    1.6
+   ],
+   "slow": 2.0
+  },
+  {
+   "name": "说话线",
+   "end": "开口",
+   "phrase": "后开口",
+   "segments": [
+    "asr",
+    "think",
+    "net",
+    "queue",
+    "decode",
+    "speak"
+   ],
+   "range": [
+    0.7,
+    2.75
+   ],
+   "slow": null
+  }
+ ],
+ "experience": {
+  "line": "说话线",
+  "fair": 1.5,
+  "good": 0.8,
+  "source": "对话类公开参考"
+ },
+ "problems": [
+  {
+   "key": "rev",
+   "name": "表情比开口还晚",
+   "level": "warn",
+   "rule": {
+    "type": "line_order",
+    "first": "表情线",
+    "second": "说话线"
+   }
+  },
+  {
+   "key": "sw",
+   "name": "回答开头被吞",
+   "level": "bad",
+   "rule": {
+    "type": "any",
+    "rules": [
+     {
+      "type": "value_not",
+      "point": "P7",
+      "value": 6
+     },
+     {
+      "type": "point_before",
+      "a": "P8",
+      "b": "P13"
+     }
+    ]
+   }
+  }
+ ],
+ "expect_order": [
+  "表情线",
+  "说话线"
+ ],
+ "gaps": [
+  {
+   "name": "表情领先说话",
+   "earlier": "表情线",
+   "later": "说话线",
+   "range": [
+    0.3,
+    null
+   ]
+  }
+ ],
+ "applies": {
+  "repo": "github.com/78/xiaozhi-esp32",
+  "commit": "c0fe42a"
+ },
+ "source": "验证期推算的合理范围（说话线）和表情线的推算范围；都是推算或公开参考，不是实测，实测 20 轮后按真实数据改",
+ "points": {
+  "P2": {
+   "name": "设备发现你停了",
+   "at": "main/audio/engines/afe_audio_engine.cc:482"
+  },
+  "P4": {
+   "name": "收到听写文字",
+   "at": "main/application.cc:655"
+  },
+  "P5": {
+   "name": "收到\"开始说话\"",
+   "at": "main/application.cc:624"
+  },
+  "P6": {
+   "name": "切到说话状态",
+   "at": "main/application.cc:627"
+  },
+  "P13": {
+   "name": "清空播放器",
+   "at": "main/application.cc:1054"
+  },
+  "P7": {
+   "name": "第一包回答声音到达",
+   "at": "main/application.cc:555"
+  },
+  "P8": {
+   "name": "第一包声音排进解压队列",
+   "at": "main/application.cc:556"
+  },
+  "P9": {
+   "name": "第一段声音解压完成",
+   "at": "main/audio/audio_service.cc:453"
+  },
+  "P10": {
+   "name": "第一段声音送进喇叭",
+   "at": "main/audio/audio_service.cc:351"
+  },
+  "P11": {
+   "name": "收到表情指令",
+   "at": "main/application.cc:670"
+  },
+  "P12": {
+   "name": "表情换上",
+   "at": "main/application.cc:673"
+  }
+ }
+}

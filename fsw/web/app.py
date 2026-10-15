@@ -20,6 +20,8 @@ from fsw.scenario import to_page
 from fsw import identify as idf
 from fsw import instrument as ins
 from fsw import measure as meas
+from fsw import judge as jdg
+from fsw import standards as stds
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, find_idf, find_ports, pick_idf
@@ -555,12 +557,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if old and old["status"] in ("running", "waiting_device", "paused"):
             old["_stop"] = True
             time.sleep(0.05)
-        if body.page:
-            spec = meas.Spec.from_page(body.page)
+        if body.page:  # 真找完的步骤：按代码位置对上码表自带的合理范围标准
+            scenario = stds.real_scenario(body.page, stds.find(body.page.get("steps") or []))
         elif body.demo in demos:
-            spec = meas.Spec.from_scenario(demos[body.demo]["scenario"])
+            scenario = demos[body.demo]["scenario"]
         else:
             raise HTTPException(400, "不知道要测什么：先找关键步骤")
+        spec = meas.Spec.from_scenario(scenario)
         if body.resume and old:
             job, coll = old, old["_coll"]
             coll.finish()  # 停下时没收齐的那一轮不算
@@ -569,7 +572,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             run = base / "runs" / time.strftime("%Y%m%d-%H%M%S") if body.project_dir else base / f"{body.demo}-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}"
             run.mkdir(parents=True, exist_ok=True)
             coll = meas.Collector(spec)
-            job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll}
+            job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll, "_scenario": scenario,
+                   "demo": None if body.page else body.demo}
             col["job"] = job
         job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
         raw = open(job["raw_log"], "a", encoding="utf-8")
@@ -634,6 +638,35 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if job:
             job["_stop"] = True
         return _col_view(job) if job else {"status": "idle"}
+
+    def _demo_rounds(d):
+        """演示数据的每一轮（没测过时报告用）。"""
+        sc, res = d["scenario"], d["result"]
+        n = len(next(iter(res["segments"].values())))
+        out = []
+        for i in range(n):
+            segs = {k: v[i] for k, v in res["segments"].items()}
+            ends = [round(sum(segs[k] for k in l["segments"]), 6) for l in sc["lines"]]
+            out.append({"ok": True, "n": i + 1, "att": i + 1, "segs": segs, "ends": ends,
+                        "probs": [k for k, rs in res["problems"].items() if i + 1 in rs]})
+        return out
+
+    @app.get("/api/report")
+    def report(demo: str | None = None):
+        """报告用的判断：这次收齐的轮，按固定规则算（判快慢、两把尺子、结论标签），不用大模型。
+        demo=…：这套演示数据测过就用测的，没测过就用演示数据本身的数。"""
+        job = col["job"]
+        ok = [r for r in (job or {}).get("rounds", []) if r["ok"]]
+        same = job and (demo is None or job.get("demo") == demo)
+        if ok and same:
+            sc, raw = job["_scenario"], job["raw_log"]
+        elif demo in demos:
+            sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
+        else:
+            raise HTTPException(404, "还没有测完的轮")
+        out = jdg.judge(sc, ok)
+        keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names")
+        return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep}}
 
     @app.get("/api/collect")
     def collect_status():

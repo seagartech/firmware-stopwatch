@@ -175,3 +175,9 @@ def test_collect_page_reads_rounds_from_backend():
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert "/api/collect/start" in js and "/api/collect/stop" in js and "fetch('/api/collect')" in js
     assert "EventSource" not in js and "D.rounds[col.got" not in js
+
+
+def test_report_uses_backend_judgment():
+    """任务 16：报告的快慢、标签、两把尺子由后台按固定规则算，网页只显示。"""
+    js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
+    assert "/api/report" in js and "withJudge" in js and "decisionsJ" in js

@@ -1,0 +1,157 @@
+"""判快慢、两把尺子、结论标签。全部按固定规则从数据算，不用大模型、不由 AI 判断（决策 52）。
+
+两把尺子：
+- 体验标准（用户等不等得了）：只挂在有公认标准的那条线上（比如对话开口 1.5 秒），定结论；
+- 合理范围（这套做法有没有做坏）：每段、每条线都有，放技术细节。
+每条线按两把尺子的组合给一句话：
+- 体验差 + 在合理范围内：每段都没做坏，是做法本身慢，要换做法才会快
+- 体验差 + 超出合理范围：先查哪段做坏了
+- 体验可以 + 超出合理范围：可能有隐患
+- 都正常：正常
+结论标签：
+- 必须改：一般用时超过算慢线，或体验标准判"差"，或 10 次里最慢超过算慢线；对错问题（比如回答开头被吞）出现就算
+- 建议改：偶发特别慢、先后反了，但没到上一条（不到每 10 次 1 次以上）；或超出合理范围但不算慢
+- 可以不改：在合理范围内
+"""
+
+import math
+
+LEVELS = ["必须改", "建议改", "可以不改"]
+FEW = 20          # 少于 20 轮：结论只供参考
+SPIKE_RATIO, SPIKE_GAP = 2.5, 0.3   # 偶发特别慢：最慢一次超过一般的 2.5 倍，且多出 0.3 秒以上
+OFTEN = 0.1       # 每 10 次 1 次以上算"经常"
+
+
+def med(a):
+    s = sorted(a)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def p90(a):
+    """10 次里最慢：从快到慢排，第 90% 那一个（20 轮里是第 18 慢……即第 18 个）。"""
+    s = sorted(a)
+    return s[max(0, math.ceil(len(s) * 0.9) - 1)]
+
+
+def stats(vals):
+    return {"med": round(med(vals), 6), "p90": round(p90(vals), 6), "max": round(max(vals), 6), "min": round(min(vals), 6)}
+
+
+def verdict(st, rng, slow, basis="measured"):
+    """每段 / 每条线：正常、偏慢、慢；推算的段只标"推算"；没有范围的不判。"""
+    if basis == "estimated":
+        return "推算"
+    if not rng:
+        return "没有范围"
+    lo, hi = rng
+    if slow is not None and st["med"] > slow:
+        return "慢"
+    if hi is not None and st["med"] > hi:
+        return "偏慢"
+    return "正常"
+
+
+def experience(line_name, st, exp):
+    if not exp or exp.get("line") != line_name or exp.get("fair") is None:
+        return None
+    return "差" if st["med"] > exp["fair"] else "可以"
+
+
+def combo(exp, inside, verdict="正常"):
+    if verdict == "没有范围" and exp is None:
+        return "还没有合理范围：只记下用时，先不判快慢"
+    if exp is None:
+        return "只按合理范围判：正常" if inside else "只按合理范围判：先查哪段做坏了"
+    if exp == "差":
+        return "每段都没做坏，是做法本身慢，要换做法才会快" if inside else "先查哪段做坏了"
+    return "正常" if inside else "可能有隐患"
+
+
+def judge(scenario, rounds):
+    """scenario：fsw-scenario/1（段、线、合理范围、体验标准、问题规则）；rounds：多轮实测收齐的每一轮。"""
+    n = len(rounds)
+    segs_def, lines_def = scenario["segments"], scenario["lines"]
+    exp = scenario.get("experience")
+    out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": []}
+
+    seg_st = {}
+    for k, g in segs_def.items():
+        vals = [r["segs"][k] for r in rounds if r["segs"].get(k) is not None]
+        if not vals:
+            continue
+        st = stats(vals)
+        seg_st[k] = st
+        spiky = st["max"] > st["med"] * SPIKE_RATIO and st["max"] - st["med"] > SPIKE_GAP
+        out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
+                                "range": g.get("range"), "slow": g.get("slow"), "outside": g.get("side") == "outside",
+                                "verdict": verdict(st, g.get("range"), g.get("slow"), g.get("basis", "measured")),
+                                "spiky": spiky,
+                                "spiky_rounds": [r["n"] for r in rounds if r["segs"].get(k) is not None
+                                                 and r["segs"][k] > st["med"] * SPIKE_RATIO] if spiky else []})
+
+    for i, l in enumerate(lines_def):
+        ends = [r["ends"][i] for r in rounds if r["ends"][i] is not None]
+        if not ends:
+            continue
+        st = stats(ends)
+        v = verdict(st, l.get("range"), l.get("slow"))
+        e = experience(l["name"], st, exp)
+        out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
+                             "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常",
+                             "combo": combo(e, v == "正常", v),
+                             "over_slow": sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
+                             "segments": l["segments"]})
+
+    # 第一次反应：每轮几条线里最早到的那一下
+    if out["lines"]:
+        first = min(out["lines"], key=lambda x: x["med"])
+        firsts = [min(x for x in r["ends"] if x is not None) for r in rounds if any(x is not None for x in r["ends"])]
+        out["first"] = {"line": first["name"], **stats(firsts)}
+    if len(out["lines"]) >= 2:
+        a, b = out["lines"][0], out["lines"][-1]
+        diffs = [r["ends"][-1] - r["ends"][0] for r in rounds if None not in (r["ends"][0], r["ends"][-1])]
+        out["lead"] = {"first": a["name"], "second": b["name"], **stats(diffs)}
+
+    # 要测的那条线（最后一条）里最大头的一段
+    main = out["lines"][-1] if out["lines"] else None
+    if main:
+        mine = [k for k in main["segments"] if k in seg_st]
+        out["biggest"] = max(mine, key=lambda k: seg_st[k]["med"]) if mine else None
+
+    labels = []
+    line_by = {l["name"]: l for l in out["lines"]}
+    for l in out["lines"]:
+        slow = l["slow"]
+        if (slow is not None and (l["med"] > slow or l["p90"] > slow)) or l["exp"] == "差":
+            lv = "必须改"
+        elif l["verdict"] == "偏慢":
+            lv = "建议改"
+        else:
+            lv = "可以不改"
+        if l is main or lv != "可以不改":  # 别的线没问题就不单列
+            why = ("体验标准判差" if l["exp"] == "差" else "一般用时超过算慢线" if slow is not None and l["med"] > slow
+                   else "10 次里最慢超过算慢线" if slow is not None and l["p90"] > slow
+                   else "超出合理范围但不算慢" if lv == "建议改" else "还没有合理范围" if l["verdict"] == "没有范围"
+                   else "在合理范围内")
+            labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
+    for p in scenario.get("problems") or []:
+        rs = [r["n"] for r in rounds if p["key"] in (r.get("probs") or [])]
+        if not rs:
+            continue
+        often = len(rs) / max(1, n) > OFTEN
+        lv = "必须改" if p.get("level") == "bad" or often else "建议改"
+        labels.append({"k": f"problem:{p['key']}", "kind": "problem", "name": p.get("name", p["key"]), "rounds": rs,
+                       "order": (p.get("rule") or {}).get("type") == "line_order",
+                       "level": lv, "why": "对错问题，出现就要改" if p.get("level") == "bad" else
+                       "超过每 10 次 1 次" if often else "偶尔出现"})
+    for g in out["segments"]:
+        if not g["spiky"]:
+            continue
+        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and l["p90"] > l["slow"]]
+        labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
+                       "level": "必须改" if hit else "建议改",
+                       "why": "偶发特别慢，而且每 10 次就有 1 次让人等太久" if hit else "偶发特别慢"})
+    order = {k: i for i, k in enumerate(LEVELS)}
+    out["labels"] = sorted(labels, key=lambda x: order[x["level"]])  # 同一级里：线、问题、偶发特别慢（和原型的顺序一样）
+    return out
