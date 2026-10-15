@@ -263,3 +263,10 @@ def test_home_history_is_real_only_demo_only_in_demo_entry():
     rl = js.split("let HIST=")[1].split("const PROJ_LIST=")[0]
     assert "DEMO?PROJ" in rl and "HIST" in rl and "data-hopen" in rl
     assert "fetch('/api/history')" in js and "/api/history/open" in js
+
+
+def test_report_links_each_item_to_the_card_that_discusses_it():
+    """要你拍板：每段"偶尔特别慢"各有自己的编号，挂到讲它的那张卡片；和对错问题同一根因的合并进去，不单列。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "const cardOf=" in js and "x.with" in js
+    assert "out.push({k:'spiky'," not in js.split("function decisionsJ(")[1].split("\nfunction ")[0]
