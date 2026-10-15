@@ -314,10 +314,10 @@ class EspIdf:
         return {"ok": False, "port": port, "error": "\n".join(errs[-6:])}
 
     @staticmethod
-    def read_for(ser, seconds, on_line=lambda line: None):
-        """读调试口一段时间，一行行交出来（试一次用）。"""
+    def read_for(ser, seconds, on_line=lambda line: None, stop=None):
+        """读调试口一段时间，一行行交出来（试一次用）；stop() 为真就提前停（比如计时点都收到了）。"""
         end, buf, out = time.time() + seconds, b"", []
-        while time.time() < end:
+        while time.time() < end and not (stop and stop()):
             chunk = ser.read(ser.in_waiting or 1)
             if not chunk:
                 continue
