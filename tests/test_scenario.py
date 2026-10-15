@@ -117,3 +117,19 @@ def test_demo_files_store_scenario_and_result_separately(sid):
     assert "S" not in demo and "C" not in demo
     load_scenarios(demo["scenario"])
     assert set(demo["result"]["segments"]) == set(demo["scenario"]["segments"])
+
+
+# ---- 看附加值的问题规则（比如"回答开头被吞"看设备当时的状态）：要写清楚这个附加值是什么 ----
+
+def test_value_rule_must_say_what_value_the_point_records(base):
+    base["problems"] = [{"key": "x", "name": "开错门", "level": "bad",
+                         "rule": {"type": "value_not", "point": "P5", "value": 1}}]
+    msg = errors(base)
+    assert "附加值" in msg and "value_of" in msg
+
+
+def test_value_rule_with_value_of_is_fine(base):
+    base["problems"] = [{"key": "x", "name": "开错门", "level": "bad",
+                         "rule": {"type": "value_not", "point": "P5", "value": 1,
+                                  "value_of": {"what": "开的是哪扇门", "ok": "1 号门"}}}]
+    load_scenarios(base)

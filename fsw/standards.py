@@ -5,7 +5,8 @@
 - 标准里正好有这一段：直接用；
 - 标准里是连着的几段：范围、算慢线都加起来；含推算的段，整段标"推算"；
 - 对不上的段：没有范围，只记用时、不判快慢。
-问题规则里看附加值的（比如设备状态编号）对不上真插的计时点（附加值由插的时候定），不用；看线先后的照用。
+问题规则里看线先后的照用；看附加值的（比如"第一包声音到达时设备的状态"）要这个计时点真记了附加值才用：
+插计时点时码表按 needed_values 让 AI 顺带记上（只读已有的变量），插入记录里有了才判，没记上的不判。
 """
 
 import json
@@ -99,7 +100,48 @@ def _sum_range(standard, keys):
     return [lo, hi], slow, basis
 
 
-def real_scenario(page, standard):
+def _value_rules(rule):
+    if rule.get("type") == "any":
+        return [x for r in rule.get("rules", []) for x in _value_rules(r)]
+    return [rule] if rule.get("type") == "value_not" else []
+
+
+def needed_values(steps, standard):
+    """真步骤里哪几个计时点要顺带记附加值：标准里看附加值的问题规则，它的计时点对上了真插的哪一个。"""
+    if not standard:
+        return {}
+    back = {theirs: mine for mine, theirs in match_points(steps, standard).items()}
+    out = {}
+    for p in standard.get("problems") or []:
+        for r in _value_rules(p["rule"]):
+            mine = back.get(r["point"])
+            if mine:
+                vo = r.get("value_of") or {}
+                x = out.setdefault(mine, {"what": vo.get("what", "附加值"), "ok": vo.get("ok", ""), "how": vo.get("how", ""),
+                                          "value": r["value"], "for": []})
+                x["for"].append(p.get("name", p["key"]))
+    return out
+
+
+def _translate(rule, back, values):
+    """标准里的问题规则换成真计时点的编号；换不过来的（点没插、附加值没记）返回 None。"""
+    t = rule.get("type")
+    if t == "any":
+        rs = [x for x in (_translate(r, back, values) for r in rule.get("rules", [])) if x]
+        return None if not rs else rs[0] if len(rs) == 1 else {**rule, "rules": rs}
+    if t == "value_not":
+        mine = back.get(rule["point"])
+        if not mine or mine not in values:
+            return None
+        expect = values[mine].get("expect")
+        return {**rule, "point": mine, "value": rule["value"] if expect is None else expect}
+    if t == "point_before":
+        a, b = back.get(rule["a"]), back.get(rule["b"])
+        return {**rule, "a": a, "b": b} if a and b else None
+    return None
+
+
+def real_scenario(page, standard, values=None):
     """真找完的步骤（结果页数据）+ 标准 → 判快慢用的场景。没有标准就只有段和线、没有范围。"""
     steps = page.get("steps") or []
     mp = match_points(steps, standard) if standard else {}
@@ -148,10 +190,14 @@ def real_scenario(page, standard):
             exp = {**standard["experience"], "line": hit[0]["name"]}
     problems = []
     names = {l["std"]: l["name"] for l in lines if l["std"]}
+    back = {theirs: mine for mine, theirs in mp.items()}
     for p in (standard or {}).get("problems") or []:
         r = p["rule"]
-        if r["type"] == "line_order" and r["first"] in names and r["second"] in names:
-            problems.append({**p, "rule": {**r, "first": names[r["first"]], "second": names[r["second"]]}})
+        if r["type"] == "line_order":
+            if r["first"] in names and r["second"] in names:
+                problems.append({**p, "rule": {**r, "first": names[r["first"]], "second": names[r["second"]]}})
+        elif t := _translate(r, back, values or {}):
+            problems.append({**p, "rule": t})
     start = main[0][0] if main else None
     return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": start, "name": (steps[0]["n"] if steps else "起点")},
             "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
