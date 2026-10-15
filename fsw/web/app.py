@@ -662,6 +662,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.post("/api/collect/start")
     def collect_start(body: CollectBody):
+        if not 3 <= body.rounds <= 100:
+            raise HTTPException(400, "测几轮要在 3～100 轮之间：3～9 轮适合跑流程，正式测建议 20 轮以上。")
         old = col["job"]
         if old and old["status"] in ("running", "waiting_device", "paused"):
             old["_stop"] = True

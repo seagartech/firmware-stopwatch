@@ -123,7 +123,8 @@ def judge(scenario, rounds):
     line_by = {l["name"]: l for l in out["lines"]}
     for l in out["lines"]:
         slow = l["slow"]
-        if (slow is not None and (l["med"] > slow or l["p90"] > slow)) or l["exp"] == "差":
+        p90_ok = n >= 10  # 少于 10 轮，"10 次里最慢"没意义，不拿它判
+        if (slow is not None and (l["med"] > slow or (p90_ok and l["p90"] > slow))) or l["exp"] == "差":
             lv = "必须改"
         elif l["verdict"] == "偏慢":
             lv = "建议改"
@@ -131,7 +132,7 @@ def judge(scenario, rounds):
             lv = "可以不改"
         if l is main or lv != "可以不改":  # 别的线没问题就不单列
             why = ("体验标准判差" if l["exp"] == "差" else "一般用时超过算慢线" if slow is not None and l["med"] > slow
-                   else "10 次里最慢超过算慢线" if slow is not None and l["p90"] > slow
+                   else "10 次里最慢超过算慢线" if slow is not None and p90_ok and l["p90"] > slow
                    else "超出合理范围但不算慢" if lv == "建议改" else "还没有合理范围" if l["verdict"] == "没有范围"
                    else "在合理范围内")
             labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
@@ -148,7 +149,7 @@ def judge(scenario, rounds):
     for g in out["segments"]:
         if not g["spiky"]:
             continue
-        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and l["p90"] > l["slow"]]
+        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and n >= 10 and l["p90"] > l["slow"]]
         labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
                        "level": "必须改" if hit else "建议改",
                        "why": "偶发特别慢，而且每 10 次就有 1 次让人等太久" if hit else "偶发特别慢"})
