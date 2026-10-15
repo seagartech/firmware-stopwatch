@@ -299,3 +299,30 @@ def test_task20_plain_hints_and_restore_entries():
     """任务 20：多轮实测没数据时的提示显示出来；试一次多次不行给"还原成原版"；首页记录设备还是计时版时能还原。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "j.hint" in js and "E.offer_restore" in js and "data-hrestore" in js and "h.fsw_on" in js
+
+
+def test_original_build_failure_is_said_once():
+    """原版编不过：标题说一次"不是码表改的"，正文说原因和怎么办，不把后台那句再拼一遍。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    line = next(l for l in js.splitlines() if "if(E.kind==='orig')" in l)
+    assert line.count("不是码表改的") == 1 and "E.message" not in line
+
+
+def test_few_rounds_said_under_the_headline():
+    """少于 20 轮：报告一句话结论下面就说"次数少，结论只供参考"（多轮实测页答应过）。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "次数少，结论只供参考" in js.split("function reportPage(")[1].split("\nfunction ")[0]
+
+
+def test_flash_page_shows_compiler_installing_progress():
+    """设置页里点了安装再保存回来：烧录页的编译工具灯显示"正在装 xx%"（黄），装好自动变绿，不写"还没装"。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    line = next(l for l in js.splitlines() if "编译工具：还没装，编译前要装好" in l)
+    assert "inst.st===1" in line and "正在后台装" in line
+
+
+def test_found_modal_says_which_end_is_missing():
+    """找完了但起点或终点没找到：弹窗里就说是哪一头（不只在下一页说）。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    line = next(l for l in js.splitlines() if "个关键步骤：${mid} 个需要你核对" in l and l.lstrip().startswith("return"))
+    assert "IDENT.page.warn" in line

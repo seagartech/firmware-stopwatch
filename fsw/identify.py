@@ -139,7 +139,8 @@ def parse(text, root):
         which = "起点" if data.get("start_found") is False else "终点"
         if data.get("start_found") is False and data.get("end_found") is False:
             which = "起点和终点"
-        why = data.get("missing") or ""
+        why = (data.get("missing") or "").strip()
+        why = why + "。" if why and why[-1] not in "。！？.!?" else why
         if len(data.get("steps") or []) < 2:  # 找到的太少，列不出清单：请换个说法
             return _fail("no_end" if which == "终点" else "no_start",
                          f"在代码里没找到{which}。{why}<br>可以换个说法写\"测从什么到什么\"再找一次；"
