@@ -167,3 +167,25 @@ def test_restore_without_device_keeps_the_reminder(flash, tmp_path):
     j = c.post("/api/fsw/restore", json={"project_dir": r["project_dir"]}).json()
     assert j["flashed"]
     assert json.loads((Path(r["project_dir"]) / "on-device.json").read_text())["fsw"] is False
+
+
+# ---- 检查点 3：码表重开后接着走，插计时点不再花一次大模型 ----
+
+def test_reinsert_after_restart_reuses_the_plan(flash, tmp_path):
+    """同一份源码、同样的步骤：重开码表后再点"插入计时点"，用上次的插入方案，不再调用大模型。"""
+    calls = []
+    c, r, src, builder = flash(FakeDevice())
+    start_insert(c, r)
+    fwait(c, lambda j: j["status"] == "inserted")
+
+    def factory(p, k):
+        calls.append(1)
+        return FakeLLM(reply())
+    c2 = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=factory,
+                               idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
+                               cc_status=lambda: {"found": True, "logged_in": True},
+                               port_finder=lambda: ["/dev/cu.usbmodem1101"], bg_builder=builder,
+                               device=FakeDevice(), wait_step=0.01))
+    start_insert(c2, r)
+    j = fwait(c2, lambda j: j["status"] in ("inserted", "failed"))
+    assert j["status"] == "inserted" and j.get("reused") and calls == []

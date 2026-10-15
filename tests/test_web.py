@@ -326,3 +326,9 @@ def test_found_modal_says_which_end_is_missing():
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     line = next(l for l in js.splitlines() if "个关键步骤：${mid} 个需要你核对" in l and l.lstrip().startswith("return"))
     assert "IDENT.page.warn" in line
+
+
+def test_flash_page_says_when_insert_plan_was_reused():
+    """码表重开后再插：用上次的插入方案时，页面说没调用大模型。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "FSWJ.reused" in js and "用上次的插入方案，没调用大模型" in js
