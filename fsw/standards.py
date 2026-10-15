@@ -15,6 +15,26 @@ HERE = Path(__file__).parent / "standards"
 NEAR = 8  # 行号相差几行以内算同一个位置
 
 
+def digest(standard):
+    """标准的指纹：合理范围、算慢线、体验标准有任何改动都会变。"""
+    import hashlib
+    if not standard:
+        return None
+    return hashlib.sha1(json.dumps(standard, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def changed_at(standard):
+    """标准文件最后改的时间（给提示条用）。"""
+    import time
+    for p in HERE.glob("*.json"):
+        try:
+            if json.loads(p.read_text(encoding="utf-8")).get("name") == (standard or {}).get("name"):
+                return time.strftime("%m-%d %H:%M", time.localtime(p.stat().st_mtime))
+        except (OSError, ValueError):
+            continue
+    return "最近"
+
+
 def load_all():
     return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(HERE.glob("*.json"))]
 

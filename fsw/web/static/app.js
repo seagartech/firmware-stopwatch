@@ -11,7 +11,7 @@ const mx=a=>Math.max(...a);
 const f=(x,d=2)=>x.toFixed(d);
 const LCOL=['var(--face)','var(--speak)','var(--warn)','var(--muted)'];
 const LSOFT=['var(--face-soft)','var(--speak-soft)','var(--soft)','var(--soft)'];
-function build(S){
+function build(S){S.lines.forEach(l=>{if(l.slow==null)l.slow=Infinity});  // 没有算慢线：不算慢
   const n=Object.values(S.segs)[0].v.length;
   const use={};S.lines.forEach(l=>l.segs.forEach(k=>use[k]=(use[k]||0)+1));
   const lines=S.lines.map((l,i)=>{const ends=[...Array(n)].map((_,r)=>l.segs.reduce((t,k)=>t+S.segs[k].v[r],0));
@@ -189,7 +189,7 @@ function dev(D){const T=D.S.tech;
    <dt>计时点开销</dt><dd>每个计时点往调试口打印一行，约 0.002～0.003 秒（按调试口速度推算，未实测）。<br>一轮最多经过 ${T.pts} 个计时点，设备那几段的数字最多偏大约 ${ovLo}～${ovHi} 秒；服务器、网络那几段不受影响。<br>想确认开销，可以在"插计时点和烧录"页切回原版，各收一次比较。</dd></dl></section>
   <section class="panel scroll"><h2 style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">分段用时<button class="pill" data-go="range">合理范围依据</button></h2><table class="num"><thead><tr><th>段（计时点）</th><th>代码位置${T.locNote||''}</th><th>谁负责</th><th class="r">中位数</th><th class="r">最小～最大</th><th class="r">合理</th><th>判断</th></tr></thead><tbody>${segRows}${lineRows}</tbody></table></section>
   <section class="panel scroll"><h2>有问题的轮</h2>${bad.length?`<table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}</tr></thead><tbody>${bad.map(r=>`<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${f(e)}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<p class="note">没有。</p>'}</section>${fixDev(D)}
-  <section class="panel"><h2>原始日志</h2><p style="margin:0 0 8px"><span class="code">${T.log}</span></p><ul class="notes" style="margin:0 0 8px"><li>设备调试口输出的原样记录，没有删改：固件原有的日志和码表插的计时点行（FSW 开头）都在里面。</li><li>报告里所有数字都从这份文件算出来。</li><li>合理范围改过以后，报告顶上会提示用新范围更新，不用重测。</li></ul><div class="acts"><button class="pill">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
+  <section class="panel"><h2>原始日志</h2><p style="margin:0 0 8px"><span class="code">${T.log}</span></p><ul class="notes" style="margin:0 0 8px"><li>设备调试口输出的原样记录，没有删改：固件原有的日志和码表插的计时点行（FSW 开头）都在里面。</li><li>报告里所有数字都从这份文件算出来。</li><li>合理范围改过以后，报告顶上会提示用新范围更新，不用重测。</li></ul><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
 
@@ -383,16 +383,28 @@ const REPVAR={a:{label:'A 问题卡片',idea:'A 问题卡片：每个问题一�
  b:{label:'B 勾方案',idea:'B 勾方案：把所有问题的方案摊在一张表里，负责人直接勾要做的，下面自动汇总预计效果、要找谁、哪些有代价要权衡，还能生成一份待办发给相关的人。重在"拍板"这个动作。'},
  c:{label:'C 点哪段看哪段',idea:'C 点哪段看哪段：先选一段，旁边说清这段在做什么、用了多久、正不正常；有问题的段再给为什么和方案。适合想弄懂整条链路的人，也能看"这段为什么不用改"。'}};
 let repVar='a',fixPick=null,fixTodo=false,segSel=null,stale=1;
-function staleBar(){return flow?'':stale===1?`<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 10-13 14:20 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`:stale===2?`<p class="note" style="margin:0">✓ 已按 10-13 14:20 改过的合理范围更新。测出来的用时没变。</p>`:''}
-function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[]).find(x=>x.when.includes(d.k));if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv})});return out}
+// 真测的报告：合理范围（标准文件）在测完以后改过，才提示（决策 54）；刚测完的不显示
+function staleBar(){if(JREP&&!JREP._none&&JREP.scenario&&JREP.scenario.standard!==undefined&&repKey().startsWith('real')){
+  if(JREP.stale)return `<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 ${htmlEsc(JREP.stale_since)} 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`;
+  return JREP._refreshed?`<p class="note" style="margin:0">✓ 已按 ${htmlEsc(JREP._refreshed)} 改过的合理范围更新。测出来的用时没变。</p>`:''}
+ return flow?'':stale===1?`<section class="panel stale"><p style="margin:0 0 4px"><b>⚠ 合理范围在 10-13 14:20 改过，这份报告还是按改之前的范围判断的。</b></p><p class="note" style="margin:0 0 8px">不用再测。测出来的用时不变，会重新给出：哪段正常、哪段偏慢，以及要不要改。</p><div class="acts" style="margin:0"><button class="btn pri" data-stale="1">用新范围更新这份报告</button></div></section>`:stale===2?`<p class="note" style="margin:0">✓ 已按 10-13 14:20 改过的合理范围更新。测出来的用时没变。</p>`:''}
+function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[]).find(x=>x.when.includes(d.k));if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:plain(F.why),impact:plain(F.impact),rec:plain(F.rec),opts:F.opts.map(o=>({...o,name:plain(o.name),effect:plain(o.effect),cost:plain(o.cost),wn:plain(o.wn)}))})});return out}
 const ESTNOTE='<ul class="notes"><li><b>工作量</b>只分大、中、小，看的是要改多少、要不要别人配合，不折算成天数（码表不知道你们团队的人手和熟练度）。</li><li><span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护</li><li><b>效果</b>都是估算：依据是这次的实测数据、代码和公开资料，做完要用码表再测一次才算数。</li><li>码表只给建议，不会自动改代码。</li></ul>';
 function optTable(F,fi,pick){
   return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>`;
 }
 function initPick(FX){if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}}
 let copied=null;
+// 结论建议、待办里的文字：把"P2-P5""P4→P5""P7"这类编号换成中文名（技术细节里照原样）
+function plain(t){if(!t)return t;const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
+ const seg={};Object.entries(D.S.segs).forEach(([k,g])=>{seg[k]=g.name;const [a,b]=String(g.code||'').split('→').map(x=>x.trim());if(a&&b){seg[a+'-'+b]=g.name;seg[a+'→'+b]=g.name}});
+ const pt={};(repKey().startsWith('real')&&IDENT&&IDENT.page?IDENT.page.steps:FF[scene].steps||[]).forEach(x=>pt[x.p]=x.n);
+ // 括号里的编号前面已有中文名，直接去掉；没括号的换成中文名
+ return String(t).replace(/\s*[（(]\s*P\d+\s*(?:[-→～~]\s*P\d+\s*)?[）)]/g,'')
+  .replace(/\b(P\d+)\s*[-→～~]\s*(P\d+)\b/g,(m,a,b)=>seg[a+'-'+b]?`“${seg[a+'-'+b]}”`:pt[a]&&pt[b]?`“${pt[a]}”到“${pt[b]}”`:m)
+  .replace(/\b(P\d+)\b/g,(m,a)=>pt[a]?`“${pt[a]}”`:m)}
 function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
-  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${o.name}\n   为什么：${F.title}。${F.dev.data}\n   怎么做：${o.how}\n   做完的标准：${F.dev.verify}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${F.title}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
 function myPick(D,FX){initPick(FX);
   const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
   const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
@@ -1192,7 +1204,8 @@ document.addEventListener('click',e=>{
   const od=e.target.closest('[data-ondev]');if(od){onDev=od.dataset.ondev;flRun(2,3);render();return}
   const rv=e.target.closest('[data-rngvar]');if(rv){rngVar=rv.dataset.rngvar;rngAsk=0;render();return}
   const ra=e.target.closest('[data-rng]');if(ra){const a=ra.dataset.rng;rngAsk=a==='ask'?1:a==='ok'?2:0;if(a==='ok')stale=1;render();return}
-  if(e.target.closest('[data-stale]')){stale=2;render();return}
+  if(e.target.closest('[data-stale]')){if(repKey().startsWith('real')&&JREP&&JREP.stale){const since=JREP.stale_since,key=JREP._key;api('/api/report/refresh',{}).then(j=>{JREP={...j,_key:key,_refreshed:since};ADV=null;fixPick=null;render()});return}stale=2;render();return}
+  if(e.target.closest('[data-openlog]')){if(repKey().startsWith('real')&&JREP&&JREP.raw_log)api('/api/open-folder',{path:JREP.raw_log}).then(j=>toast(j.ok?'✓ 已在访达里打开':'✕ '+(j.detail||'打不开')));else toast('演示数据没有原始日志文件：真测完才有');return}
   const cp=e.target.closest('[data-copy]');if(cp){const el=document.getElementById(cp.dataset.copy);if(el){try{navigator.clipboard.writeText(el.textContent)}catch(_){};copied=el.dataset.who;render();setTimeout(()=>{copied=null;if(page==='report')render()},1500)}return}
   const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}
   const rpv=e.target.closest('[data-repvar]');if(rpv){repVar=rpv.dataset.repvar;render();return}
@@ -1219,7 +1232,7 @@ document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';rend
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){
  const list=await (await fetch('/api/demo')).json();
- for(const d of list){const x=await (await fetch('/api/demo/'+encodeURIComponent(d.id))).json();SCENES[d.id]=x.S;FF[d.id]=x.F;COLLECT[d.id]=x.C;RUNS[d.id]=x.R;RANGE[d.id]=x.RG;RT[d.id]=x.RT;PROJ.push({...x.P,scene:d.id})}
+ for(const d of list){const x=await (await fetch('/api/demo/'+encodeURIComponent(d.id))).json();SCENES[d.id]=x.S;FF[d.id]=x.F;COLLECT[d.id]=x.C;RUNS[d.id]=x.R;RANGE[d.id]=x.RG;RT[d.id]=x.RT;if(!d.hidden)PROJ.push({...x.P,scene:d.id})}  // 只用来核对报告的演示数据（hidden）不进"以前测过的"
  scene=DEMO&&SCENES[DEMO]?DEMO:list[0].id;pName=FF[scene].pname;mapSel=FF[scene].mapSel;
  try{const e=await (await fetch('/api/env')).json();IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);CCST=e.claude_code||null;PORTS=e.ports||[]}catch(e){}
  try{SAVED=(await (await fetch('/api/state')).json()).settings;if(P2UI[SAVED.llm_provider])setLLM=P2UI[SAVED.llm_provider];reuseLast=SAVED.reuse_last!==false;setFirst=!SAVED.llm_provider}catch(e){}
