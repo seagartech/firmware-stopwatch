@@ -255,3 +255,11 @@ def test_try_once_waits_for_you_to_be_ready():
     """试一次：先大字提示"先喊唤醒词，再说一句"，点"准备好了"才开始。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "先喊唤醒词，再说一句" in js and "准备好了" in js and "data-flx=\"trygo\"" in js and "'ready_try'" in js
+
+
+def test_home_history_is_real_only_demo_only_in_demo_entry():
+    """首页"以前测过的"只列真测过的（后台 /api/history）；演示数据只在演示入口（地址里写 ?demo=）出现。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    rl = js.split("let HIST=")[1].split("const PROJ_LIST=")[0]
+    assert "DEMO?PROJ" in rl and "HIST" in rl and "data-hopen" in rl
+    assert "fetch('/api/history')" in js and "/api/history/open" in js

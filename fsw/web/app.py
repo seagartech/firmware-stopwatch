@@ -123,6 +123,7 @@ class CollectBody(BaseModel):
     resume: bool = False             # 接着测 / 再测几轮
     interval: float = 0.12           # 回放时每行间隔（秒）
     drop_at: int = 0                 # 回放时第几次故意没收全（演示"没收全，自动补测"）
+    what: str | None = None          # 你自己写的"测什么"（首页"以前测过的"和导出文件名用）
 
 
 class PathBody(BaseModel):
@@ -146,6 +147,18 @@ def _open_in_finder(path):
         subprocess.Popen(["explorer", "/select,", path])
     else:
         subprocess.Popen(["xdg-open", str(Path(path).parent)])
+
+
+def _open_file(path):
+    """用默认程序打开文件（导出的报告是网页，会用浏览器打开）。"""
+    import subprocess
+    import sys
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    elif os.name == "nt":
+        os.startfile(path)  # noqa
+    else:
+        subprocess.Popen(["xdg-open", path])
 
 
 class AdviseBody(BaseModel):
@@ -627,6 +640,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             base = Path(body.project_dir) if body.project_dir else live["data"] / "demo-runs"
             run = base / "runs" / time.strftime("%Y%m%d-%H%M%S") if body.project_dir else base / f"{body.demo}-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}"
             run.mkdir(parents=True, exist_ok=True)
+            if body.page:  # 这次测的是什么，留一份：首页"以前测过的"按它重算
+                (run / "run.json").write_text(json.dumps({"page": body.page, "values": values, "what": body.what or body.page.get("mapWhat"),
+                                                          "measured_at": time.strftime("%Y-%m-%d %H:%M")}, ensure_ascii=False), encoding="utf-8")
             coll = meas.Collector(spec)
             job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll, "_scenario": scenario,
                    "demo": None if body.page else body.demo, "_page": body.page, "_std": std_hash, "_values": values,
@@ -773,6 +789,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             p, n = folder / f"{name}_{stamp}-{n}.html", n + 1
         p.write_text(html, encoding="utf-8")
         exported.add(p.resolve())
+        if real:  # 记在项目里：首页"以前测过的"点这条能打开最近一份
+            ej = Path(job["raw_log"]).parent.parent.parent / "exports.json"
+            try:
+                old = json.loads(ej.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                old = []
+            ej.write_text(json.dumps(old + [str(p)], ensure_ascii=False), encoding="utf-8")
         return {"ok": True, "path": str(p)}
 
     def _export_dir(demo=None):
@@ -789,6 +812,79 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 pass
             return str(proj / "reports")
         return str(live["data"] / "demo-reports")
+
+    def _run_meta(proj, run):
+        try:
+            return json.loads((run / "run.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):  # 早先测的没留这份：用这个项目最近一次找关键步骤的结果
+            ids = sorted((proj / "identify").glob("*.json"), key=lambda f: f.stat().st_mtime)
+            if not ids:
+                return None
+            d = json.loads(ids[-1].read_text(encoding="utf-8"))
+            t = run.name
+            return {"page": d.get("page"), "values": None, "what": d.get("what") or (d.get("page") or {}).get("mapWhat"),
+                    "measured_at": f"{t[:4]}-{t[4:6]}-{t[6:8]} {t[9:11]}:{t[11:13]}" if len(t) >= 13 else t}
+
+    def _run_med(proj, run, meta):
+        page = meta.get("page") or {}
+        sc = stds.real_scenario(page, stds.find(page.get("steps") or []), meta.get("values"))
+        lines = (run / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
+        ok = [r for r in meas.collect(lines, meas.Spec.from_scenario(sc)) if r["ok"] and r["ends"][-1] is not None]
+        return (round(jdg.med([r["ends"][-1] for r in ok]), 3), len(ok)) if ok else (None, 0)
+
+    def _latest_report(proj):
+        cands = []
+        try:
+            cands += [Path(x) for x in json.loads((proj / "exports.json").read_text(encoding="utf-8"))]
+        except (OSError, ValueError):
+            pass
+        cands += list((proj / "reports").glob("*.html"))
+        cands = [x for x in cands if x.exists()]
+        return str(max(cands, key=lambda x: x.stat().st_mtime)) if cands else None
+
+    @app.get("/api/history")
+    def history():
+        """首页"以前测过的"：只列真测过的（结果文件夹里有原始日志的项目），每条按原始日志重算，不混演示数据。"""
+        out = []
+        for pj in sorted(Path(live["data"]).glob("*/project.json")):
+            proj = pj.parent
+            try:
+                info = json.loads(pj.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            done = []
+            for log in sorted(proj.glob("runs/*/raw.log")):
+                meta = _run_meta(proj, log.parent)
+                if not meta or not meta.get("page"):
+                    continue
+                try:
+                    m, n = _run_med(proj, log.parent, meta)
+                except Exception:
+                    continue
+                if m is not None:
+                    done.append((meta, m, n))
+            if not done:
+                continue
+            meta, now, n = done[-1]
+            page = meta["page"]
+            metric = (page.get("measure") or "").split("→")[-1].strip() or "终点"
+            out.append({"name": info.get("name", proj.name) + (f"（{info['board']}）" if info.get("board") else ""),
+                        "what": meta.get("what") or "", "last": meta.get("measured_at") or "", "rounds": n, "metric": metric,
+                        "now": now, "prev": done[-2][1] if len(done) > 1 else None, "path": info.get("source"),
+                        "project_dir": str(proj), "report": _latest_report(proj)})
+        return sorted(out, key=lambda x: x["last"], reverse=True)
+
+    @app.post("/api/history/open")
+    def history_open(body: PathBody):
+        """首页点一条以前测过的：打开它最近导出的那份报告（一个网页文件）。"""
+        proj = Path(body.path).expanduser().resolve()
+        if Path(live["data"]).resolve() not in proj.parents:
+            raise HTTPException(403, "只能打开码表结果文件夹里的项目")
+        rep = _latest_report(proj)
+        if not rep:
+            raise HTTPException(404, "这次测完还没导出报告")
+        (opener or _open_file)(rep)
+        return {"ok": True, "path": rep}
 
     @app.get("/api/report/export-dir")
     def report_export_dir(demo: str | None = None):
