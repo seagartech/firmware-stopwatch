@@ -293,3 +293,9 @@ def test_real_range_page_shows_this_runs_standard_not_demo():
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "function rangeReal(" in js
     assert "if(realFlash()&&JREP&&!JREP._none)return rangeReal()" in js.split("function rangePage(")[1][:200]
+
+
+def test_task20_plain_hints_and_restore_entries():
+    """任务 20：多轮实测没数据时的提示显示出来；试一次多次不行给"还原成原版"；首页记录设备还是计时版时能还原。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "j.hint" in js and "E.offer_restore" in js and "data-hrestore" in js and "h.fsw_on" in js
