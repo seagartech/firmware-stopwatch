@@ -270,3 +270,26 @@ def test_report_links_each_item_to_the_card_that_discusses_it():
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "const cardOf=" in js and "x.with" in js
     assert "out.push({k:'spiky'," not in js.split("function decisionsJ(")[1].split("\nfunction ")[0]
+
+
+def test_real_collect_page_does_not_borrow_demo_content():
+    """多轮实测页：真流程用这次的线、问题和每轮做什么（/api/rounds），不再用演示数据的。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "/api/rounds" in js and "const CX=" in js and "const DX=" in js
+    for fn in ("function colSetup(", "function colA(", "function colB(", "function colC(", "function tipOf(",
+               "function needMore(", "function enough(", "function colApply("):
+        body = js.split(fn)[1].split("\nfunction ")[0]
+        assert "build(SCENES[scene])" not in body and "CC()" not in body, fn
+
+
+def test_suggestions_have_no_duplicates():
+    """首页常用语：这个项目测过的 → AI 推荐 → 通用例子，同一句只出现一次。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "new Set(" in js.split("function chips(")[1].split("\nfunction ")[0]
+
+
+def test_real_range_page_shows_this_runs_standard_not_demo():
+    """报告里"合理范围依据"：真流程看这次对上的标准和实测基线（只读），不再显示演示数据的标准文件。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "function rangeReal(" in js
+    assert "if(realFlash()&&JREP&&!JREP._none)return rangeReal()" in js.split("function rangePage(")[1][:200]

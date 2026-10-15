@@ -646,7 +646,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             coll = meas.Collector(spec)
             job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll, "_scenario": scenario,
                    "demo": None if body.page else body.demo, "_page": body.page, "_std": std_hash, "_values": values,
-                   "measured_at": time.strftime("%Y-%m-%d %H:%M")}
+                   "measured_at": time.strftime("%Y-%m-%d %H:%M"),
+                   # 这次真的场景：网页多轮实测页按它画线、标问题，不借演示数据
+                   "lines": [{"name": l["name"], "range": l.get("range"), "slow": l.get("slow")} for l in scenario["lines"]],
+                   "problems": [{"key": p["key"], "name": p.get("name", p["key"]), "level": p.get("level", "warn")}
+                                for p in scenario.get("problems") or []],
+                   "experience": scenario.get("experience")}
             col["job"] = job
         job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
         raw = open(job["raw_log"], "a", encoding="utf-8")
@@ -885,6 +890,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(404, "这次测完还没导出报告")
         (opener or _open_file)(rep)
         return {"ok": True, "path": rep}
+
+    ROUNDS = json.loads((Path(__file__).parent / "rounds.json").read_text(encoding="utf-8"))["templates"]
+
+    @app.get("/api/rounds")
+    def rounds_template(what: str = "", start: str = ""):
+        """多轮实测每轮做什么：按你写的"测什么"挑模板（对话类用固定的 20 句；别的按起点的说法，比如"按一下按键"）。"""
+        t = next(t for t in ROUNDS if not t["match"] or re.search(t["match"], what))
+        fill = lambda v: [fill(x) for x in v] if isinstance(v, list) else str(v).replace("{start}", start.strip() or "触发一次")
+        return {"template": t["name"], **{k: fill(v) for k, v in t["fields"].items()}}
 
     @app.get("/api/report/export-dir")
     def report_export_dir(demo: str | None = None):
