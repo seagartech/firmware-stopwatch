@@ -6,6 +6,11 @@
 一轮里会重复的那段（比如每次调用工具）用 each=true 的线表示，按每次分别算。
 
 单位一律是秒。起点是"设备最早知道的时刻"；之前看不见的那段写在 start.unseen 里，只推算、不计入。
+
+计时点每行带一个附加值（整数，FSW,P<编号>,<微秒>,<附加值>），没有就是 0。看附加值的问题规则（value_not）
+要写 value_of：what（这个附加值记的是什么，比如"设备当时的状态"）、ok（正常时是什么，比如"说话中"）、
+how（可选，怎么读到它，比如"读设备当前状态，转成整数"）。插计时点时码表按 value_of 让 AI 在这个计时点顺带记上，
+附加值只能是读已有的变量或函数返回值，不能改逻辑；没记上的，这条规则就不用（不判，不会误报）。
 """
 
 FORMAT = "fsw-scenario/1"
@@ -16,7 +21,7 @@ MODES = {"round": "按轮测（每轮触发一次）", "event": "按事件测（
 LEVELS = {"warn", "bad"}
 RULES = {
     "line_order": ("first", "second"),      # 第一条线的终点反而比第二条晚
-    "value_not": ("point", "value"),        # 某计时点的附加值不是预期的
+    "value_not": ("point", "value", "value_of"),  # 某计时点的附加值不是预期的（value_of 写清楚这个附加值是什么）
     "point_before": ("a", "b"),             # 计时点 a 反而早于 b
     "segment_over": ("segment", "seconds"),  # 某段超过多少秒
     "line_over": ("line", "seconds"),       # 某条线超过多少秒
@@ -48,12 +53,17 @@ def _check_rule(rule, s, errs, where):
         return
     for field in RULES[t]:
         if field not in rule:
-            errs.append(f"{where}：规则 {t} 缺 {field}")
+            errs.append(f"{where}：规则 {t} 缺 {field}" + ("（看附加值的规则要写清楚这个附加值是什么：value_of.what、value_of.ok）"
+                                                         if field == "value_of" else ""))
     lines = {l.get("name") for l in s.get("lines", [])}
     if t == "line_order":
         for f in ("first", "second"):
             if rule.get(f) not in lines:
                 errs.append(f"{where}：没有「{rule.get(f)}」这条线")
+    if t == "value_not" and "value_of" in rule:
+        vo = rule["value_of"]
+        if not (isinstance(vo, dict) and vo.get("what") and vo.get("ok")):
+            errs.append(f"{where}：value_of 要写 what（这个附加值记的是什么）和 ok（正常时是什么）")
     if t == "segment_over" and rule.get("segment") not in s.get("segments", {}):
         errs.append(f"{where}：没有「{rule.get('segment')}」这一段")
     if t == "line_over" and rule.get("line") not in lines:

@@ -184,3 +184,58 @@ def test_compare_ignores_files_the_build_generated_but_not_ours(tmp_path, door):
     (door / "main/ui_led.c").unlink()
     (orig / "main/ui_led.c").write_text("x", encoding="utf-8")
     assert ins.compare(door, orig)["diff"] == ["main/ui_led.c"]  # ……原版里有、这边没了的算
+
+
+# ---------- 附加值：问题规则要看的计时点顺带记一个值（只读已有的变量），码表核对 ----------
+
+NEED = {"P2": {"what": "读卡器当时的模式", "ok": "正常读卡", "how": "读读卡器当前模式（转成整数）", "value": 1, "for": ["读错卡"]}}
+
+
+def plan_with_value(expr, values=None):
+    p = json.loads(json.dumps(PLAN))
+    p["inserts"][2]["lines"] = ["    // 计时点 P2：卡号读完（附加值：读卡器当时的模式）", f"    FSW_MARK_ONCE(2, {expr});"]
+    if values is not None:
+        p["values"] = values
+    return p
+
+
+def test_prompt_asks_for_the_value_where_a_rule_needs_it():
+    t = ins.build_prompt(STEPS, "main/fw_stopwatch.h", needs=NEED)
+    assert "附加值" in t and "读卡器当时的模式" in t and "正常读卡" in t and "只能读" in t
+    assert '"values"' in t
+    assert "读卡器当时的模式" not in ins.build_prompt(STEPS, "main/fw_stopwatch.h")  # 不需要就不提
+
+
+@pytest.mark.parametrize("expr", ["(int)g_reader.mode", "static_cast<int>(Reader::GetInstance().GetMode())",
+                                  "reader->mode", "rfid_mode()", "0", "-1", "(int32_t)state_"])
+def test_value_may_only_read(door, expr):
+    r = ins.parse_plan(reply(plan_with_value(expr, [{"step": "P2", "expect": 1}])), door, STEPS, needs=NEED)
+    assert r["ok"], r.get("message")
+
+
+@pytest.mark.parametrize("expr", ["mode = 1", "count++", "--count", "set_mode(1)", "a, b", "x += 1", "f(g())",
+                                  '"abc"', "x ? 1 : 0"])
+def test_value_that_changes_anything_is_refused(door, expr):
+    r = ins.parse_plan(reply(plan_with_value(expr)), door, STEPS, needs=NEED)
+    assert not r["ok"] and "附加值" in r["message"]
+
+
+def test_recorded_value_goes_into_the_record(door, tmp_path):
+    plan = ins.parse_plan(reply(plan_with_value("(int)g_reader.mode", [{"step": "P2", "expect": 3, "why": "枚举第 3 个"}])),
+                          door, STEPS, needs=NEED)
+    assert plan["values"] == {"P2": {"expr": "(int)g_reader.mode", "expect": 3, "what": "读卡器当时的模式"}}
+    rec = ins.apply(door, plan, tmp_path / "bk")
+    assert ins.current(tmp_path / "bk")["values"]["P2"]["expect"] == 3
+    v = ins.diff_view(rec, STEPS)
+    assert any("读卡器当时的模式" in p["n"] for p in v["places"])
+
+
+def test_needed_value_not_recorded_is_said_not_failed(door):
+    plan = ins.parse_plan(reply(), door, STEPS, needs=NEED)  # AI 没记（附加值还是 0）
+    assert plan["ok"] and plan["values"] == {}
+    assert any("读卡器当时的模式" in n and "读错卡" in n for n in plan["notes"])
+
+
+def test_expect_defaults_to_the_standard(door):
+    plan = ins.parse_plan(reply(plan_with_value("(int)g_reader.mode")), door, STEPS, needs=NEED)
+    assert plan["values"]["P2"]["expect"] == 1

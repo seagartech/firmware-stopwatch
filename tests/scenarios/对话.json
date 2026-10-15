@@ -184,7 +184,12 @@
      {
       "type": "value_not",
       "point": "P7",
-      "value": 6
+      "value": 6,
+      "value_of": {
+       "what": "设备当时的状态",
+       "ok": "说话中",
+       "how": "读设备当前的状态（转成整数），只读、不改状态"
+      }
      },
      {
       "type": "point_before",

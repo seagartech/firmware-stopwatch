@@ -66,3 +66,31 @@ def test_page_without_standard_has_no_ranges_but_still_judges():
     rounds = [{"n": i + 1, "segs": {k: 0.1 for k in sc["segments"]}, "ends": [0.3, 0.6], "probs": []} for i in range(20)]
     j = J.judge(sc, rounds)
     assert j["lines"][-1]["verdict"] == "没有范围" and j["labels"][0]["level"] == "可以不改"
+
+
+# ---- 附加值：标准里看附加值的问题规则，对上真插的计时点，插的时候顺带记下；记上了才判 ----
+
+def test_needed_values_follow_the_rules_of_the_matched_standard():
+    s = std.find(REAL_STEPS)
+    need = std.needed_values(REAL_STEPS, s)
+    assert list(need) == ["P7"]  # 标准里的"第一包回答声音到达"就是真插的 P7
+    assert need["P7"]["what"] == "设备当时的状态" and need["P7"]["value"] == 6 and need["P7"]["ok"] == "说话中"
+    assert "回答开头被吞" in need["P7"]["for"]
+
+
+def test_no_standard_no_values():
+    assert std.needed_values(REAL_STEPS, None) == {}
+
+
+def test_value_rule_kept_only_when_the_point_really_records_the_value():
+    s = std.find(REAL_STEPS)
+    assert [p["key"] for p in std.real_scenario(PAGE, s)["problems"]] == ["rev"]  # 没记附加值：查不了吞字
+    sc = std.real_scenario(PAGE, s, values={"P7": {"expr": "(int)GetDeviceState()", "expect": 6}})
+    sw = next(p for p in sc["problems"] if p["key"] == "sw")
+    assert sw["rule"] == {"type": "value_not", "point": "P7", "value": 6,
+                          "value_of": sw["rule"]["value_of"]}  # 真插里没有"排进队列"那个点，另一条规则不用
+
+
+def test_value_number_comes_from_the_code_when_ai_read_a_different_one():
+    sc = std.real_scenario(PAGE, std.find(REAL_STEPS), values={"P7": {"expr": "x", "expect": 4}})
+    assert next(p for p in sc["problems"] if p["key"] == "sw")["rule"]["value"] == 4

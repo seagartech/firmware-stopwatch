@@ -452,13 +452,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     return plan_text["t"]
             try:
                 t0 = time.time()
-                text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work)), body.work,
+                needs = stds.needed_values(steps, stds.find(steps))  # 问题规则要看附加值的计时点：让 AI 顺带记上
+                text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
                                          on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
             except llms.LLMError as e:
                 return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。")
             Path(body.project_dir).mkdir(parents=True, exist_ok=True)
             (Path(body.project_dir) / "fsw-plan-reply.txt").write_text(text, encoding="utf-8")  # AI 的原话留一份，出错时好查
-            plan = ins.parse_plan(text, body.work, steps)
+            plan = ins.parse_plan(text, body.work, steps, needs)
             job["seconds"]["insert"] = round(time.time() - t0, 1)
             if not plan["ok"]:
                 return _fail(job, "insert", plan["message"])
@@ -589,9 +590,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             old["_stop"] = True
             time.sleep(0.05)
         std_hash = None
+        values = None
         if body.page:  # 真找完的步骤：按代码位置对上码表自带的合理范围标准
             standard = stds.find(body.page.get("steps") or [])
-            scenario = stds.real_scenario(body.page, standard)
+            if body.project_dir:  # 插计时点时顺带记了附加值的计时点（插入记录里），看附加值的问题规则才用
+                values = (ins.current(Path(body.project_dir) / "fsw-backup") or {}).get("values") or None
+            scenario = stds.real_scenario(body.page, standard, values)
             std_hash = stds.digest(standard)
         elif body.demo in demos:
             scenario = demos[body.demo]["scenario"]
@@ -607,7 +611,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             run.mkdir(parents=True, exist_ok=True)
             coll = meas.Collector(spec)
             job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll, "_scenario": scenario,
-                   "demo": None if body.page else body.demo, "_page": body.page, "_std": std_hash,
+                   "demo": None if body.page else body.demo, "_page": body.page, "_std": std_hash, "_values": values,
                    "measured_at": time.strftime("%Y-%m-%d %H:%M")}
             col["job"] = job
         job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
@@ -716,7 +720,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if not job or job.get("_page") is None:
             raise HTTPException(409, "这份报告不用更新")
         standard = stds.find(job["_page"].get("steps") or [])
-        job["_scenario"] = stds.real_scenario(job["_page"], standard)
+        job["_scenario"] = stds.real_scenario(job["_page"], standard, job.get("_values"))
         job["_std"] = stds.digest(standard)
         return report()
 

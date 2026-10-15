@@ -4,6 +4,8 @@
 - 码表插完逐个文件核对：原来的每一行都在、顺序不变，只多不少（只加不删）。
 - 插之前把要改的文件原样存一份；"还原"就是放回去、删掉计时点工具，再和原来的源码逐字节比对。
 - 编译出错时，按报错的"文件:行号"对回是哪一处计时点，可以只撤掉这一处重编。
+- 附加值：问题规则要看的计时点（比如"第一包声音到达时设备的状态"）让 AI 顺带记上；附加值只能读已有的变量或
+  不带参数的函数返回值（转成整数），不能赋值、自增、调用带参数的函数。记上了写进插入记录，判问题时才用。
 计时点工具（fw_stopwatch.h）是码表自己的固定模板，C 和 C++ 文件都能用，有总开关。
 """
 
@@ -140,7 +142,7 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
 - FSW_ROUND_RESET();  一轮开始时清零"只记第一次"的标记，放在每轮开始的地方（比如进入聆听状态、读到卡）
 - FSW_ARM(); 和 FSW_MARK_ONCE_ARMED(编号, 附加值);  同一处代码别的时候也会走到（比如提示音也走播放）时用：只在 FSW_ARM() 之后才记
 
-## 你的任务
+{values}## 你的任务
 读代码，确定每个计时点具体插在哪一行的后面（after_line 是原文件现在的行号，0 表示插在文件最前面），写出要插的几行（带上和周围一样的缩进）。
 - 每个计时点插两行：一行中文注释（// 计时点 P编号：中文名），一行计时点语句。辅助语句（清零、武装、打印最后一次）也各配一行注释。
 - 每个用到计时点的文件，在开头的 #include 附近加一行 #include，路径要让编译器能找到 {header}。这一行只写 #include，说明另起一行写注释。
@@ -155,8 +157,19 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
  "inserts": [{{"step": "P2", "file": "main/xxx.cc", "after_line": 482, "lines": ["            // 计时点 P2：设备发现你停了", "            FSW_KEEP_LAST(2);"]}}],
  "notes": ["你觉得有风险的地方（比如某个计时点在很频繁的线程里），没有就空"]}}
 ```
-step 写计时点（比如 P2），辅助语句写 include / reset / arm / flush。
+step 写计时点（比如 P2），辅助语句写 include / reset / arm / flush。{values_out}
 """
+
+VALUES = """## 要顺带记附加值的计时点
+码表要靠这几个计时点的附加值查问题，请在计时点语句的第二个参数里写上（别的计时点附加值写 0）：
+{rows}
+- 附加值只能读：已有的变量、成员，或不带参数的函数返回值（比如 GetDeviceState()），转成整数，比如 (int)xxx 或 static_cast<int>(xxx)。
+- 不能赋值、不能自增自减、不能调用带参数的函数，不能改任何逻辑。读不到就写 0，在 notes 里说为什么。
+- 去代码里查清楚"正常时"对应的整数是几（比如枚举里第几个），写在 values 里。
+
+"""
+VALUES_OUT = """
+另外在 json 里加 "values"：[{{"step": "P7", "expect": 正常时附加值对应的整数, "why": "在哪个文件哪一行查到的"}}]，每个要记附加值的计时点一条。"""
 
 
 def number(step_id, steps):
@@ -172,13 +185,51 @@ def default_header(root):
     return "main/fw_stopwatch.h" if (Path(root) / "main").is_dir() else "fw_stopwatch.h"
 
 
-def build_prompt(steps, header):
+def _needs_by_id(steps, needs):
+    ids = {s["p"]: f"P{number(s['p'], steps)}" for s in steps}
+    return {ids[k]: v for k, v in (needs or {}).items() if k in ids}
+
+
+def build_prompt(steps, header, needs=None):
+    nb = _needs_by_id(steps, needs)
+    names = {f"P{number(s['p'], steps)}": s["n"] for s in steps}
+    vrows = "\n".join(f"- {k}（{names.get(k, k)}）：附加值记{v['what']}；正常时是{v['ok']}"
+                      f"{'（标准里记的是 ' + str(v['value']) + '）' if v.get('value') is not None else ''}"
+                      f"{'；' + v['how'] if v.get('how') else ''}；用来查：{'、'.join(v.get('for') or [])}" for k, v in nb.items())
     rows = "\n".join(
         f"- P{number(s['p'], steps)}（编号 {number(s['p'], steps)}）{s['n']}：{s.get('path') or s.get('f')} 第 {s['l']} 行"
         f"{'之前' if s.get('where') == 'before' else '之后' if s.get('where') == 'after' else ''}，"
         f"{ONCE.get(s.get('once'), '一轮只记第一次')}" + (f"；为什么在这：{s['why']}" if s.get("why") else "")
         for s in steps)
-    return PROMPT.format(table=rows, header=header)
+    return PROMPT.format(table=rows, header=header, values=VALUES.format(rows=vrows) if nb else "",
+                         values_out=VALUES_OUT if nb else "")
+
+
+MARK_CALL = re.compile(r"FSW_(MARK|MARK_ONCE|MARK_ONCE_ARMED)\(\s*(\d+)\s*,\s*(.*)\)\s*;")
+CAST = re.compile(r"\b(?:static_cast|reinterpret_cast)\s*<\s*[A-Za-z_][\w:]*\s*>\s*\(|\(\s*(?:unsigned\s+)?[A-Za-z_][\w:]*\s*\)")
+VALUE_TOKENS = re.compile(r"\s*(?:[A-Za-z_]\w*|::|->|\.|\(|\)|\d+|\*|&|-)")
+
+
+def value_ok(expr):
+    """附加值只能读：变量、成员、不带参数的函数返回值、转整数；不能赋值、自增、调用带参数的函数。"""
+    e = expr.strip()
+    if re.fullmatch(r"-?\d+", e):
+        return True
+    e = CAST.sub(" ( ", e)  # (int)x、static_cast<int>(x) 这样的转换去掉再看
+    pos = 0
+    while pos < len(e):
+        m = VALUE_TOKENS.match(e, pos)
+        if not m or m.end() == pos:
+            return False
+        pos = m.end()
+    if re.search(r"\+\+|--|=|,", e):
+        return False
+    return not re.search(r"[A-Za-z_]\w*\s*\((?!\s*\))", e)  # 函数调用只能不带参数
+
+
+def _marks(lines):
+    """计时点语句里的 (编号, 附加值)。"""
+    return [(int(m.group(2)), m.group(3).strip()) for l in lines if isinstance(l, str) and (m := MARK_CALL.search(l))]
 
 
 def _fail(kind, message, **extra):
@@ -189,7 +240,7 @@ def _read_lines(p):
     return Path(p).read_bytes().decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
 
 
-def parse_plan(text, root, steps):
+def parse_plan(text, root, steps, needs=None):
     """读 AI 给的插入清单，逐条核对；不对就整份不用（一个文件都不改）。"""
     root = Path(root).resolve()
     data = _json_block(text)
@@ -225,6 +276,11 @@ def parse_plan(text, root, steps):
         if not lines or bad:
             problems.append(f"{rel} 第 {after} 行后面要插的内容里夹带了别的代码：<code>{html.escape(str(bad[0] if bad else '')[:80])}</code>")
             continue
+        badv = [v for _, v in _marks(lines) if not value_ok(v)]
+        if badv:
+            problems.append(f"{rel} 第 {after} 行的附加值不是只读的：<code>{html.escape(badv[0][:80])}</code>"
+                            "（附加值只能读已有的变量或不带参数的函数返回值）")
+            continue
         out.append({"step": step, "file": p.relative_to(root).as_posix(), "after_line": after, "lines": lines})
     missing = [s["n"] for k, s in ids.items() if not any(x["step"] == k for x in out)]
     if missing:
@@ -236,7 +292,19 @@ def parse_plan(text, root, steps):
     if problems:
         return _fail("bad_plan", "AI 给的插入清单不对，码表没有用，一个文件都没改：" + "；".join(problems[:4]) +
                      "。只能加计时点、注释和 #include。点\"重新插入\"再试一次。")
-    return {"ok": True, "header": header, "inserts": out, "notes": [str(n) for n in data.get("notes") or [] if n]}
+    notes = [str(n) for n in data.get("notes") or [] if n]
+    said = {str(v.get("step")): v for v in data.get("values") or [] if isinstance(v, dict)}
+    values = {}
+    for k, need in _needs_by_id(steps, needs).items():
+        got = [v for x in out if x["step"] == k for n, v in _marks(x["lines"]) if n == int(k[1:])]
+        expr = next((v for v in got if not re.fullmatch(r"-?\d+", v)), None)
+        if not expr:
+            notes.append(f"{k}（{ids[k]['n']}）没记上{need['what']}：这次查不了{'、'.join(need.get('for') or [])}")
+            continue
+        expect = said.get(k, {}).get("expect")
+        values[k] = {"expr": expr, "expect": expect if isinstance(expect, int) and not isinstance(expect, bool) else need.get("value"),
+                     "what": need["what"]}
+    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values}
 
 
 def _record_path(backup):
@@ -256,7 +324,7 @@ def apply(root, plan, backup):
     header = root / plan["header"]
     created = not header.exists()
     rec = {"header": plan["header"], "created_header": created, "files": files, "steps": {}, "places": [],
-           "added": 0, "deleted": 0}
+           "added": 0, "deleted": 0, "values": plan.get("values") or {}}
     for f in files:
         old = _read_lines(root / f)
         nl = "\r\n" if old and old[0].endswith("\r\n") else "\n"
@@ -340,6 +408,9 @@ def compare(work, original):
 def diff_view(rec, steps):
     """网页"看改动"用：每处一行，可展开看代码。"""
     names = {f"P{number(s['p'], steps)}": s["n"] for s in steps}
+    for k, v in (rec.get("values") or {}).items():
+        if k in names:
+            names[k] += f"（顺带记{v['what']}）"
     places = []
     for x in rec["places"]:
         lines = ([[" ", x["context"]]] if x["context"] is not None else []) + [["+", l] for l in x["lines"]]
@@ -377,7 +448,7 @@ def drop(root, plan, step, backup):
     return apply(root, {**plan, "inserts": rest}, backup)
 
 
-def insert(llm, root, steps, backup, on_progress=None):
+def insert(llm, root, steps, backup, on_progress=None, needs=None):
     """调用一次大模型（只读）拿到插入清单，码表核对后插进去。清单不对就一个文件都不改。"""
     t0 = time.time()
     header = default_header(root)
@@ -388,10 +459,10 @@ def insert(llm, root, steps, backup, on_progress=None):
         on_progress and on_progress({"seconds": round(time.time() - t0, 1), "read": state["read"]})
 
     try:
-        text = llm.investigate(build_prompt(steps, header), root, on_tool=tool)
+        text = llm.investigate(build_prompt(steps, header, needs), root, on_tool=tool)
     except LLMError as e:
         return _fail(e.kind, f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", seconds=round(time.time() - t0, 1))
-    plan = parse_plan(text, root, steps)
+    plan = parse_plan(text, root, steps, needs)
     if not plan["ok"]:
         return {**plan, "seconds": round(time.time() - t0, 1)}
     rec = apply(root, plan, backup)
