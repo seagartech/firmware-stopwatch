@@ -148,9 +148,9 @@ function roundsChart(D){
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${top+D.n*rh+6}" style="min-width:640px;width:100%" role="img" aria-label="逐轮计时">${g}</svg></div>
   <div class="legend">${D.lines.map((l,j)=>`<span><i class="sw" style="background:${l.col};width:10px;height:10px;${j===0?'border-radius:50%':''}"></i>${l.end}</span>`).join('')}<span>竖虚线是中位数</span><span style="color:var(--bad)">红底：有问题的轮</span></div>`;
 }
-function tiers(D){
-  return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">10 次里最慢</span><span class="h">最差</span>
-  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.p90)} 秒</span><span>${f(l.max)} 秒</span>`).join('')}</div>`;
+function tiers(D){const few=D.n<10;  // 少于 10 轮："10 次里最慢"没意义，不显示
+  return `<div class="tiers num" ${few?'style="grid-template-columns:auto repeat(2,1fr)"':''}><span></span><span class="h">一般（中位数）</span>${few?'':'<span class="h">10 次里最慢</span>'}<span class="h">最差</span>
+  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span>${few?'':`<span>${f(l.p90)} 秒</span>`}<span>${f(l.max)} 秒</span>`).join('')}</div>`;
 }
 // 两把尺子（2026-10-13）：体验标准问"用户等得了吗"（看结果，给负责人）；合理范围问"这套做法有没有做坏"（看实现，给研发）。
 // 体验标准只挂在有公认标准的那条线上，没有就只用合理范围。
@@ -505,13 +505,13 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
-  <section class="panel" id="sec-tl"><h2>一次的计时图</h2><p class="note" style="margin:-4px 0 8px">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、10 次里最慢、最差见「三档用时」。</p>${timeline(D)}</section>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
+  <section class="panel" id="sec-tl"><h2>一次的计时图</h2><p class="note" style="margin:-4px 0 8px">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p>${timeline(D)}</section>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
   <section class="grid3" id="sec-lines">${lineCards(D)}</section>
-  <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">三档用时<span class="tiernote"><i class="rdot"></i>"10 次里最慢"：每 10 次大约有 1 次会这么慢或更慢${D.n<20?'（这次只收了 '+D.n+' 轮，这一档只供参考）':''}</span></h2>${tiers(D)}</section>
+  <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">三档用时<span class="tiernote">${D.n<10?`只测了 ${D.n} 轮，不算"10 次里最慢"`:`<i class="rdot"></i>"10 次里最慢"：每 10 次大约有 1 次会这么慢或更慢${D.n<20?'（这次只收了 '+D.n+' 轮，这一档只供参考）':''}`}</span></h2>${tiers(D)}</section>
   <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
@@ -830,6 +830,7 @@ function enough(){const g=okRounds(),C=CX(),D=DX(),L=D.lines.length-1,ln=D.lines
  <div class="eblk"><div class="ehead"><b>① 一般用时稳了吗</b>${v(stable,'稳了','还在变')}</div><p class="note" style="margin:2px 0 0">线是"测到第几轮时，${ln.end}的一般用时"。后半段落在绿色带里就是稳了。</p>${chart1}</div>
  ${rare.length?`<div class="eblk"><div class="ehead"><b>② 偶尔出的问题看清了吗</b>${v(!few.length,'看清了','次数太少')}</div><p class="note" style="margin:2px 0 6px">一格一轮，亮的是出了这个问题的那轮。只出现 1～3 次，还分不清是偶尔还是常态。</p>${rare.map(strip).join('')}</div>`:''}
  <p class="note" style="margin:6px 0 0">${more?'不再测也能出报告，报告里会注明"次数少，只供参考"。':''}按收到的数算的，不用大模型。</p></section>`}
+const MIN_ROUNDS=3;  // 至少几轮能出报告（3～9 轮只适合跑流程，报告注明）
 let colVar='b',colN=20,col={st:0,att:0,got:[],phase:0},colT=null;
 const CC=()=>COLLECT[scene];
 // 真流程：每轮做什么（/api/rounds 按你写的"测什么"挑模板）、线和问题（后台多轮实测状态里这次真的场景），不借演示数据
@@ -868,8 +869,8 @@ function colSetup(){const C=CX(),D=DX();return `${justFlashed?`<div class="okbar
  <div class="status" style="margin:6px 0 4px">${REAL&&!devNow().on?'<span><i class="dot" style="background:var(--warn)"></i>没看到设备：用 USB 线插上，插上会自动继续</span>':`<span><i class="dot" style="background:var(--ok)"></i>${C.dev}已连上${REAL?' '+htmlEsc(devNow().port):''}，计时点输出正常</span>`}<span><i class="dot" style="background:var(--ok)"></i>${C.mode}</span><span><i class="dot" style="background:var(--ok)"></i>量 ${D.lines.length} 条线：${D.lines.map(l=>D.S.startShort+' → '+l.end).join('；')}</span></div>
  <dl class="cform">
   <dt>谁来${C.act}</dt><dd><p style="margin:0">${C.who}</p><p class="note" style="margin:4px 0 0">${C.why}</p></dd>
-  <dt>测几轮</dt><dd><div class="seg" role="group" aria-label="测几轮">${[10,20,30].map(n=>`<button data-coln="${n}" aria-pressed="${n===colN}">${n} 轮${n===20?'（推荐）':''}</button>`).join('')}</div>
-   <p class="note" style="margin:4px 0 0">20 轮够看出一般多快、最慢的几次、偶尔出的错。轮数越多越准，也越费时间（${C.per}，估算）。</p></dd>
+  <dt>测几轮</dt><dd><div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><div class="seg" role="group" aria-label="测几轮">${[10,20,30].map(n=>`<button data-coln="${n}" aria-pressed="${n===colN}">${n} 轮${n===20?'（推荐）':''}</button>`).join('')}</div><label class="note" style="display:inline-flex;align-items:center;gap:6px">自己填<input type="number" id="col-n" min="3" max="100" step="1" value="${[10,20,30].includes(colN)?'':colN}" placeholder="3～100" style="width:5.5em"> 轮</label></div>
+   <p class="note" style="margin:4px 0 0">20 轮够看出一般多快、最慢的几次、偶尔出的错。轮数越多越准，也越费时间（${C.per}，估算）。${colN<10?`<br><span style="color:var(--warn)">${colN} 轮只适合跑流程：报告会注明"数字不作数"，不显示"10 次里最慢"。</span>`:''}</p></dd>
   <dt>${C.listName} ${colN} ${C.unit}</dt><dd><details><summary class="pill" style="display:inline-block;list-style:none;cursor:pointer">展开清单</summary><ol class="note" style="columns:2;margin:8px 0 0">${[...Array(colN)].map((_,i)=>`<li>${C.items[i%C.items.length]}</li>`).join('')}</ol></details>
    <p class="note" style="margin:4px 0 0">${C.itemsFrom||'固定清单'}。不用背，每轮页面上会大字提示。</p></dd>
   <dt>提示音</dt><dd>${beepBtn()}<p class="note" style="margin:4px 0 0">${beepNote()}</p></dd>
@@ -916,7 +917,7 @@ function collectPage(){
  const body={a:colA,b:colB,c:colC}[colVar]();
  const g=okRounds(),bad=col.got.length-g.length;
  return `<div class="stack">${col.st===1&&col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:''}${col.st===1?`<div class="status" style="justify-content:flex-end">${beepBtn()}</div>`:''}${body}${col.st===2||(col.st===3&&okRounds().length>=10)?enough():''}
- <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${col.st===3?(()=>{const k=g.length,can=k>=10,to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];return `<span class="note">已停止。测了的 ${k} 轮都留着，可以接着测。${can?'也可以先看结果，会注明只测了 '+k+' 轮。':''}</span><span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" data-go="${to[0]}" ${can?'':blk('[data-col="resume"]','至少测 10 轮才能看结果')}>${to[1]}</button><button class="btn" data-col="restart">从头重测</button><button class="btn pri" data-col="resume">接着测（从第 ${k+1} 轮）</button></span>`})():`<span class="note">${col.st===2?`测完 ${g.length} 轮${bad?`（另有 ${bad} 轮没收全，没算）`:''}；原始日志已存。`:'可以随时停，停了能接着测，已测的都留着。'}</span><span style="display:flex;gap:8px">${col.st===1?'<button class="btn" data-col="stop">停止实测</button>':`<button class="btn ${needMore()?'pri':''}" data-col="more">再测 10 轮${needMore()?'（建议）':''}</button>`}${flow==='retest'&&rtC().steps[3][1]?`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="compare" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看前后对比</button>`:`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="report" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看报告</button>`}</span>`}</div></section></div>`}
+ <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${col.st===3?(()=>{const k=g.length,can=k>=MIN_ROUNDS,to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];return `<span class="note">已停止。测了的 ${k} 轮都留着，可以接着测。${can?'也可以先看结果，会注明只测了 '+k+' 轮。':''}</span><span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" data-go="${to[0]}" ${can?'':blk('[data-col="resume"]',`至少测 ${MIN_ROUNDS} 轮才能看结果`)}>${to[1]}</button><button class="btn" data-col="restart">从头重测</button><button class="btn pri" data-col="resume">接着测（从第 ${k+1} 轮）</button></span>`})():`<span class="note">${col.st===2?`测完 ${g.length} 轮${bad?`（另有 ${bad} 轮没收全，没算）`:''}；原始日志已存。`:'可以随时停，停了能接着测，已测的都留着。'}</span><span style="display:flex;gap:8px">${col.st===1?'<button class="btn" data-col="stop">停止实测</button>':`<button class="btn ${needMore()?'pri':''}" data-col="more">再测 10 轮${needMore()?'（建议）':''}</button>`}${flow==='retest'&&rtC().steps[3][1]?`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="compare" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看前后对比</button>`:`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="report" ${col.st===2?'':blk('[data-col="stop"]','还在测')}>查看报告</button>`}</span>`}</div></section></div>`}
 
 // ===== 前后对比 =====（通用：两次结果都用报告页同一套计算；改后数据是模拟的）
 
@@ -1307,7 +1308,7 @@ document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.clo
 document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(!z)return;e.preventDefault();uploadDrop(e.dataTransfer.items)});
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
-document.addEventListener('change',e=>{if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.id==='set-reuse'){reuseLast=e.target.checked;return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
+document.addEventListener('change',e=>{if(e.target.id==='col-n'){const n=Math.round(+e.target.value);if(n>=3&&n<=100){colN=n;render()}else{toast('测几轮要在 3～100 轮之间');e.target.value=[10,20,30].includes(colN)?'':colN}return}if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.id==='set-reuse'){reuseLast=e.target.checked;return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
 document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){

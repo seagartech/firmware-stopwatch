@@ -164,3 +164,13 @@ def test_labels_sorted_must_first():
     warn = {"key": "rev", "name": "先后反了", "level": "warn", "rule": {"type": "line_order", "first": "主线", "second": "主线"}}
     j = J.judge(sc(problems=[warn]), rounds(0.6, 2.6, probs={3: ["rev"]}))
     assert [x["level"] for x in j["labels"]] == ["必须改", "建议改"]
+
+
+def test_under_10_rounds_slowest_in_10_is_not_used():
+    """少于 10 轮："10 次里最慢"没意义，不拿它判"必须改"。"""
+    s = {"segments": {"a": {"name": "a", "from": "P1", "to": "P2", "range": [0, 1], "slow": 2.0}},
+         "lines": [{"name": "线", "segments": ["a"], "range": [0, 1], "slow": 2.0}], "problems": []}
+    rounds = [{"n": i + 1, "segs": {"a": v}, "ends": [v], "probs": []} for i, v in enumerate([0.5, 0.6, 2.5])]
+    j = J.judge(s, rounds)
+    lab = next(x for x in j["labels"] if x["kind"] == "line")
+    assert lab["level"] != "必须改" or "10 次里最慢" not in lab["why"]

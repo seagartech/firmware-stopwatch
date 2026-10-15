@@ -211,3 +211,21 @@ def test_report_for_demo_data_without_a_run(make):
     assert r["n"] == 20 and r["lines"][-1]["name"] == "开门线"
     assert {x["k"]: x["rounds"] for x in r["labels"] if x["kind"] == "problem"}["problem:to"] == door["result"]["problems"]["to"]
     assert c.get("/api/report?demo=nope").status_code == 404
+
+
+@pytest.mark.parametrize("n,ok", [(3, True), (100, True), (2, False), (101, False)])
+def test_round_count_can_be_3_to_100(make, n, ok):
+    """测几轮：3～100 轮都行（快捷按钮 10 / 20 / 30 之外可以自己填）；超出范围说人话。"""
+    c, _ = make()
+    r = c.post("/api/collect/start", json={"demo": "door", "rounds": n, "interval": 0})
+    assert (r.status_code == 200) == ok
+    if not ok:
+        assert "3～100" in r.json()["detail"]
+
+
+def test_three_rounds_give_a_report(make):
+    c, _ = make()
+    c.post("/api/collect/start", json={"demo": "door", "rounds": 3, "interval": 0})
+    j = wait(c, lambda j: j["status"] == "done")
+    assert len([x for x in j["rounds"] if x["ok"]]) == 3
+    assert c.get("/api/report", params={"demo": "door"}).json()["n"] == 3
