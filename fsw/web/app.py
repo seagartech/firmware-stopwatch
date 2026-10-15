@@ -4,6 +4,7 @@
 """
 
 import hashlib
+import os
 import json
 import re
 import threading
@@ -124,6 +125,22 @@ class CollectBody(BaseModel):
     drop_at: int = 0                 # 回放时第几次故意没收全（演示"没收全，自动补测"）
 
 
+class PathBody(BaseModel):
+    path: str
+
+
+def _open_in_finder(path):
+    """在 Finder / 资源管理器里打开文件所在的文件夹，并选中它。"""
+    import subprocess
+    import sys
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", path])
+    elif os.name == "nt":
+        subprocess.Popen(["explorer", "/select,", path])
+    else:
+        subprocess.Popen(["xdg-open", str(Path(path).parent)])
+
+
 class AdviseBody(BaseModel):
     work: str
     steps: list[dict] | None = None
@@ -207,7 +224,7 @@ class SyncBody(BaseModel):
 
 
 def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
-               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0):
+               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     cfg = lambda: load_config(config_dir)  # 设置文件夹默认 ~/.config/firmware-stopwatch/，测试时换成临时文件夹
@@ -266,7 +283,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.get("/api/demo")
     def demo_list():
-        return [{"id": k, "label": d["label"]} for k, d in demos.items()]
+        return [{"id": k, "label": d["label"], "hidden": bool(d.get("hidden"))} for k, d in demos.items()]
 
     @app.get("/api/demo/{sid}")
     def demo_get(sid: str):
@@ -565,8 +582,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if old and old["status"] in ("running", "waiting_device", "paused"):
             old["_stop"] = True
             time.sleep(0.05)
+        std_hash = None
         if body.page:  # 真找完的步骤：按代码位置对上码表自带的合理范围标准
-            scenario = stds.real_scenario(body.page, stds.find(body.page.get("steps") or []))
+            standard = stds.find(body.page.get("steps") or [])
+            scenario = stds.real_scenario(body.page, standard)
+            std_hash = stds.digest(standard)
         elif body.demo in demos:
             scenario = demos[body.demo]["scenario"]
         else:
@@ -581,7 +601,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             run.mkdir(parents=True, exist_ok=True)
             coll = meas.Collector(spec)
             job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll, "_scenario": scenario,
-                   "demo": None if body.page else body.demo}
+                   "demo": None if body.page else body.demo, "_page": body.page, "_std": std_hash,
+                   "measured_at": time.strftime("%Y-%m-%d %H:%M")}
             col["job"] = job
         job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
         raw = open(job["raw_log"], "a", encoding="utf-8")
@@ -666,15 +687,43 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job = col["job"]
         ok = [r for r in (job or {}).get("rounds", []) if r["ok"]]
         same = job and (demo is None or job.get("demo") == demo)
+        stale = None
         if ok and same:
             sc, raw = job["_scenario"], job["raw_log"]
+            if job.get("_page") is not None:  # 合理范围改过（标准文件变了）：提示用新范围更新，刚测完的不提示
+                now = stds.find(job["_page"].get("steps") or [])
+                if stds.digest(now) != job.get("_std"):
+                    stale = stds.changed_at(now)
         elif demo in demos:
             sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
         else:
             raise HTTPException(404, "还没有测完的轮")
         out = jdg.judge(sc, ok)
         keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names")
-        return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep}}
+        return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep},
+                "stale": bool(stale), "stale_since": stale, "measured_at": (job or {}).get("measured_at") if ok and same else None}
+
+    @app.post("/api/report/refresh")
+    def report_refresh():
+        """用新范围更新这份报告：不用重测，用时不变，按现在的合理范围重新判。"""
+        job = col["job"]
+        if not job or job.get("_page") is None:
+            raise HTTPException(409, "这份报告不用更新")
+        standard = stds.find(job["_page"].get("steps") or [])
+        job["_scenario"] = stds.real_scenario(job["_page"], standard)
+        job["_std"] = stds.digest(standard)
+        return report()
+
+    allowed_roots = lambda: [Path(live["data"]).resolve(), Path(data_dir).resolve()]
+
+    @app.post("/api/open-folder")
+    def open_folder(body: PathBody):
+        """原始日志的"打开所在文件夹"：只开码表自己的结果文件夹里的东西。"""
+        p = Path(body.path).expanduser().resolve()
+        if not any(r == p or r in p.parents for r in allowed_roots()) or not p.exists():
+            raise HTTPException(403, "只能打开码表结果文件夹里的东西")
+        (opener or _open_in_finder)(str(p))
+        return {"ok": True}
 
     # ---- 为什么、怎么改：问题按固定规则从这次的数据算出，文字由 AI 读代码写（只读），码表核对格式 ----
     adv = {"job": None}

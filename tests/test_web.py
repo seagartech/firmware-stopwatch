@@ -45,7 +45,9 @@ def test_every_prototype_page_has_a_renderer():
 
 def test_two_demo_scenarios_are_listed(client):
     demos = client.get("/api/demo").json()
-    assert [(d["id"], d["label"]) for d in demos] == [("voice", "语音对话"), ("door", "门禁刷卡")]
+    assert [(d["id"], d["label"]) for d in demos if not d["hidden"]] == [("voice", "语音对话"), ("door", "门禁刷卡")]
+    # 第三套"对话（只看开口）"只用来核对报告（只有一条线），不进"以前测过的"
+    assert [d["id"] for d in demos if d["hidden"]] == ["dialog"]
 
 
 @pytest.mark.parametrize("sid", ["voice", "door"])
@@ -187,3 +189,10 @@ def test_plan_checkbox_does_not_open_the_source_picker():
     """方案勾选框和首页"选文件夹"按钮都用 data-pick：选源码只认按钮，勾方案不能弹出选文件夹窗口。"""
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert "closest('button[data-pick]')" in js and "closest('[data-pick]')" not in js
+
+
+def test_report_text_uses_names_not_codes_and_open_folder():
+    """任务 18：结论建议和待办里把 P2-P5 这类编号换成中文名；原始日志"打开所在文件夹"接后台；合理范围改过提示接后台。"""
+    js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
+    assert "function plain(" in js and "plain(F.why)" in js and "为什么：${F.title}。${F.dev.data}" not in js
+    assert "/api/open-folder" in js and "/api/report/refresh" in js
