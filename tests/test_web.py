@@ -227,3 +227,31 @@ def test_prep_page_says_the_list_is_fixed_not_made_by_ai(client, sid):
     assert "固定清单" in client.get(f"/api/demo/{sid}").json()["C"]["itemsFrom"]
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert 'AI 读完代码、按"测从什么到什么"生成的' not in js and "C.itemsFrom" in js
+
+
+def test_export_lets_you_pick_the_folder_and_keeps_the_notice():
+    """导出：先问存到哪（默认被测源码的同级目录，可换），存完的提示一直在、写完整路径，直到你关掉。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "/api/report/export-dir" in js and "pop==='export'" in js and "data-expdir" in js
+    assert "function expDone(" in js and "data-expclose" in js and "EXP.saved" in js
+    assert "toast('✓ 已导出：'" not in js  # 不再用一闪就没的提示
+
+
+def test_export_file_name_uses_your_own_words():
+    """文件名用你自己写的场景说法（比如"从我说完话到设备回话"），不换成码表的简写。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "IDENT.page.mapWhat||hSay" in js.split("async function exportReport(")[1].split("\n}")[0] or \
+        "expWhat()" in js
+
+
+def test_device_status_comes_from_one_place():
+    """首页、找关键步骤页、烧录页、多轮实测页说设备插没插，都看同一个来源；不再写死"没插上"或假端口名。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "const devNow=" in js and js.count("devNow()") >= 4
+    assert "'设备已连上 '+(PORTS[0]||(setOS==='mac'?'/dev/cu.usbmodem1101':'COM3'))" not in js
+
+
+def test_try_once_waits_for_you_to_be_ready():
+    """试一次：先大字提示"先喊唤醒词，再说一句"，点"准备好了"才开始。"""
+    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    assert "先喊唤醒词，再说一句" in js and "准备好了" in js and "data-flx=\"trygo\"" in js and "'ready_try'" in js

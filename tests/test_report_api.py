@@ -97,3 +97,37 @@ def test_export_refuses_keys_and_outside_resources(app, bad):
     r = c.post("/api/report/export", json={"html": bad, "what": "x", "demo": "door"})
     assert r.status_code == 400
     assert not (tmp_path / "data" / "demo-reports").exists() or not any((tmp_path / "data" / "demo-reports").iterdir())
+
+
+# ---- 真测修复：导出默认放被测源码的同级目录，也能改；文件名用你自己写的场景说法 ----
+
+def with_source(tmp_path):
+    src = tmp_path / "firmware-demo" / "xiaozhi-esp32"
+    src.mkdir(parents=True)
+    proj = tmp_path / "data" / "xiaozhi-1"
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / "project.json").write_text(json.dumps({"source": str(src)}), encoding="utf-8")
+    return src
+
+
+def test_export_defaults_next_to_the_source(app):
+    c, opened, _, tmp_path = app
+    src = with_source(tmp_path)
+    measured(c, tmp_path)
+    assert c.get("/api/report/export-dir").json()["dir"] == str(src.parent)
+    r = c.post("/api/report/export", json={"html": PAGE_HTML, "what": "从我说完话到设备回话"}).json()
+    p = Path(r["path"])
+    assert p.parent == src.parent and p.name.startswith("从我说完话到设备回话_")
+    assert c.post("/api/open-folder", json={"path": r["path"]}).json()["ok"]  # 存到别处的也能在访达里显示
+
+
+def test_export_to_a_folder_you_choose(app):
+    c, _, _, tmp_path = app
+    with_source(tmp_path)
+    measured(c, tmp_path)
+    mine = tmp_path / "我的报告"
+    mine.mkdir()
+    r = c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x", "folder": str(mine)}).json()
+    assert Path(r["path"]).parent == mine
+    assert c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x", "folder": "相对路径"}).status_code == 400
+    assert c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x", "folder": str(tmp_path / "没有这个")}).status_code == 400

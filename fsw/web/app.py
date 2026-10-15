@@ -133,6 +133,7 @@ class ExportBody(BaseModel):
     html: str
     what: str = "报告"
     demo: str | None = None
+    folder: str | None = None        # 存到哪（不写就用默认：被测源码的同级目录）
 
 
 def _open_in_finder(path):
@@ -757,7 +758,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(400, "导出的内容引用了外面的文件，断网打不开，没有存")
         job = col["job"]
         real = body.demo is None and job and job.get("demo") is None and job.get("raw_log")
-        folder = Path(job["raw_log"]).parent.parent.parent / "reports" if real else live["data"] / "demo-reports"
+        if body.folder:
+            folder = Path(body.folder).expanduser()
+            if not folder.is_absolute() or not folder.is_dir():
+                raise HTTPException(400, "存不了：这个文件夹不存在，换一个已有的文件夹")
+        else:
+            folder = Path(_export_dir(body.demo))
         when = (job or {}).get("measured_at") if job and (real or job.get("demo") == body.demo) else None
         stamp = (when or time.strftime("%Y-%m-%d %H:%M")).replace("-", "").replace(" ", "-").replace(":", "")
         name = re.sub(r'[\\/:*?"<>|\s]+', "-", body.what.strip()).strip("-")[:40] or "报告"
@@ -766,15 +772,36 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         while p.exists():
             p, n = folder / f"{name}_{stamp}-{n}.html", n + 1
         p.write_text(html, encoding="utf-8")
+        exported.add(p.resolve())
         return {"ok": True, "path": str(p)}
 
+    def _export_dir(demo=None):
+        """导出默认存哪：真测的放被测源码的同级目录（源码文件夹记在项目文件夹的 project.json 里）；
+        找不到源码就放项目文件夹的 reports/；演示数据放结果文件夹的 demo-reports/。"""
+        job = col["job"]
+        if demo is None and job and job.get("demo") is None and job.get("raw_log"):
+            proj = Path(job["raw_log"]).parent.parent.parent
+            try:
+                src = Path(json.loads((proj / "project.json").read_text(encoding="utf-8"))["source"])
+                if src.parent.is_dir():
+                    return str(src.parent)
+            except (OSError, ValueError, KeyError):
+                pass
+            return str(proj / "reports")
+        return str(live["data"] / "demo-reports")
+
+    @app.get("/api/report/export-dir")
+    def report_export_dir(demo: str | None = None):
+        return {"dir": _export_dir(demo)}
+
+    exported = set()  # 导出过的文件（可能存在结果文件夹以外，比如源码旁边）：也能"在访达里显示"
     allowed_roots = lambda: [Path(live["data"]).resolve(), Path(data_dir).resolve()]
 
     @app.post("/api/open-folder")
     def open_folder(body: PathBody):
         """原始日志的"打开所在文件夹"：只开码表自己的结果文件夹里的东西。"""
         p = Path(body.path).expanduser().resolve()
-        if not any(r == p or r in p.parents for r in allowed_roots()) or not p.exists():
+        if not (p in exported or any(r == p or r in p.parents for r in allowed_roots())) or not p.exists():
             raise HTTPException(403, "只能打开码表结果文件夹里的东西")
         (opener or _open_in_finder)(str(p))
         return {"ok": True}
