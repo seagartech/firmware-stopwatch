@@ -206,3 +206,16 @@ def test_report_export_button_next_to_the_toggle(client):
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "async function exportReport(" in js and "/api/report/export" in js
     assert "'☑':'☐'" in js and "fetch('/static/style.css')" in js
+
+
+SAY20 = ["今天天气怎么样", "给我讲个笑话", "你叫什么名字", "一加一等于几", "你会唱歌吗", "我有点累了", "推荐一本适合周末看的书",
+         "你今天心情好吗", "用一句话介绍一下你自己", "北京到上海有多远", "你觉得猫可爱还是狗可爱", "帮我想个周末去哪玩",
+         "说一句鼓励我的话", "你能听懂方言吗", "春天适合种什么花", "喝水有什么好处", "推荐一首轻松的歌", "怎么才能睡得好一点",
+         "给我出个简单的谜语", "你喜欢吃什么"]
+
+
+@pytest.mark.parametrize("sid", ["voice", "dialog"])
+def test_voice_scenario_says_the_fixed_20_for_real_tests(client, sid):
+    """真机实测要说的 20 句（项目文档"真机实测20句"）：去掉会结束对话、触发工具、回答太长的几句，改完再测也用这份。"""
+    d = client.get(f"/api/demo/{sid}").json()
+    assert d["C"]["items"] == SAY20
