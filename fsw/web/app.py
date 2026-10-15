@@ -21,6 +21,7 @@ from fsw import identify as idf
 from fsw import instrument as ins
 from fsw import measure as meas
 from fsw import judge as jdg
+from fsw import advise as advs
 from fsw import standards as stds
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
@@ -121,6 +122,13 @@ class CollectBody(BaseModel):
     resume: bool = False             # 接着测 / 再测几轮
     interval: float = 0.12           # 回放时每行间隔（秒）
     drop_at: int = 0                 # 回放时第几次故意没收全（演示"没收全，自动补测"）
+
+
+class AdviseBody(BaseModel):
+    work: str
+    steps: list[dict] | None = None
+    what: str | None = None
+    project_dir: str | None = None
 
 
 class FswInsertBody(BaseModel):
@@ -667,6 +675,48 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         out = jdg.judge(sc, ok)
         keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names")
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep}}
+
+    # ---- 为什么、怎么改：问题按固定规则从这次的数据算出，文字由 AI 读代码写（只读），码表核对格式 ----
+    adv = {"job": None}
+
+    @app.post("/api/advise/start")
+    def advise_start(body: AdviseBody):
+        job0 = col["job"]
+        ok = [r for r in (job0 or {}).get("rounds", []) if r["ok"]]
+        if not ok:
+            raise HTTPException(409, "还没测完：先做多轮实测")
+        _, model = _model()
+        sc = job0["_scenario"]
+        j = jdg.judge(sc, ok)
+        root = body.work  # 读你原来的源码（只读）：码表那份插过计时点，行号会变
+        try:
+            src = json.loads((Path(body.project_dir) / "project.json").read_text(encoding="utf-8"))["source"]
+            if Path(src).is_dir():
+                root = src
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        job = {"status": "running", "started": time.time(), "read": "", "fixes": None, "fine": "", "message": "", "root": root}
+        adv["job"] = job
+
+        def run():
+            save = Path(body.project_dir) / "advice" if body.project_dir else None
+            try:
+                r = advs.advise(model, root, j, sc, steps=body.steps, what=body.what or "", save_to=save,
+                                on_progress=lambda p: job.update(read=p.get("read", "")))
+            except Exception as e:
+                r = {"ok": False, "kind": "other", "message": f"写建议时码表出错了：{e}"}
+            job["seconds"] = r.get("seconds", round(time.time() - job["started"], 1))
+            if r["ok"]:
+                job.update(status="done", fixes=r["fixes"], fine=r["fine"], called=r.get("called", True))
+            else:
+                job.update(status="failed", kind=r.get("kind"), message=r["message"])
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @app.get("/api/advise")
+    def advise_status():
+        return adv["job"] or {"status": "idle"}
 
     @app.get("/api/collect")
     def collect_status():

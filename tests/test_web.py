@@ -181,3 +181,9 @@ def test_report_uses_backend_judgment():
     """任务 16：报告的快慢、标签、两把尺子由后台按固定规则算，网页只显示。"""
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert "/api/report" in js and "withJudge" in js and "decisionsJ" in js
+
+
+def test_plan_checkbox_does_not_open_the_source_picker():
+    """方案勾选框和首页"选文件夹"按钮都用 data-pick：选源码只认按钮，勾方案不能弹出选文件夹窗口。"""
+    js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
+    assert "closest('button[data-pick]')" in js and "closest('[data-pick]')" not in js
