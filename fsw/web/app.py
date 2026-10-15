@@ -600,7 +600,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 why = ("收到的都是乱码，多半是波特率不对（码表按 115200 读）。" if lines and odd >= len(lines) / 2 else
                        "常见原因：没触发到；串口被别的软件占着（比如串口监视器）；波特率不对（码表按 115200 读）。")
                 return _fail(job, "try", f"{TRY_SECONDS} 秒内没收到计时点。重来：点「再试一次」，等设备准备好，"
-                                        f"先喊唤醒词，再说一句（或做一次要测的事）。{why}",
+                                        f"再做一次要测的事（对话类：先喊唤醒词，再说一句）。{why}",
                              error=f"（{TRY_SECONDS} 秒内没有计时点输出）", offer_restore=job["try_fails"] >= 2)
             job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
             return True

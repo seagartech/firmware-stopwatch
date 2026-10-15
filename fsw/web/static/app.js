@@ -327,6 +327,7 @@ function instApply(j){inst.step=j.step||0;inst.pct=j.pct||0;inst.log=j.log||'';i
   fetch('/api/env').then(r=>r.json()).then(e=>{IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);render()});toast('✓ 编译工具装好了')}
  else if(j.state==='failed'){inst.st=3;clearInterval(instPoll);instPoll=null}
  const b=document.getElementById('instbox');if(page==='settings'&&b)b.innerHTML=installBox();
+ if(page==='flash')render();else if(page==='home'){const lt=document.querySelector('.lights');if(lt)lt.outerHTML=envStatus()}  // 别的页也跟着显示"正在装 xx%" 
  const lt=document.querySelector('.lights');if(lt&&page==='home')lt.outerHTML=envStatus();
  if(j.state!=='running'&&page==='settings')render()}
 async function instStart(retry){instStop();inst={st:1,step:0,pct:0,log:'',timer:null,version:inst.version,path:inst.path};render();
@@ -504,7 +505,7 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p></div>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2><p class="note" style="margin:-4px 0 8px">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、10 次里最慢、最差见「三档用时」。</p>${timeline(D)}</section>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
@@ -581,7 +582,7 @@ function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,fo
   ${fail?`<p class="note" style="color:var(--bad)">✕ ${J.message||'没找完'}</p><div class="acts" style="justify-content:flex-start;margin:6px 0"><button class="btn pri" data-idretry="1">重试</button><button class="btn" data-go="settings">到设置页换大模型</button>${/no_start|no_end/.test(J.kind||'')?'<button class="btn" data-mclose="1">换个说法写</button>':''}</div>`:''}
   <p class="note">只给它读代码，没给任何"标准答案"；结果存在本机，源码和要测的都没变，下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}
 function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
- return `<p style="margin:12px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
+ return `${REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad);margin-top:12px">${htmlEsc(IDENT.page.warn)}</div>`:''}<p style="margin:12px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
    <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
    ${F.sideAsk?`<p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>`:''}`}
 let bgShownDone=0;
@@ -728,7 +729,7 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
 function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
  const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code><button class="pill">完整日志</button></div>`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
  if(E.kind==='insert')return box('计时点没插上',E.message,'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
- if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(E.message||'')}`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
+ if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过（编译工具、依赖或板子配置的问题），和插的计时点无关，烧录前要先解决。码表不替你改代码。`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
  if(E.kind==='build')return E.step?box('编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点：「${htmlEsc(E.step_name||E.step)}」那一处（${htmlEsc(E.where)}）。<br>码表自己的问题，不用你改代码。`,E.error,`<button class="btn pri" data-flx="drop">撤掉这处计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`)
   :box('编译没通过',`${htmlEsc(E.message)}${E.error?'。报错里没对上是哪一处计时点，看下面的报错，或者重新插入。':''}`,E.error,`<button class="btn pri" data-flx="rebuild">重新编译</button><button class="btn" data-fl="redo">重新插入</button>`);
  if(E.kind==='burn')return box('烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。',E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`);
@@ -789,7 +790,7 @@ const FLASHVAR={a:{label:'A 一键到底',idea:'A 一键到底：点一下从复
 function flashPage(){
  const body={a:flashA,b:flashB,c:flashC}[flashVar]();
  const done=fl.st===2||(flashVar==='c'&&onDev==='fsw'&&fl.st===3);
- return `<div class="stack"><div class="status"><span><i class="dot" style="background:var(--ok)"></i>要插 ${typeof live==='function'?live().length:9} 个计时点（找关键步骤那页确认的）</span>${envComp()?`<span><i class="dot" style="background:var(--ok)"></i>编译工具 v${realIdf()?shortV(realIdf().version):'6.1'}</span>`:'<span><i class="dot" style="background:var(--bad)"></i>编译工具：还没装，编译前要装好</span>'}${(()=>{const on=REAL?devNow().on:done||(fl.step>=3&&!flNoDev&&fl.st);return `<span><i class="dot" style="background:${on?'var(--ok)':'var(--warn)'}"></i>设备：${on?'设备已连上 '+htmlEsc(devNow().port):'没插上，烧录前插上就行（插上会自动变成"已连上"）'}</span>`})()}</div>
+ return `<div class="stack"><div class="status"><span><i class="dot" style="background:var(--ok)"></i>要插 ${typeof live==='function'?live().length:9} 个计时点（找关键步骤那页确认的）</span>${envComp()?`<span><i class="dot" style="background:var(--ok)"></i>编译工具 v${realIdf()?shortV(realIdf().version):'6.1'}</span>`:(inst.st===1?`<span><i class="dot" style="background:var(--warn)"></i>编译工具：正在后台装 ${Math.round(((inst.step||0)+(inst.pct||0)/100)/5*100)}%，装好自动变绿</span>`:'<span><i class="dot" style="background:var(--bad)"></i>编译工具：还没装，编译前要装好</span>')}${(()=>{const on=REAL?devNow().on:done||(fl.step>=3&&!flNoDev&&fl.st);return `<span><i class="dot" style="background:${on?'var(--ok)':'var(--warn)'}"></i>设备：${on?'设备已连上 '+htmlEsc(devNow().port):'没插上，烧录前插上就行（插上会自动变成"已连上"）'}</span>`})()}</div>
  ${body}
  <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">${done?'设备上已经是计时版，计时点输出正常。测完以后可以在报告底部或首页还原成原版。':''}</span><span style="display:flex;gap:8px"><button class="btn pri" data-go="collect" ${done?'':(()=>{const g=guide();return blk(g&&g[1]||'#flbox','烧录和试一次都完成后才能测')})()}>开始多轮实测</button></span></div></section></div>`}
 
@@ -1153,7 +1154,7 @@ function render(){if(!scene||!SCENES[scene])return;applyScene();
   document.getElementById('flowbar').innerHTML=flowBar();bgPill();
   const isReport=page==='report',isHome=page==='home';
   document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
-  const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;document.getElementById('crumb').innerHTML=isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${D.S.crumb}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'';
+  const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;document.getElementById('crumb').innerHTML=isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'';
   let body;
   if(isHome)body=HOME[homeVar].html();
   else if(isReport)body=reportPage(D);

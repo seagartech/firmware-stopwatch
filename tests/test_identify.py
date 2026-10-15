@@ -255,3 +255,11 @@ def test_reused_result_rebuilds_page_with_new_fields(tmp_path, door):
     f.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
     r = idf.identify_cached(FakeLLM(""), door, "从刷卡到开门", proj, fingerprint="f", provider="cc")
     assert r["reused"] and "once" in r["page"]["steps"][0]
+
+
+def test_missing_end_reason_reads_as_a_sentence(tmp_path):
+    from tests.identify_fixtures import DOOR_RESULT, reply_for, door_source
+    import json as _j
+    r = _j.loads(_j.dumps(DOOR_RESULT)); r["end_found"] = False; r["missing"] = "代码里没有门磁信号"
+    out = idf.parse(reply_for(r), door_source(tmp_path / "door"))
+    assert "代码里没有门磁信号。可以点" in out["warn"]
