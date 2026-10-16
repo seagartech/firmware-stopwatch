@@ -116,7 +116,7 @@ def test_restore_button_always_asks_the_backend():
 def test_export_buttons_keep_the_dialog_open_to_show_the_result():
     """对话框里的按钮默认会关掉对话框；导出、等写完导出要把框留着，结果在框里说（用户：导出没有成功或失败的提醒）。"""
     assert "if(e.target.closest('[data-expgo]')){pop='export';" in JS and "if(e.target.closest('[data-expwait]')){pop='export';" in JS
-    assert "没写成，现在导出的报告里没有建议" in JS
+    assert "没写成，导出的报告里会少这一部分" in JS
 
 
 # ---- 第二次亲手操作（决策 113～116） ----
@@ -142,7 +142,7 @@ def test_more_rounds_suggested_at_most_until_30_and_says_why():
 
 
 def test_export_dialog_says_what_now_export_contains():
-    assert "数字、图和要你拍板都是码表按数据算的" in JS
+    assert "现在导出，只少这一部分，别的都一样" in JS  # 决策 120：一句话，不费脑子
 
 
 def test_overall_flash_progress_never_goes_back(tmp_path):
@@ -152,3 +152,34 @@ def test_overall_flash_progress_never_goes_back(tmp_path):
     ov = _overall(tmp_path)
     seq = [ov(p) for p in (0, 50, 100, 0, 100, 0, 30, 65, 100)]  # 引导程序、分区表、程序三段
     assert seq == sorted(seq) and seq[-1] == 100 and seq[2] < 50
+
+
+# ---- 第三次亲手操作（决策 120～122） ----
+def test_board_full_name_written_into_the_box_after_picking():
+    b = grab("boardPick")
+    assert "q.value=id;q.blur()" in b and "picked" in grab("boardRow")
+
+
+def test_step_log_lives_inside_the_running_step():
+    assert "const stepLog=" in JS and "${cur&&fl.st===1&&i!==4?stepLog():''}" in JS
+
+
+@node
+def test_report_says_how_many_rounds_were_used_and_dropped():
+    out = run(["qualityLine"], 'qualityLine({ok:30,missing:2,stale:1,half:0})')
+    assert "用了 30 轮" in out and "2 轮没收全" in out and "1 轮记到的是上一轮剩下的" in out
+    assert "没有丢掉的" in run(["qualityLine"], 'qualityLine({ok:20,missing:0,stale:0,half:0})')
+
+
+def test_report_api_gives_quality(tmp_path):
+    from tests.test_first_round_and_push import make, ROUND
+    from tests.test_collect_api import wait
+    from tests.test_standards import PAGE
+    lines = []
+    for k in range(4):
+        lines += [f"FSW,RESET,{k * 10_000_000 + 1_000_000},0"] + [l.replace("FSW,P", "FSW,P") for l in [f"FSW,P{i},{k * 10_000_000 + 3_000_000 + i * 100_000},0" for i in range(1, 10)]]
+    c = make(tmp_path, lines + ["FSW,RESET,99000000,0"])
+    c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 3, "project_dir": str(tmp_path / "p")})
+    wait(c, lambda j: j["status"] == "done")
+    q = c.get("/api/report").json()["quality"]
+    assert q["ok"] == 3 and q["missing"] == 0 and q["stale"] == 0

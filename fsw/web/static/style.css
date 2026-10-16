@@ -213,3 +213,7 @@ table.num td.r,table.num th.r{white-space:nowrap}
 @media (prefers-reduced-motion:reduce){.istep.cur>b::after{animation-duration:3s}}
 
 .logtail{max-height:18em;overflow:auto;background:var(--soft);border-radius:6px;padding:8px 10px;font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;margin:0 0 8px}
+
+/* 选好板子：框里是全称，前面一个对勾（决策 120） */
+.bpick.picked input{border-color:var(--ok);padding-left:2em;font-weight:600}
+.bpick.picked::before{content:"✓";position:absolute;left:.7em;top:50%;transform:translateY(-50%);color:var(--ok);font-weight:700;pointer-events:none}
