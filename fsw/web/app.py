@@ -895,6 +895,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["half_hint"] = ("这一次开头没收到（码表开始听的时候它已经开始了），不算。"
                                         "刚才要是在做要测的事，再做一次；只是唤醒设备的话，不用管。")
                     continue
+                if r.get("nostart"):  # 设备没记到起点：不算一轮，不出格子，报告的数据检查里写上（决策 133）
+                    job["nostart"] = job.get("nostart", 0) + 1
+                    continue
                 if r["ok"]:
                     job["half_hint"] = ""
                     job["stale_run"] = {}
@@ -1027,7 +1030,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names")
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
-                   "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0}
+                   "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
+                   "nostart": (job or {}).get("nostart", 0) if raw else 0,
+                   "startName": (sc.get("start") or {}).get("name", "")}
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep}, "timing": _timing() if raw else None,
                 "quality": quality,
                 "stale": bool(stale), "stale_since": stale, "measured_at": (job or {}).get("measured_at") if ok and same else None}
