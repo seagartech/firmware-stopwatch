@@ -875,7 +875,7 @@ function flashPage(){
  const done=fl.st===2||(flashVar==='c'&&onDev==='fsw'&&fl.st===3);
  return `<div class="stack"><div class="status"><span><i class="dot" style="background:var(--ok)"></i>要插 ${typeof live==='function'?live().length:9} 个计时点（找关键步骤那页确认的）</span>${envComp()?`<span><i class="dot" style="background:var(--ok)"></i>编译工具 v${realIdf()?shortV(realIdf().version):'6.1'}</span>`:(inst.st===1?`<span><i class="dot" style="background:var(--warn)"></i>编译工具：正在后台装 ${Math.round(((inst.step||0)+(inst.pct||0)/100)/5*100)}%，装好自动变绿</span>`:'<span><i class="dot" style="background:var(--bad)"></i>编译工具：还没装，编译前要装好</span>')}${(()=>{const on=REAL?devNow().on:done||(fl.step>=3&&!flNoDev&&fl.st);return `<span><i class="dot" style="background:${on?'var(--ok)':'var(--warn)'}"></i>设备：${on?'设备已连上 '+htmlEsc(devNow().port):'没插上，烧录前插上就行（插上会自动变成"已连上"）'}</span>`})()}</div>
  ${body}
- <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">${done?'设备上已经是计时版，计时点输出正常。测完以后可以在报告底部或首页还原成原版。':''}</span><span style="display:flex;gap:8px"><button class="btn pri" data-go="collect" ${done?'':(()=>{const g=guide();return blk(g&&g[1]||'#flbox','烧录和试一次都完成后才能测')})()}>开始多轮实测</button></span></div></section></div>`}
+ ${done?`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">设备上已经是计时版，计时点输出正常。测完以后可以在报告底部或首页还原成原版。</span><span style="display:flex;gap:8px"><button class="btn pri" data-go="collect">开始多轮实测</button></span></div></section>`:''}</div>`}  // 试通前不放"开始多轮实测"（决策 140）
 
 
 let STEPS,SEGS,FSEGS,S_N,DIFF,lineName;
