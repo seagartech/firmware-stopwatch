@@ -183,3 +183,56 @@ def test_report_api_gives_quality(tmp_path):
     wait(c, lambda j: j["status"] == "done")
     q = c.get("/api/report").json()["quality"]
     assert q["ok"] == 3 and q["missing"] == 0 and q["stale"] == 0
+
+
+# ---- 第四次亲手操作（决策 124～126） ----
+def test_try_with_only_a_few_points_is_not_a_pass(tmp_path):
+    from tests.test_fsw_api import FakeDevice, start_insert, wait as fwait, run_to_try, fake_build_output
+    from fastapi.testclient import TestClient
+    from fsw.llm import FakeLLM
+    from fsw.web.app import create_app
+    from tests.identify_fixtures import door_source
+    from tests.test_instrument import reply
+
+    def builder(work, target, board, idf, progress):
+        fake_build_output(work)
+        return {"ok": True, "seconds": 0.1, "error": None}
+    dev = FakeDevice(lines=["boot ok", "FSW,P5,30,0"])  # 3 个计时点只收到 1 个（比如只唤醒了设备）
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=lambda p, k: FakeLLM(reply()),
+                              idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
+                              cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.usbmodem1101"],
+                              bg_builder=builder, device=dev, wait_step=0.01))
+    c.post("/api/settings", json={"llm_provider": "cc"})
+    r = c.post("/api/source/inspect", json={"path": str(door_source(tmp_path / "door"))}).json()
+    c.post("/api/bgbuild/start", json={"work": r["work"], "chip": "ESP32-S3"})
+    start_insert(c, r)
+    fwait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "failed" and "只收到 1 / 3 个" in j["err"]["message"]
+
+
+def test_same_point_stale_again_and_again_says_so(tmp_path):
+    from tests.test_first_round_and_push import make
+    from tests.test_collect_api import wait
+    from tests.test_standards import PAGE
+    lines = []
+    for k in range(4):
+        b = k * 10_000_000
+        lines += [f"FSW,RESET,{b + 1_000_000},0", f"FSW,P7,{b + 1_200_000},5"] + [f"FSW,P{i},{b + 3_000_000 + i * 100_000},0" for i in range(1, 10) if i != 7]
+    c = make(tmp_path, lines + ["FSW,RESET,99000000,0"])
+    c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 3, "project_dir": str(tmp_path / "p")})
+    j = wait(c, lambda j: "连着" in (j.get("half_hint") or ""))
+    assert "插的位置不对" in j["half_hint"]
+
+
+def test_no_auto_jump_after_try_and_elapsed_only_on_running_step():
+    assert "page='collect';justFlashed=true" not in JS
+    assert "${st===1?`已等 ${mmss(readSec)}，`:''}" in JS
+
+
+def test_beep_can_be_tested_and_logged(tmp_path):
+    assert "data-beeptest" in JS and "/api/client-log" in JS
+    from tests.test_first_round_and_push import make
+    c = make(tmp_path, [])
+    assert c.post("/api/client-log", json={"what": "响", "state": "running"}).json()["ok"]
+    assert "running" in (tmp_path / "d" / "client-log.jsonl").read_text(encoding="utf-8")

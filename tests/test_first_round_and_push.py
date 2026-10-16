@@ -110,3 +110,33 @@ def test_first_round_after_reconnect_missing_a_point_is_half_not_incomplete():
     part = [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10) if i != 7]  # 起点有，中间丢了一个
     out = feed(part + ["FSW,RESET,9000000,0"])
     assert out == [{"half": True}]
+
+
+# ---- 第四次亲手操作（决策 123～126） ----
+def test_point_recorded_several_times_uses_the_first_after_the_start():
+    """决策 123："表情换上"插成了每次都记：进聆听时设备先换一次表情（在你说完之前），回答来了再换一次。
+    这一轮的要用起点之后的第一次，不是最早那次；以前每轮都被当成"上一轮剩下的"，一直补测。"""
+    lines = ["FSW,RESET,1000000,0", "FSW,P4,1000100,0"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10)]
+    out = feed(lines + ["FSW,RESET,9000000,0"])
+    assert len(out) == 1 and out[0]["ok"], out
+
+
+def test_point_only_recorded_before_the_start_is_still_stale():
+    stale = ["FSW,RESET,1000000,0", "FSW,P7,1200000,5"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10) if i != 7]
+    assert feed(stale + ["FSW,RESET,9000000,0"])[0].get("stale")
+
+
+def test_today_log_all_rounds_count_after_the_fix():
+    """用 2026-10-16 17:55 那次的真日志：以前 1 轮绿、5 轮灰；现在每轮都算。"""
+    import json as _j
+    from pathlib import Path as _P
+    f = _P.home() / "firmware-stopwatch-data/xiaozhi-899bf4/runs/20261016-175542"
+    if not (f / "raw.log").exists():
+        return
+    run = _j.loads((f / "run.json").read_text(encoding="utf-8"))
+    sc = stds.real_scenario(run["page"], stds.find(run["page"]["steps"]), run.get("values"))
+    c = meas.Collector(meas.Spec.from_scenario(sc))
+    out = []
+    for l in (f / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines():
+        out += c.feed(l)
+    assert out and all(r.get("ok") for r in out if not r.get("half")), [r for r in out if not r.get("ok")]

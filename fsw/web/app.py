@@ -730,6 +730,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机", try_secs=TRY_SECONDS,
                        try_started=time.time(), dev_seen=None)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
+            need_n = max(1, len(want) - min(2, len(want) // 4))  # 差不多齐了才算试通：9 个至少 7 个，3 个要全到
             seen, last = set(), {"t": None}
 
             def on_line(line):
@@ -742,8 +743,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 job["got"] = sorted(seen)
                 _log(job, line[:300])
 
-            def enough():  # 都收到了；或者收到了一些、之后几秒再没有新的，就算试通
-                return seen == want or (seen and last["t"] and time.time() - last["t"] > TRY_SETTLE)
+            def enough():  # 都收到了；或者差不多齐了（最多差 2 个，有的点只在某些情况下才走到）、之后几秒再没有新的，就算试通
+                return seen == want or (len(seen) >= need_n and last["t"] and time.time() - last["t"] > TRY_SETTLE)
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end:  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -760,6 +761,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                              error=f"打不开调试口：{err}" if err else "没看到设备")
             got = ins.count_marks(lines) & want
             job["got"] = sorted(got)
+            if got and len(got) < need_n:  # 只收到零星几个：不算试通（决策 124）
+                job["try_fails"] = job.get("try_fails", 0) + 1
+                return _fail(job, "try", f"只收到 {len(got)} / {len(want)} 个计时点，这一次没走完。点「再试一次」，然后完整做一次要测的事。",
+                             why="可能刚才只唤醒了设备、还没说那句话，或者设备还没准备好。", error=f"（收到 {len(got)} / {len(want)} 个）",
+                             offer_restore=job["try_fails"] >= 2)
             if not got:
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 odd = sum(1 for l in lines if _garbled(l))
@@ -879,6 +885,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     continue
                 if r["ok"]:
                     job["half_hint"] = ""
+                    job["stale_run"] = {}
+                elif r.get("stale"):
+                    run = job.setdefault("stale_run", {})
+                    for m in r["missing"]:
+                        run[m] = run.get(m, 0) + 1
+                    worst = max(run.items(), key=lambda kv: kv[1])
+                    if worst[1] >= 2:
+                        name = worst[0].split("（")[0]
+                        job["half_hint"] = (f"「{name}」连着 {worst[1]} 轮都记在你说完之前，不像是这一轮的事，再测也一样。"
+                                            "多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 job["rounds"].append(r)
             job["progress"], job["last"] = list(coll.progress()), coll.last
             if ok_count() >= job["target"]:
@@ -1241,6 +1257,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.get("/api/collect")
     def collect_status():
         return _col_view(col["job"]) if col["job"] else {"status": "idle", "rounds": []}
+
+    @app.post("/api/client-log")
+    def client_log(body: dict):
+        """网页那边的小记录（比如提示音响了没有、浏览器的声音开没开）：存在结果文件夹的 client-log.jsonl，查"没响"时用（决策 121）。"""
+        try:
+            Path(live["data"]).mkdir(parents=True, exist_ok=True)
+            with open(Path(live["data"]) / "client-log.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps({"at": time.strftime("%H:%M:%S"), **{k: str(v)[:300] for k, v in body.items()}}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        return {"ok": True}
 
     @app.get("/api/collect/events")
     def collect_events():
