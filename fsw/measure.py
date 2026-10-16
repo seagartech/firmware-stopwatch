@@ -106,6 +106,7 @@ class Collector:
         """开始读（或停下再接着读）的那一刻就当作一轮的开头：设备可能在码表开始读之前就已经开始这一轮了，
         没看到"开始"那一行。这一轮收齐了照样算；只收到半轮就提示再做一次（决策 101）。"""
         self.cur, self.done, self.started, self.first = {}, False, True, True
+        self.occ = {}
         self.reset_us = None
 
     def feed(self, line):
@@ -123,11 +124,13 @@ class Collector:
             elif self.started and self.cur and not self.done and self.spec.start in self.cur:
                 out.append(self._bad())
             self.started, self.cur, self.done, self.first = True, {}, False, False
+            self.occ = {}
             self.reset_us = us
             return out
         if not self.started or self.done:  # 半轮、或这一轮已经收齐：后面的不管
             return out
         self.cur.setdefault(name, (us, val))
+        self.occ.setdefault(name, []).append((us, val))  # 同一个点一轮里记了几次（"每次都记"的点）：算的时候挑起点之后的第一次
         if all(x in self.cur for x in self.spec.need):
             self.done = True
             out.append(self._ok_or_stale())
@@ -146,7 +149,15 @@ class Collector:
         """比起点还早的点不是这一轮的（决策 111）：比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它，
         这一轮真正的那一次没记到。这样的轮不能算（也不能拿它判问题），写清楚是哪个点，自动补一轮。"""
         t0 = self.cur[self.spec.start][0]
-        stale = [x for x in self.spec.need if x != self.spec.start and self.cur[x][0] < t0 - STALE_US]
+        stale = []
+        for x in self.spec.need:
+            if x == self.spec.start:
+                continue
+            after = [o for o in self.occ.get(x, [self.cur[x]]) if o[0] >= t0 - STALE_US]
+            if after:
+                self.cur[x] = after[0]  # 决策 123：起点之后的第一次才是这一轮的（比如进聆听时先换一次表情，回答来了再换）
+            else:
+                stale.append(x)
         if not stale:
             return self._ok()
         self.att += 1
