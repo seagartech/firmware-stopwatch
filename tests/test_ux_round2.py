@@ -336,3 +336,8 @@ def test_unlock_is_inaudible_and_happens_on_any_click():
     u = grab("unlockAudio")
     assert "linearRampToValueAtTime(.00001" in u and "o.frequency.value=20" in u and "createOscillator" in u
     assert "document.addEventListener('click',()=>unlockAudio(),true)" in JS
+
+
+def test_blocked_sound_shows_a_one_click_fix():
+    """决策 132：该响的时候浏览器的声音还关着（比如 Safari 不认那段听不见的声音）：页面上出现"提示音被浏览器关着，点这里打开"。"""
+    assert "提示音被浏览器关着，点这里打开" in grab("beepBtn") and "beepBlocked=true" in grab("ding")
