@@ -182,6 +182,9 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
   <li><b class="lvtag lv-must">必须改</b>一般用时（中位数）超过"算慢"线，或体验标准判"差"，或"10 次里最慢"超过"算慢"线（每 10 次就有 1 次让人等太久）。</li>
   <li><b class="lvtag lv-should">建议改</b>偶尔特别慢、先后顺序反了，但不到每 10 次一次；或一般用时超出合理范围、没到"算慢"。</li>
   <li><b class="lvtag lv-ok">可以不改</b>在合理范围里，只是占时最多。</li></ul></details>`}
+// 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
+function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:''].filter(Boolean);
+ return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}。数字都是码表按这些轮算的，不经过 AI。</p>`}
 function subline(D){
   const bits=[];
   if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med,1)} 秒`);
@@ -299,9 +302,9 @@ function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
  const list=boardMatch(REAL.boards,hBoardQ),hi=Math.min(hBoardHi,Math.max(0,list.length-1));
  const drop=hBoardOpen?`<div class="bdrop" id="h-blist" role="listbox" aria-label="匹配的板子">${list.length?list.slice(0,50).map((b,k)=>`<div class="bopt${k===hi?' hi':''}" role="option" aria-selected="${REAL.board===b.id}" data-pickboard="${b.id}">${b.id}<span class="note">　${b.chip}</span></div>`).join('')+(list.length>50?`<div class="note" style="padding:6px 10px">还有 ${list.length-50} 块，多输几个字缩小范围</div>`:''):'<div class="note" style="padding:8px 10px">没有匹配的板子，换个说法试试（比如只输型号里的几个字）</div>'}</div>`:'';
  return `<div class="field" style="margin-top:14px"><label for="h-boardq">这个项目支持 ${REAL.boards.length} 块板子，你用的是哪块？</label>
-  <div class="bpick"><input type="text" id="h-boardq" role="combobox" aria-expanded="${hBoardOpen}" aria-controls="h-blist" autocomplete="off" placeholder="输入板子型号里的几个字，比如 core-s3" value="${htmlEsc(hBoardQ)}">${drop}</div>
+  <div class="bpick${REAL.board&&hBoardQ===REAL.board&&!hBoardOpen?' picked':''}"><input type="text" id="h-boardq" role="combobox" aria-expanded="${hBoardOpen}" aria-controls="h-blist" autocomplete="off" placeholder="输入板子型号里的几个字，比如 core-s3" value="${htmlEsc(hBoardQ)}">${drop}</div>
   ${REAL.chip?`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>已选 ${REAL.board||''}，芯片 ${REAL.chip}</p>`:hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}</div>`}
-function boardPick(id){const w=document.getElementById('h-what');hSay=w?w.value:hSay;hBoardQ=id;hBoardOpen=false;hBoardHi=0;realPick(REAL.body,REAL.label,id)}
+function boardPick(id){const w=document.getElementById('h-what');hSay=w?w.value:hSay;hBoardQ=id;hBoardOpen=false;hBoardHi=0;const q=document.getElementById('h-boardq');if(q){q.value=id;q.blur()}realPick(REAL.body,REAL.label,id)}
 async function uploadDrop(items){const tok=Math.random().toString(36).slice(2,12),files=[];
  const skip=new Set(['.git','build','managed_components','node_modules']);
  const walk=async(entry,pre)=>{if(entry.isFile){files.push([pre+entry.name,await new Promise((ok,no)=>entry.file(ok,no))])}
@@ -548,7 +551,7 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2><details class="lvwhy" style="margin:-4px 0 8px"><summary>画的是第 ${D.rep.n} 轮</summary><p class="note" style="margin:4px 0 0">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p></details>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
@@ -610,7 +613,7 @@ function readBox(){const llm=usedLLM();
  return `<ol class="isteps">
   ${row(0,'挑出要读的代码','码表自己做，不用大模型：'+FF[scene].scope)}
   ${row(1,`交给 ${llm}，等它读完`,`已等 ${readSec} 秒。大模型要整段读完才开始回答，这一步没有百分比，一般 1～3 分钟（估算；验证期 DeepSeek 实测 53 秒）`)}
-  ${row(2,'它边回答，这里边列出找到的步骤',`${stepsRead===2?'找完了，共':'已找到'} ${readFound} 个`)}</ol>
+  ${row(2,'AI 读完后，在这里列出找到的步骤',`${stepsRead===2?'找完了，共':'已找到'} ${readFound} 个`)}</ol>
   ${stepsRead===2?foundList():`${readFound?`<div class="list">${STEPS.slice(0,readFound).map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} 第 ${x.l} 行</span></div>`).join('')}</div>`:''}
   <p class="note">只发了代码，没发任何"标准答案"；结果先存在本机，源码没变下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}`}
 // 没法知道真实进度的等待（大模型读代码）：按一般用时估一个进度，最多到 95%，等完了才满（决策 105）
@@ -622,7 +625,7 @@ function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,fo
  return `<ol class="isteps">
   ${row(0,'挑出要读的代码',`码表自己做，不用大模型：${htmlEsc(REAL.name)} 复制好的那份源码，大模型只能读、改不了任何文件`)}
   ${row(1,`交给 ${llm}，等它读完`,`已等 ${mmss(readSec)}，一般 1～3 分钟。${st===1?`<span class="pbar"><i style="width:${estPct(readSec,150)}%"></i></span>进度条是按一般用时估的，不是真实进度`:''}`)}
-  ${row(2,'它边回答，这里边列出找到的步骤',`${done?'找完了，共':'已找到'} ${done?STEPS.length:found.length} 个`)}</ol>
+  ${row(2,'AI 读完后，在这里列出找到的步骤',`${done?'找完了，共':'已找到'} ${done?STEPS.length:found.length} 个`)}</ol>
   ${done?foundList():`${found.length?`<div class="list">${found.map((n,k)=>{const at=((J.at||[])[k]||'').match(/([^/\s]+):(\d+)$/);return `<div class="srow"><b>${htmlEsc(n)}</b>${at?`<span class="note">${htmlEsc(at[1])} 第 ${at[2]} 行</span>`:''}</div>`}).join('')}</div>`:''}`}
   ${fail?`<p class="note" style="color:var(--bad)">✕ ${J.message||'没找完'}</p><div class="acts" style="justify-content:flex-start;margin:6px 0"><button class="btn pri" data-idretry="1">重试</button><button class="btn" data-go="settings">到设置页换大模型</button>${/no_start|no_end/.test(J.kind||'')?'<button class="btn" data-mclose="1">换个说法写</button>':''}</div>`:''}
   <p class="note">只给它读代码，没给任何"标准答案"；结果存在本机，源码和要测的都没变，下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}
@@ -796,12 +799,13 @@ function flErr(){if(realFlash()&&FSWJ&&FSWJ.err)return flErrReal();const F=FF[sc
  return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code>${fullLogBtn()}</div>${fullLog()}<div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
 function flList(from=0,to=4){const n=to-from+1;
  const li=FST().slice(from,to+1).map(([t,d],j)=>{const i=from+j,done=fl.st===2||(fl.st>=1&&i<fl.step)||(fl.st===3&&i<=fl.step-1),cur=(fl.st===1||fl.st===4||fl.st===5||fl.st===6)&&i===fl.step,bad=(fl.st===4||fl.st===5)&&cur;
-  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small>${REAL?'':'<button class="pill" data-fl="plug">演示：设备已插上</button>'}`:''}</span></li>`}).join('');
+  return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${cur&&fl.st===1&&i!==4?stepLog():''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small>${REAL?'':'<button class="pill" data-fl="plug">演示：设备已插上</button>'}`:''}</span></li>`}).join('');
  const say=FF[scene].big;
  const N=realFlash()&&FSWJ?FSWJ.total||live().length:live().length,got=realFlash()&&FSWJ?(FSWJ.got||[]).length:Math.min(N,Math.round(fl.pct/100*N));
  const big=fl.st===6&&to>=4?`<div class="bigask"><b>试一次：${trySay()}</b><span class="note">设备烧完会重启。等它准备好（有屏幕的，等回到待命画面），再点「准备好了」；点了以后最多等 ${FSWJ&&FSWJ.try_secs||45} 秒。只是确认计时点能收到，不算进数据。</span><button class="btn pri" data-flx="trygo">准备好了</button></div>`
   :fl.st===1&&fl.step===4&&to>=4?(realFlash()?tryBox(got,N):`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`):fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点。没收到：${tryMissing().join("、")||"—"}。这一次没走到这一步（有的计时点只在某些情况下才走到，比如喊醒那一下设备不会判断你说完了），不影响多轮实测`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
- return `<ol class="isteps">${li}</ol>${big}${fl.st===1&&fl.step!==4?`<div class="ilog"><span class="note">${fl.step===1&&realFlash()?'正在':'最新一行'}</span><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`:''}`}
+ return `<ol class="isteps">${li}</ol>${big}`}
+const stepLog=()=>`<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`;
 // 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
 const tryAct=()=>{const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
 function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
@@ -873,7 +877,8 @@ function sceneSwitch(k){if(k===scene)return;colStop();col={st:0,att:0,got:[],pha
 let beep=true,actx=null;
 // 声音要在点按钮的那一下打开（Safari 等浏览器不认点击之后才开的声音），顺手放一段无声的，把声音通道打通（决策 115）
 function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();const b=actx.createBuffer(1,1,22050),s=actx.createBufferSource();s.buffer=b;s.connect(actx.destination);s.start(0)}catch(e){}}
-function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.06;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
+let dings=0;
+function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();dings++;const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.25;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
 function beepBtn(){return `<button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>`}
 function beepNote(){return CX().beepNote}
 function needMore(){const g=okRounds(),C=CX(),L=DX().lines.length-1;if(g.length<10)return false;const all=g.map(x=>x.e[L]),half=Math.floor(g.length/2),run=all.slice(0,half);const stable=Math.abs(med(run)-med(all))<.05;const few=C.probs.some(p=>{const n=g.filter(x=>x.probs.some(q=>q.k===p.k)).length;return n>0&&n<=3})&&g.length<30;return !stable||few}
@@ -1167,7 +1172,7 @@ function popHTML(){const F=FF[scene],C=CC();
   if(EXP.state==='fail')return box('导出报告',`<p style="color:var(--bad)">✕ 没导出成功：${htmlEsc(EXP.err)}</p>`,`<button class="btn pri" data-expgo="1">再试一次</button><button class="btn" data-pop="close">取消</button>`);
   if(EXP.state==='wait')return box('导出报告',`<p><span class="spin"></span> 等"为什么、怎么改"写完，写完马上自动导出。</p>`,`<button class="btn" data-expgo="1">不等了，现在导出</button><button class="btn" data-pop="close">取消</button>`);
   const advFail=ADV&&ADV.status==='failed'&&repKey().startsWith('real');
-  return box('导出报告',`${busy?'<div class="why" style="border-left-color:var(--warn);margin:0 0 10px">"为什么、怎么改"还在写（AI 一般 1～2 分钟）。<br>现在就导出：数字、图和要你拍板都是码表按数据算的，和写完再导出一模一样，可信；只是少了 AI 写的"为什么、怎么改"（每个问题的原因、方案、待办）。<br>等写完自动导出：多了这部分，别的一样。</div>':advFail?'<div class="why" style="border-left-color:var(--bad);margin:0 0 10px">"为什么、怎么改"没写成，现在导出的报告里没有建议。可以先关掉这个框，在报告里点「重试」，写好再导出。</div>':''}<p class="note" style="margin:0 0 8px">存成一个网页文件：断网也能打开，可以直接发给别人。</p><dl class="kv" style="grid-template-columns:4em 1fr"><dt>存到</dt><dd><div class="inrow"><input type="text" id="exp-dir" value="${htmlEsc(tilde(EXP.dir))}" readonly><button class="btn" data-expdir="1">换个文件夹</button></div><p class="note" style="margin:4px 0 0">默认放在被测源码的同级目录。</p></dd><dt>文件名</dt><dd><span class="code">${htmlEsc((expWhat()||'报告').replace(/[\\/:*?"<>|\s]+/g,'-'))}_测完时间.html</span></dd></dl>`,busy?`<button class="btn pri" data-expwait="1">等写完自动导出</button><button class="btn" data-expgo="1">现在就导出</button><button class="btn" data-pop="close">取消</button>`:`<button class="btn pri" data-expgo="1">导出</button><button class="btn" data-pop="close">取消</button>`)}
+  return box('导出报告',`${busy?'<div class="why" style="border-left-color:var(--warn);margin:0 0 10px">AI 还在写"为什么、怎么改"。现在导出，只少这一部分，别的都一样。</div>':advFail?'<div class="why" style="border-left-color:var(--bad);margin:0 0 10px">"为什么、怎么改"没写成，导出的报告里会少这一部分。想要的话先在报告里点「重试」。</div>':''}<p class="note" style="margin:0 0 8px">存成一个网页文件：断网也能打开，可以直接发给别人。</p><dl class="kv" style="grid-template-columns:4em 1fr"><dt>存到</dt><dd><div class="inrow"><input type="text" id="exp-dir" value="${htmlEsc(tilde(EXP.dir))}" readonly><button class="btn" data-expdir="1">换个文件夹</button></div><p class="note" style="margin:4px 0 0">默认放在被测源码的同级目录。</p></dd><dt>文件名</dt><dd><span class="code">${htmlEsc((expWhat()||'报告').replace(/[\\/:*?"<>|\s]+/g,'-'))}_测完时间.html</span></dd></dl>`,busy?`<button class="btn pri" data-expwait="1">等写完自动导出</button><button class="btn" data-expgo="1">现在就导出</button><button class="btn" data-pop="close">取消</button>`:`<button class="btn pri" data-expgo="1">导出</button><button class="btn" data-pop="close">取消</button>`)}
  if(pop==='readlog')return box('读取过程',`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(usedLLM())}</span></div>${readBox()}`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='steps'){const n=live().length,mid=STEPS.filter(x=>x.sure!=='高').length;
   return box('找完了',`<p>找到 ${STEPS.length} 个关键步骤。接下来按顺序做三件事：</p><ol class="notes" style="font-size:15px;color:var(--fg)">${F.sideAsk?`<li>回答一个问题："${F.sideAsk.q}"要不要一起测</li>`:''}<li>看一眼 ${mid} 个需核对的步骤，对不对</li><li>点「确认，去插计时点」</li></ol>`,
