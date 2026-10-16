@@ -1302,7 +1302,8 @@ function render(){if(!scene||!SCENES[scene])return;applyScene();
   const md=document.getElementById('modal');md.hidden=!(isHome&&hStage>=2);
   if(!md.hidden)morphHTML(document.getElementById('dlg'),modalHTML());
   const pp=document.getElementById('pop');pp.hidden=!pop;if(pop)morphHTML(document.getElementById('popdlg'),popHTML());
-  document.querySelectorAll('[data-need]').forEach(b=>{if(b.previousElementSibling&&b.previousElementSibling.classList.contains('gate'))return;const g=document.createElement('span');g.className='gate';g.textContent='还差：'+b.dataset.msg;b.before(g)});
+  // 点不了的按钮：包一层，"还差：……"用小字放在按钮正下方（决策 143，全码表统一）
+  document.querySelectorAll('[data-need]').forEach(b=>{const p=b.parentElement;if(p&&p.classList.contains('needwrap')){const g=p.querySelector('.gate');if(g)g.textContent='还差：'+b.dataset.msg;return}const w=document.createElement('span');w.className='needwrap';b.before(w);w.appendChild(b);const g=document.createElement('span');g.className='gate';g.textContent='还差：'+b.dataset.msg;w.appendChild(g)});
   {const m=document.getElementById('main');const need=page==='steps'&&stepsRead===2&&alsoFace===null?'#sideask':null;const el=need&&m.querySelector(need);if(el)el.classList.add('need')}
   document.getElementById('v-boss').setAttribute('aria-pressed',String(mode==='boss'));
   document.getElementById('v-dev').setAttribute('aria-pressed',String(mode==='dev'));
@@ -1321,7 +1322,7 @@ function syncFlow(){if(!flow)return;
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{
-  const nd=e.target.closest('[data-need]');if(nd){if(nd.dataset.needgo&&nd.dataset.needgo!==page){if(hStage>=2)hStage=1;page=nd.dataset.needgo;render();window.scrollTo(0,0);return}const g=nd.previousElementSibling;if(g&&g.classList.contains('gate'))g.classList.add('hit');nudge(nd.dataset.need);return}
+  const nd=e.target.closest('[data-need]');if(nd){if(nd.dataset.needgo&&nd.dataset.needgo!==page){if(hStage>=2)hStage=1;page=nd.dataset.needgo;render();window.scrollTo(0,0);return}const g=nd.parentElement.querySelector('.gate');if(g)g.classList.add('hit');nudge(nd.dataset.need);return}
   if(e.target.closest('#pop button')){pop=null;document.getElementById('pop').hidden=true}
   if(e.target.closest('[data-envgo]')){envBack=page==='flash'?'flash':'home';envMark=true;hStage=Math.min(hStage,1);page='settings';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-save]')){const sb=e.target.closest('[data-save]');const ki=document.getElementById('set-key'),kv=ki?ki.value.trim():'';sb.disabled=true;

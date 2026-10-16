@@ -29,3 +29,12 @@ def test_tiny_segments_are_drawn_as_one_block_with_separators():
 def test_stop_button_sits_on_the_left_away_from_the_grey_report_button():
     """测的时候"停止实测"放左边、挨着说明；右边是"还差：测完才能看"和灰色"查看报告"，提示不夹在两个按钮中间（决策 142）。"""
     assert '<span style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn" data-col="stop">停止实测</button><span class="note">可以随时停' in JS
+
+
+def test_blocked_buttons_get_their_reason_in_small_text_right_below():
+    """点不了的按钮：明显发灰，"还差：……"用小字放在它正下方，全码表统一（决策 143）。"""
+    from pathlib import Path
+    css = (Path(__file__).resolve().parents[1] / "fsw/web/static/style.css").read_text(encoding="utf-8")
+    assert ".needwrap" in css and ".needwrap .gate" in css
+    assert "className='needwrap'" in JS and "b.before(g)" not in JS
+    assert "nd.parentElement.querySelector('.gate')" in JS
