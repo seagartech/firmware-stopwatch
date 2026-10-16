@@ -50,11 +50,11 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  if(!real){const S={...S0,segs:Object.fromEntries(Object.entries(S0.segs).map(([k,g])=>[k,{...g,v:J.rounds.map(r=>r.segs[k]??g.v[0])}])),J};return S}
  const sc=J.scenario,st=Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),rng=r=>r?`${r[0]}～${r[1]??'不限'}`:'—';
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,ok:rng(g.range),v:val(k)}]));
- const P=IDENT.page,[sShort,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sEnd=P.sideAsk?P.sideAsk.q:'';
+ const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
  const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
  const exp=sc.experience?{fair:sc.experience.fair,label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.source||'体验标准'}）`}:null;
  const start=st[sc.start.point];
- return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:`${sShort}（${start?start.n:'起点'}）`,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
+ return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
   firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],fine:ADV&&ADV.status==='done'&&ADV.fine?htmlEsc(ADV.fine):(()=>{const ok=J.segments.filter(g=>!g.outside&&g.verdict==='正常'&&!g.spiky);return ok.length?`设备自己的几段（${ok.map(g=>`${htmlEsc(g.name)} ${f(g.med)} 秒`).join('、')}）都正常，不用改。`:'设备自己的几段还没有能判的。'})(),
   tech:{cond:[['项目',`${htmlEsc(REAL.name)}，${CHIP()}`],['合理范围',sc.standard?`码表自带的标准：${htmlEsc(sc.standard)}（按代码位置对上 ${Object.keys(sc.matched||{}).length} 个计时点）`:'还没有这个设备的合理范围']],pts:(IDENT.page.steps||[]).length,
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} 第 ${st[g.to].l} 行`:''])),log:J.raw_log||S0.tech.log},J}}
@@ -183,6 +183,9 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
   <li><b class="lvtag lv-should">建议改</b>偶尔特别慢、先后顺序反了，但不到每 10 次一次；或一般用时超出合理范围、没到"算慢"。</li>
   <li><b class="lvtag lv-ok">可以不改</b>在合理范围里，只是占时最多。</li></ul></details>`}
 // 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
+// 起点按计时点自己的名字叫（比如"设备听出你停了"），不叫"你说完"：它是设备自己察觉的时刻，比人真正做完晚（决策 135）
+function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
+function startLagLine(name,L){return `<p class="note" style="margin:4px 0 0">起点是「${htmlEsc(name)}」，是设备自己察觉的时刻。${L?`人实际停嘴还要再早约 ${(Math.round(L.secs*10)/10).toFixed(1)} 秒（${htmlEsc(L.when||'')} 用 ${htmlEsc(L.how||'录音')}核对过${L.rounds?`，${L.rounds} 轮`:''}），按人的感受，各条线的用时都要再加上这么多。`:'人实际做完的那一刻还要早一点，码表看不到，还没核对过。'}</p>`}
 function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:'',Q.nostart?`${Q.nostart} 次没记到起点「${Q.startName||'起点'}」`:''].filter(Boolean);
  return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}。数字都是码表按这些轮算的，不经过 AI。</p>`}
 function subline(D){
@@ -556,7 +559,7 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2><details class="lvwhy" style="margin:-4px 0 8px"><summary>画的是第 ${D.rep.n} 轮</summary><p class="note" style="margin:4px 0 0">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p></details>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
@@ -887,7 +890,7 @@ function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||
  const o=actx.createOscillator(),g=actx.createGain(),t=actx.currentTime;o.frequency.value=20;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.00001,t+.04);g.gain.linearRampToValueAtTime(0,t+.08);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+.1);beepLog('点击时打开声音')}catch(e){}}  // 20 赫兹、慢慢起慢慢收：人耳听不到，也没有"咔"的一下
 document.addEventListener('click',()=>unlockAudio(),true);
 let dings=0,beepMsg='',beepBlocked=false;  // 决策 132：该响的时候浏览器的声音没开：页面上显示一个按钮，点一下就开
-function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state==='running')beepBlocked=false;else{actx.resume();setTimeout(()=>{if(actx.state!=='running'&&!beepBlocked){beepBlocked=true;beepLog('声音被浏览器关着');if(page==='collect')render()}},400)}dings++;if(dings<=3||dings%10===0)beepLog('响');const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.25;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
+function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state==='running')beepBlocked=false;else{actx.resume();setTimeout(()=>{if(actx.state!=='running'&&!beepBlocked){beepBlocked=true;beepLog('声音被浏览器关着');if(page==='collect')render()}},400)}dings++;if(dings<=3||dings%10===0)beepLog('响');const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.08;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
 function beepBtn(){return `${beepBlocked&&beep&&!(actx&&actx.state==='running')?'<button class="btn" data-beeptest="1" style="border-color:var(--warn);color:var(--warn)">🔇 提示音被浏览器关着，点这里打开</button>':''}<span style="display:inline-flex;gap:10px;align-items:center"><button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>${beep?'<button class="pill" data-beeptest="1">试听</button>':''}</span>`}
 function beepLog(what){try{fetch('/api/client-log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({what,state:actx?actx.state:'none',dings,ua:navigator.userAgent,hidden:document.hidden})})}catch(e){}}
 function beepNote(){return CX().beepNote}
@@ -926,7 +929,7 @@ const CX=()=>realCol()&&RCT?RCT:COLLECT[scene];
 async function loadRCT(){const P=IDENT.page,st=(P.measure||'').split('→')[0].trim(),names=Object.fromEntries((P.steps||[]).map(x=>[x.p,x.n]));
  try{const t=await (await fetch('/api/rounds?'+new URLSearchParams({what:hSay||P.mapWhat||'',start:st}))).json();
   RCT={...t,ph:[...(P.main||[]).map(k=>names[k]).filter(Boolean),'这一轮记好了'],probs:(COLJ&&COLJ.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}))};if(page==='collect')render()}catch(e){}}
-function realD(){const P=IDENT.page,[sShort,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sEnd=P.sideAsk?P.sideAsk.q:'';
+function realD(){const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,COLJ&&COLJ.scenario||{start:{point:(P.main||[])[0]}}),sEnd=P.sideAsk?P.sideAsk.q:'';
  const L=COLJ&&COLJ.lines&&COLJ.lines.length?COLJ.lines:(sEnd?[{name:sEnd},{name:mEnd}]:[{name:mEnd}]);
  const lines=L.map((l,i)=>({name:l.name,end:i<L.length-1?(sEnd||l.name):mEnd,ok:l.range?[l.range[0],l.range[1]??Infinity]:null,slow:l.slow??Infinity,col:LCOL[i]}));
  return {lines,S:{startShort:sShort,exp:COLJ&&COLJ.experience?{fair:COLJ.experience.fair}:null},rounds:okRounds().map(r=>({ends:r.e}))}}

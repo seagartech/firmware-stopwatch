@@ -1035,6 +1035,18 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                         "probs": [k for k, rs in res["problems"].items() if i + 1 in rs]})
         return out
 
+    def _start_lag(raw, sc):
+        """核对过起点比人真正做完晚多少（比如用 Mac 录音核对）：记在项目文件夹的 calib.json，
+        起点还是同一个计时点（按名字对）才用（决策 135）。"""
+        if not raw:
+            return None
+        try:
+            lag = json.loads((Path(raw).parent.parent.parent / "calib.json").read_text(encoding="utf-8")).get("start_lag")
+        except (OSError, ValueError):
+            return None
+        name = (sc.get("point_names") or {}).get((sc.get("start") or {}).get("point"))
+        return lag if lag and name and lag.get("point_name") == name else None
+
     @app.get("/api/report")
     def report(demo: str | None = None):
         """报告用的判断：这次收齐的轮，按固定规则算（判快慢、两把尺子、结论标签），不用大模型。
@@ -1061,7 +1073,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                    "nostart": (job or {}).get("nostart", 0) if raw else 0,
                    "startName": (sc.get("start") or {}).get("name", "")}
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep}, "timing": _timing() if raw else None,
-                "quality": quality,
+                "quality": quality, "start_lag": _start_lag(raw, sc),
                 "stale": bool(stale), "stale_since": stale, "measured_at": (job or {}).get("measured_at") if ok and same else None}
 
     def _timing():
