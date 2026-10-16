@@ -170,10 +170,15 @@ function lineCards(D){
      <p>合理范围：${l.ok?`${l.ok[0]}～${l.ok[1]??'不限'} 秒 → <b class="${inR?'down':'up'}">${inR?'在范围内':v}</b>`:'还没有'}</p>
      <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
 }
-function decideList(D){const FX=activeFixes(D);
-  return `<ul class="decide">${decisions(D).map(x=>{const n=cardOf(FX,x);return `<li>${lvTag(x.lv)}<span><b>${x.t}</b>　${x.d}${x.who}。<br><span class="src">出处：${jump('sec-'+x.src[0],'见下方'+x.src[1])}${n>=0?`　为什么、怎么改：${jump('fix-'+n,'问题 '+(n+1))}`:''}</span></span></li>`}).join('')}</ul>
-  <ul class="notes"><li>这里的数字都是码表按这次 ${D.n} 轮数据直接算出来的，不经过 AI。</li><li>"为什么、怎么改"的文字是 AI 读代码写的。</li><li>要做哪些方案：在下方每个问题的方案表里勾选，结果汇总在 ${jump('my-pick','你的决定')}。</li></ul>
-  <details class="lvwhy"><summary>标签规则</summary><ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
+// 负责人版写短（决策 98）：必须改在前、建议改在后，都展开；可以不改的收起来。内容不删，只是默认收起
+function bossSplit(ds){const by=lv=>ds.filter(x=>x.lv===lv);return {open:[...by(0),...by(1)],fold:by(2)}}
+// 要你拍板每条加一行：建议做哪个、预计省多少（取卡片里标了"建议"的方案）
+function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;return o?`建议：${o.name}，预计${o.effect}。`:''}
+function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
+  const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li>${lvTag(x.lv)}<span><b>${x.t}</b>　${x.d}${x.who}。${r?`<br><b>${r}</b>`:''}<br><span class="src">出处：${jump('sec-'+x.src[0],'见下方'+x.src[1])}${n>=0?`　为什么、怎么改：${jump('fix-'+n,'问题 '+(n+1))}`:''}</span></span></li>`};
+  return `<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条在合理范围里，不用改</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
+  <details class="lvwhy"><summary>数字从哪来、标签规则</summary><ul class="notes"><li>这里的数字都是码表按这次 ${D.n} 轮数据直接算出来的，不经过 AI。</li><li>"为什么、怎么改"的文字是 AI 读代码写的。</li><li>要做哪些方案：在下方每个问题的方案表里勾选，结果汇总在 ${jump('my-pick','你的决定')}。</li></ul>
+  <ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
   <li><b class="lvtag lv-must">必须改</b>一般用时（中位数）超过"算慢"线，或体验标准判"差"，或"10 次里最慢"超过"算慢"线（每 10 次就有 1 次让人等太久）。</li>
   <li><b class="lvtag lv-should">建议改</b>偶尔特别慢、先后顺序反了，但不到每 10 次一次；或一般用时超出合理范围、没到"算慢"。</li>
   <li><b class="lvtag lv-ok">可以不改</b>在合理范围里，只是占时最多。</li></ul></details>`}
@@ -432,7 +437,7 @@ function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
   d.querySelectorAll('input[type=checkbox],input[type=radio]').forEach(i=>{const s=document.createElement('span');s.textContent=i.checked?'☑':'☐';s.className='ck';i.replaceWith(s)});
   d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else b.remove()});
   d.querySelectorAll('[id]').forEach(x=>x.id=pre+x.id);d.querySelectorAll('.flash').forEach(x=>x.classList.remove('flash'));
-  d.querySelectorAll('details').forEach(x=>x.open=true);return d.innerHTML}
+  d.querySelectorAll('details').forEach(x=>x.removeAttribute('open'));return d.innerHTML}  // 导出也默认收起，点开能看（决策 98）
 // 导出存到哪、存完的提示（一直在，直到你关掉）
 let EXP={dir:'',saved:null};
 const expWhat=()=>realFlash()?(IDENT.page.mapWhat||hSay||''):'';  // 文件名用你自己写的场景说法
@@ -440,7 +445,7 @@ function expDone(){return EXP.saved?`<section class="panel expdone" role="status
 async function exportStart(){try{EXP.dir=(await (await fetch('/api/report/export-dir'+(repKey().startsWith('real')?'':'?demo='+encodeURIComponent(scene)))).json()).dir}catch(e){}pop='export';render()}
 async function exportReport(folder){
   const keep={mode,fixTodo},m=document.getElementById('main');
-  mode='boss';fixTodo=true;render();const boss=m.innerHTML;mode='dev';render();const dev=m.innerHTML;mode=keep.mode;fixTodo=keep.fixTodo;render();
+  mode='boss';fixTodo=false;render();const boss=m.innerHTML;mode='dev';render();const dev=m.innerHTML;mode=keep.mode;fixTodo=keep.fixTodo;render();
   const css=await (await fetch('/static/style.css')).text();
   const crumb=document.getElementById('crumb').cloneNode(true);crumb.querySelectorAll('button,.mock').forEach(x=>x.remove());
   const info=crumb.textContent.replace(/^\s*›\s*/,'').trim(),parts=info.split('·').map(x=>x.trim()),what=expWhat()||parts[1]||parts[0]||'报告';
@@ -466,20 +471,21 @@ function myPick(D,FX){initPick(FX);
   const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
   const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
   const none=FX.map((F,fi)=>chosen.some(o=>o.fi===fi)?'':`问题 ${fi+1}`).filter(Boolean);
-  const body=chosen.length?`<ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul>
+  const body=chosen.length?`<details class="lvwhy"><summary>勾了哪几个、每个预计的效果</summary><ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul></details>
    <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
    ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
    ${none.length?`<p style="margin:6px 0;color:var(--bad)">${none.join('、')}一个方案都没选，等于先不处理。</p>`:''}
-   <div class="acts" style="margin-top:8px"><button class="btn pri" data-todo="1">${fixTodo?'收起待办':'生成待办'}</button></div>
-   ${fixTodo?`<p class="note" style="margin:10px 0 6px">按人分好，每人一块，各自复制后贴到钉钉、微信或邮件里发给对方。</p>${Object.keys(who).map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX)}</pre></div>`).join('')}`:''}`
+   <details class="lvwhy" ${fixTodo?'open':''} data-todod="1"><summary>待办：按人分好的消息（${Object.keys(who).length} 个人）</summary><p class="note" style="margin:10px 0 6px">按人分好，每人一块，各自复制后贴到钉钉、微信或邮件里发给对方。</p>${Object.keys(who).map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX)}</pre></div>`).join('')}</details>`
    :'<p class="note">还没勾任何方案。</p>';
   return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你的决定：勾了 ${chosen.length} 个方案</h3>${body}</div>`;
 }
 function fixA(D){const FX=activeFixes(D);initPick(FX);
-  return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'}"><h3 style="margin:0 0 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
+  return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
+   <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：为什么、对用户的影响、可选方案<span hidden>${fi}</span></summary>
+   <h3 style="margin:10px 0 8px">${F.title}</h3>
    <p style="margin:0 0 6px"><b>为什么：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>
-   ${optTable(F,fi,true)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></div>`).join('')+myPick(D,FX)+
-   `<p class="note" style="margin:0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}`;
+   ${optTable(F,fi,true)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX)+
+   `<details class="lvwhy"><summary>不用改的、工作量和效果怎么估的</summary><p class="note" style="margin:6px 0 0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}</details>`;
 }
 function fixB(D){const FX=activeFixes(D);
   if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}
@@ -515,8 +521,8 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 function reportPage(D){
   if(mode==='dev')return dev(D);
   return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
-  <section class="panel" id="sec-tl"><h2>一次的计时图</h2><p class="note" style="margin:-4px 0 8px">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p>${timeline(D)}</section>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
+  <section class="panel" id="sec-tl"><h2>一次的计时图</h2><details class="lvwhy" style="margin:-4px 0 8px"><summary>画的是第 ${D.rep.n} 轮</summary><p class="note" style="margin:4px 0 0">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p></details>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
   <section class="grid3" id="sec-lines">${lineCards(D)}</section>
@@ -1187,7 +1193,8 @@ function render(){if(!scene||!SCENES[scene])return;applyScene();
   else if(page==='retest')body=retestPage();
   else if(page==='range')body=rangePage();
   else body=`<div class="panel todo">这一页还没做样子，按顺序下一步做。</div>`;
-  document.getElementById('main').innerHTML=`<div class="view">${body}</div>`;
+  const mEl=document.getElementById('main'),keepOpen=mEl.dataset.pg===page?new Set([...mEl.querySelectorAll('details[open] > summary')].map(x=>x.textContent)):new Set();
+  mEl.innerHTML=`<div class="view">${body}</div>`;mEl.dataset.pg=page;mEl.querySelectorAll('details > summary').forEach(x=>{if(keepOpen.has(x.textContent))x.parentElement.open=true});
   const md=document.getElementById('modal');md.hidden=!(isHome&&hStage>=2);
   if(!md.hidden)document.getElementById('dlg').innerHTML=modalHTML();
   const pp=document.getElementById('pop');pp.hidden=!pop;if(pop)document.getElementById('popdlg').innerHTML=popHTML();

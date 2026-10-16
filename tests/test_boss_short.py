@@ -1,0 +1,72 @@
+"""负责人版写短（决策 98）：只改展示，内容一个字不删。
+
+默认展开：一句话结论、要你拍板（必须改在前、建议改在后，每条加一行"建议做哪个、预计省多少"）、你的决定。
+可以不改的只露一句"另有 n 条在合理范围里，不用改"；方案表、详细原因和影响、标签规则、发给对方的消息、结尾说明默认收起。
+"要你拍板"挪到计时图前面（手机第一屏能看到）。导出的离线报告一样（用的是同一份页面，<details> 不用脚本也能点开）。
+"""
+
+import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+JS = (Path(__file__).resolve().parents[1] / "fsw/web/static/app.js").read_text(encoding="utf-8")
+node = pytest.mark.skipif(not shutil.which("node"), reason="没有 node")
+
+
+def grab(name):
+    m = re.search(rf"^(const {name}=.*|function {name}\(.*)$", JS, re.M)
+    assert m, f"app.js 里没有 {name}"
+    if m.group(0).startswith("const"):
+        return m.group(0)
+    out, depth = [], 0
+    for line in JS[m.start():].splitlines():
+        out.append(line)
+        depth += line.count("{") - line.count("}")
+        if depth == 0:
+            break
+    return "\n".join(out)
+
+
+def run(names, expr):
+    code = "\n".join(grab(n) for n in names) + f"\nconsole.log(JSON.stringify({expr}));"
+    return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
+
+
+@node
+def test_must_and_should_open_no_change_folded():
+    ds = [{"k": "a", "lv": 1}, {"k": "b", "lv": 2}, {"k": "c", "lv": 0}, {"k": "d", "lv": 2}]
+    r = run(["bossSplit"], f"bossSplit({json.dumps(ds)})")
+    assert [x["k"] for x in r["open"]] == ["c", "a"]  # 必须改在前、建议改在后
+    assert [x["k"] for x in r["fold"]] == ["b", "d"]
+
+
+@node
+def test_recommended_option_line():
+    F = {"opts": [{"name": "换模型", "effect": "约 0.5 秒（估算）"}, {"name": "边想边说", "effect": "约 0.3 秒（估算）", "rec": 1}]}
+    assert run(["recLine"], f"recLine({json.dumps(F)})") == "建议：边想边说，预计约 0.3 秒（估算）。"
+    assert run(["recLine"], "recLine(null)") == ""
+
+
+def test_decide_comes_before_the_timing_chart():
+    page = grab("reportPage")
+    assert page.index("<h2>要你拍板</h2>") < page.index("<h2>一次的计时图</h2>")
+
+
+def test_details_folded_by_default():
+    fa = grab("fixA")
+    assert "<details" in fa and "optTable(F,fi,true)" in fa.split("<details", 1)[1]  # 方案表收在里面
+    assert "<b>为什么：</b>" in fa.split("<details", 1)[1] and "<b>对用户的影响：</b>" in fa.split("<details", 1)[1]
+    assert "ESTNOTE" in fa.split("<details")[-1]  # 结尾说明收起
+    dl = grab("decideList")
+    assert "另有 ${" in dl and "不用改" in dl and "标签规则" in dl.split("<details")[-1]
+    mp = grab("myPick")
+    assert "<details" in mp and "todoText(" in mp.split("<details", 1)[1]  # 发给对方的消息收起
+
+
+def test_no_details_open_by_default_in_manager_view():
+    for fn in ("fixA", "decideList", "myPick"):
+        assert "<details open" not in grab(fn)
