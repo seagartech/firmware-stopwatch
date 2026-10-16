@@ -24,3 +24,8 @@ def test_restore_keeps_saying_restoring_while_the_page_redraws():
 def test_tiny_segments_are_drawn_as_one_block_with_separators():
     t = grab("timeline")
     assert "tiny" in t and 'stroke="var(--panel)"' in t
+
+
+def test_stop_button_sits_on_the_left_away_from_the_grey_report_button():
+    """测的时候"停止实测"放左边、挨着说明；右边是"还差：测完才能看"和灰色"查看报告"，提示不夹在两个按钮中间（决策 142）。"""
+    assert '<span style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn" data-col="stop">停止实测</button><span class="note">可以随时停' in JS
