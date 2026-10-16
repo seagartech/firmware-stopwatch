@@ -29,8 +29,8 @@ def test_report_uses_the_start_label_and_lag_line():
     assert "startLabel(P,COLJ&&COLJ.scenario||{start:{point:(P.main||[])[0]}})" in grab("realD")  # 多轮实测页"量几条线"也用这个名字
 
 
-def test_beep_is_quieter():
-    assert "g.gain.value=.25" not in grab("ding") and "g.gain.value=.15" in grab("ding")
+def test_beep_keeps_the_original_volume():
+    assert "g.gain.value=.25" in grab("ding")  # 用户试听：调轻了太小，用原来的音量
 
 
 def test_report_api_gives_start_lag_from_the_check(tmp_path):
