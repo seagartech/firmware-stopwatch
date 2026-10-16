@@ -305,7 +305,8 @@ def test_restore_waits_when_port_busy_and_keeps_message_short(tmp_path):
         def flash(self, fw, port, on_progress):
             if str(fw).endswith("orig") and Busy.busy < 2:
                 Busy.busy += 1
-                return {"ok": False, "error": "A fatal error occurred: Could not open /dev/cu.usbmodem1101, the port is busy or doesn't exist."}
+                return {"ok": False, "error": ["A fatal error occurred: Could not open /dev/cu.usbmodem1101, the port is busy or doesn't exist.",
+                                               "ERROR: A serial exception error occurred: Could not configure port: (6, 'Device not configured')"][Busy.busy - 1]}
             return super().flash(fw, port, on_progress)
 
     def builder(work, target, board, idf, progress):

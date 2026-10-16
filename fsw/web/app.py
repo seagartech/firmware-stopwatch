@@ -1337,18 +1337,18 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         fsw["job"] = job
 
         def burn(port):
-            for k in range(4):  # 刚测完调试口可能还没放开、或设备正在重连：等一下再烧，别马上报错（决策 129）
+            for k in range(6):  # 刚测完调试口可能还没放开、或设备正在重连：等一下再烧，别马上报错（决策 129）
                 r = device.flash(orig_fw, port, lambda pct, msg: None)
-                if r.get("ok") or not re.search(r"busy|Could not open|doesn't exist|Errno 16", str(r.get("error") or ""), re.I):
+                if r.get("ok") or not re.search(r"busy|Could not open|doesn't exist|Errno 16|not configured|Errno 6|Could not configure", str(r.get("error") or ""), re.I):
                     break
-                time.sleep(wait_step * 2)
+                time.sleep(wait_step * 3)
                 port = (port_finder() or [port])[0]
             out.update(flashed=bool(r.get("ok")), port=port, error=r.get("error"), waiting=False)
             if r.get("ok"):
                 _on_device(a.project_dir, False)
                 out["say"] = "已还原：源码放回原样，原版已经烧回设备。"
             else:
-                busy = re.search(r"busy|Errno 16", str(r.get("error") or ""), re.I)
+                busy = re.search(r"busy|Errno 16", str(r.get("error") or ""), re.I)  # 设备还在重连（not configured）已经在上面等过了
                 out["say"] = ("源码已还原，原版没烧上：调试口被别的程序占着。关掉它（比如串口监视器）再点一次「还原成原版」。" if busy else
                               "源码已还原，原版没烧上：看看线插好没有，再点一次「还原成原版」。")
                 out["detail"] = _plain(r.get("error"))  # 原话放在详情里，不堆在提示里
