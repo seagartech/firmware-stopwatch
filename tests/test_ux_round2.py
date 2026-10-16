@@ -334,5 +334,5 @@ def test_board_from_last_time_is_filled_in_and_said():
 def test_unlock_is_inaudible_and_happens_on_any_click():
     """决策 131：点开始时那一声"叮"让人以为收好一轮了：改成听不见的音量；任何一次点击都顺手打开声音。"""
     u = grab("unlockAudio")
-    assert "g.gain.value=.001" in u and "createOscillator" in u
+    assert "linearRampToValueAtTime(.00001" in u and "o.frequency.value=20" in u and "createOscillator" in u
     assert "document.addEventListener('click',()=>unlockAudio(),true)" in JS
