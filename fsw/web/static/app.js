@@ -583,7 +583,7 @@ const bgFailed=()=>!!(BG&&BG.state==='failed'),bgWaitTool=()=>!!(BG&&BG.state===
 const htmlEsc=t=>String(t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const BGTIME=()=>{if(BG&&BG.seconds!=null){const t=Math.round(BG.seconds);return t>=60?`${Math.floor(t/60)} 分 ${t%60} 秒`:`${t} 秒`}return FF[scene].bg};
 function bgStartReal(){clearInterval(bgT);bgT=null;clearInterval(bgPoll);bgSrc=hSrc;bgSec=0;bgDur=100;BG={state:'running',pct:0};
- const body={work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min};
+ const body={work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min,project_dir:REAL.project_dir};  // 带上项目：源码没变就用上次编好的原版（决策 134）
  const show=s=>{BG=s;bgSec=s.state==='done'?100:(s.pct||0);bgPill();if(pop==='bg')morphHTML(document.getElementById('popdlg'),popHTML());if(page==='home'&&hStage===3&&stepsRead===2)document.getElementById('dlg').innerHTML=modalHTML()};
  const tick=async()=>{let s;try{s=await (await fetch('/api/bgbuild')).json();if(s.state==='waiting_tool'||s.state==='idle'||s.work!==body.work)s=await api('/api/bgbuild/start',body)}catch(e){return}
   show(s);
