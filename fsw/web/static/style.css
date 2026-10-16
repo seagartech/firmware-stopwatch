@@ -224,3 +224,6 @@ table.num td.r,table.num th.r{white-space:nowrap}
 .toast.t-bad{border-color:var(--bad);border-width:2px;background:color-mix(in srgb,var(--bad) 7%,var(--panel))}
 .toast.t-warn{border-color:var(--warn)}
 .toast .tclose{border:0;background:none;font-size:20px;line-height:1;cursor:pointer;color:var(--muted);padding:0 2px}
+
+/* 计时图的字垫一层底色：1.5 秒那条竖线不压住字（决策 137） */
+svg text.halo{paint-order:stroke;stroke:var(--panel);stroke-width:5px;stroke-linejoin:round}
