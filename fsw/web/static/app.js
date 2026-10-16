@@ -1410,7 +1410,7 @@ document.addEventListener('click',e=>{
   const sgb=e.target.closest('[data-seg]');if(sgb){segSel=sgb.dataset.seg;render();return}
   const cmv=e.target.closest('[data-cmpvar]');if(cmv){cmpVar=cmv.dataset.cmpvar;render();return}
   const cv=e.target.closest('[data-colvar]');if(cv){colVar=cv.dataset.colvar;render();return}
-  if(e.target.closest('[data-beeptest]')){unlockAudio();ding(false);setTimeout(()=>{beepMsg=actx?actx.state:'none';beepLog('试听');render()},400);return}
+  if(e.target.closest('[data-beeptest]')){unlockAudio();ding(false);setTimeout(()=>{beepMsg=actx?actx.state:'none';beepLog('试听');render()},400);setTimeout(()=>{beepLog('15 秒后自动响之前');ding(false);setTimeout(()=>beepLog('15 秒后自动响之后'),300)},15000);return}
   if(e.target.closest('[data-beep]')){beep=!beep;render();return}
   const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
   const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}

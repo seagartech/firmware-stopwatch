@@ -236,3 +236,44 @@ def test_beep_can_be_tested_and_logged(tmp_path):
     c = make(tmp_path, [])
     assert c.post("/api/client-log", json={"what": "响", "state": "running"}).json()["ok"]
     assert "running" in (tmp_path / "d" / "client-log.jsonl").read_text(encoding="utf-8")
+
+
+def test_try_reopens_the_port_when_it_hears_nothing(tmp_path, monkeypatch):
+    """决策 127：烧完设备重启，调试口断开又回来；码表要是打开的是重启前那个，一直收不到东西。8 秒没输出就关掉重开。"""
+    import time as _t
+    from fsw.web import app as A
+    from tests.test_fsw_api import FakeDevice, start_insert, wait as fwait, run_to_try, fake_build_output
+    from fastapi.testclient import TestClient
+    from fsw.llm import FakeLLM
+    from fsw.web.app import create_app
+    from tests.identify_fixtures import door_source
+    from tests.test_instrument import reply
+    monkeypatch.setattr(A, "REOPEN_SECS", 0.3)
+
+    class Silent(FakeDevice):  # 第一次打开什么都收不到（重启前的那个口），第二次才正常
+        opens = 0
+
+        def read(self, port, seconds, on_line, stop=None):
+            Silent.opens += 1
+            if Silent.opens == 1:
+                end = _t.time() + seconds
+                while _t.time() < end and not (stop and stop()):
+                    _t.sleep(0.02)
+                return []
+            return super().read(port, seconds, on_line, stop)
+
+    def builder(work, target, board, idf, progress):
+        fake_build_output(work)
+        return {"ok": True, "seconds": 0.1, "error": None}
+    dev = Silent()
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=lambda p, k: FakeLLM(reply()),
+                              idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
+                              cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.usbmodem1101"],
+                              bg_builder=builder, device=dev, wait_step=0.01))
+    c.post("/api/settings", json={"llm_provider": "cc"})
+    r = c.post("/api/source/inspect", json={"path": str(door_source(tmp_path / "door"))}).json()
+    c.post("/api/bgbuild/start", json={"work": r["work"], "chip": "ESP32-S3"})
+    start_insert(c, r)
+    fwait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "done" and Silent.opens == 2
