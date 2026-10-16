@@ -115,3 +115,20 @@ def test_unchanged_source_keeps_its_build_folder(tmp_path):
 
     assert again["status"] == "unchanged"
     assert (Path(again["work"]) / "build" / "app.bin").exists()
+
+
+def test_retest_uses_the_board_chosen_last_time(tmp_path):
+    """决策 130：同一个项目再测时，不再让人重新选板子：用上次选的，页面写明"按上次选的"，想换还能换。"""
+    from tests.test_inspect import write, CMAKE
+    src = write(tmp_path / "multi", {
+        "CMakeLists.txt": CMAKE.replace("door-ctrl", "voice"),
+        "main/boards/acme/s3-box/config.json": '{"target": "esp32s3"}',
+        "main/boards/acme/c3-mini/config.json": '{"target": "esp32c3"}',
+    })
+    assert prepare(src, data_dir=tmp_path / "data")["status"] == "needs_board"  # 第一次：要选
+    prepare(src, data_dir=tmp_path / "data", board="acme/c3-mini")
+    again = prepare(src, data_dir=tmp_path / "data")  # 再测：没传板子
+    assert again["status"] != "needs_board"
+    assert again["info"]["board"] == "acme/c3-mini" and again["info"]["chip"] == "ESP32-C3"
+    assert again["info"]["board_from"] == "last"
+    assert again["info"]["boards"]  # 列表还在，想换能换

@@ -324,3 +324,7 @@ def test_restore_waits_when_port_busy_and_keeps_message_short(tmp_path):
     run_to_try(c)
     j = c.post("/api/fsw/restore", json={"project_dir": r["project_dir"]}).json()
     assert j["flashed"] and Busy.busy == 2  # 忙了两次，第三次烧上了，不用人再点
+
+
+def test_board_from_last_time_is_filled_in_and_said():
+    assert "if(REAL.board&&!hBoardOpen)hBoardQ=REAL.board" in JS and "按上次选的" in grab("boardRow")
