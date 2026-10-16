@@ -198,3 +198,18 @@ table.num td.r,table.num th.r{white-space:nowrap}
 .optdev{border-left:3px solid var(--line);padding:4px 0 4px 10px;margin-top:8px}.optdev.on{border-left-color:var(--ok)}
 
 #verseg{margin-left:auto}#v-exp{padding:6px 14px;font-size:14px}
+
+/* 选板子：输入框下面直接列出匹配的板子（决策 104） */
+.bpick{position:relative;max-width:34em}
+.bpick input{width:100%;box-sizing:border-box}
+.bdrop{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;max-height:16em;overflow:auto;background:var(--card,var(--bg));border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.12)}
+.bopt{padding:8px 10px;cursor:pointer;font-size:14.5px}
+.bopt.hi,.bopt:hover{background:var(--bg2,rgba(0,0,0,.05))}
+.bopt[aria-selected="true"]{font-weight:600}
+
+/* 正在做的那一步：序号外面转圈（决策 105） */
+.istep.cur>b{position:relative}
+.istep.cur>b::after{content:"";position:absolute;inset:-4px;border:2px solid transparent;border-top-color:var(--speak);border-right-color:var(--speak);border-radius:50%;animation:sp 1s linear infinite}
+@media (prefers-reduced-motion:reduce){.istep.cur>b::after{animation-duration:3s}}
+
+.logtail{max-height:18em;overflow:auto;background:var(--soft);border-radius:6px;padding:8px 10px;font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;margin:0 0 8px}

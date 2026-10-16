@@ -108,7 +108,7 @@ def test_try_fails_twice_offers_restore(flash):
     start_insert(c, r)
     fwait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
-    assert j["err"]["kind"] == "try" and "波特率" in j["err"]["message"] and not j["err"].get("offer_restore")
+    assert j["err"]["kind"] == "try" and "波特率" in j["err"]["why"] and not j["err"].get("offer_restore")  # 原因放在详情里（决策 108）
     c.post("/api/fsw/run", json={"from": "try"})
     j = fwait(c, lambda j: j["status"] in ("failed", "done"))
     assert j["err"]["offer_restore"]

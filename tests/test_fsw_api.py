@@ -102,12 +102,8 @@ def test_insert_shows_changes_and_waits_for_confirm(setup):
 
 
 def run_to_try(c, start="build"):
-    """编译、烧录完先停下，等你点"准备好了"（先喊唤醒词，再说一句）才开始试一次。"""
+    """编译、烧录完直接开始试一次（决策 107：不再停下等人点"准备好了"，码表自己盯着设备开机）。"""
     c.post("/api/fsw/run", json={"from": start})
-    j = wait(c, lambda j: j["status"] in ("ready_try", "failed"))
-    if j["status"] == "failed":
-        return j
-    c.post("/api/fsw/run", json={"from": "try"})
     return wait(c, lambda j: j["status"] in ("done", "failed"))
 
 
@@ -129,9 +125,8 @@ def test_no_device_waits_then_continues(setup):
     j = wait(c, lambda j: j["status"] == "waiting_device")
     assert j["phase"] == "flash"
     ports.append("/dev/cu.usbmodem1101")
-    assert wait(c, lambda j: j["status"] == "ready_try")["port"] == "/dev/cu.usbmodem1101"
-    c.post("/api/fsw/run", json={"from": "try"})
-    assert wait(c, lambda j: j["status"] == "done")["got"] == [1, 2, 5]
+    j = wait(c, lambda j: j["status"] == "done")
+    assert j["port"] == "/dev/cu.usbmodem1101" and j["got"] == [1, 2, 5]
 
 
 def test_build_error_points_to_the_step_and_drop_rebuilds(setup):
@@ -152,8 +147,6 @@ def test_build_error_points_to_the_step_and_drop_rebuilds(setup):
     assert j["err"]["step_name"] == "卡号读完" and "rfid_task.c" in j["err"]["where"]
     assert j["err"]["error"].startswith("main/rfid_task.c:137")  # 报错里的路径只留项目里的那段
     c.post("/api/fsw/drop", json={"step": "P2"})
-    j = wait(c, lambda j: j["status"] in ("failed", "ready_try"))
-    c.post("/api/fsw/run", json={"from": "try"})
     j = wait(c, lambda j: j["status"] in ("failed", "done"))
     assert j["status"] == "done" and "P2" not in j["view"]["steps"]
 
@@ -174,22 +167,21 @@ def test_try_got_nothing_then_retry(setup):
     wait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
     assert j["err"]["kind"] == "try"
-    assert dev.read_secs >= 40  # 等得够久：设备烧完会重启、连网，人还要喊唤醒词再说一句
-    assert "再试一次" in j["err"]["message"] and "唤醒" in j["err"]["message"]  # 超时了说清楚怎么重来
+    assert dev.read_secs >= 120  # 等得够久：设备烧完会重启、连网，人还要做一次要测的事
+    assert "再试一次" in j["err"]["message"] and "做一次要测的事" in j["err"]["message"]  # 一句话说清怎么重来
+    assert len(j["err"]["message"]) < 60 and j["err"]["why"]  # 原因放进"详情"，不堆在提示里
     c.post("/api/fsw/run", json={"from": "try"})
     assert wait(c, lambda j: j["status"] in ("failed", "done"))["status"] == "done"
 
 
-def test_flash_then_waits_for_ready_before_trying(setup):
-    """烧完不马上计时：先停在"准备好了"，人准备好再开始读。"""
+def test_flash_then_tries_right_away_and_watches_the_device_boot(setup):
+    """决策 107：烧完不再停下等人判断"准备好了"：直接开始听，设备一有输出就记下（页面从"设备正在重启"换成"现在做一次"）。"""
     c, r, dev, *_ = setup()
     start_insert(c, r)
     wait(c, lambda j: j["status"] == "inserted")
     c.post("/api/fsw/run", json={"from": "build"})
-    j = wait(c, lambda j: j["status"] in ("ready_try", "failed", "done"))
-    assert j["status"] == "ready_try" and j["phase"] == "try"
-    time.sleep(0.1)
-    assert c.get("/api/fsw").json()["status"] == "ready_try"  # 一直等着，不自己开始
+    j = wait(c, lambda j: j["status"] in ("failed", "done"))
+    assert j["status"] == "done" and j["phase"] == "try" and j["dev_seen"] and j["try_started"]
 
 
 def test_restore_puts_source_back_byte_for_byte_and_flashes_original(setup):
