@@ -73,6 +73,7 @@ class BgBuildBody(BaseModel):
     chip: str | None = None
     board: str | None = None
     idf_min: str | None = None
+    project_dir: str | None = None
 
 
 def _default_builder(work, target, board, idf_path, on_progress):
@@ -450,9 +451,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def bgbuild_start(body: BgBuildBody):
         with bg["lock"]:
             job = bg["job"]
-            if job and job["work"] == body.work and job["state"] in ("running", "done"):
+            if job and job["work"] == body.work and job["state"] in ("running", "done") and job.get("board") == body.board:
                 return job  # 同一份原始代码已经在编或编好了，不重复编
             idf = pick_idf(idf_finder(), body.idf_min)
+            if idf and body.project_dir and _orig_ok(body.project_dir, body.board):
+                # 源码和板子都没变、上次编好的原版存着：直接用，不用再等后台编一遍（决策 134）
+                bg["job"] = {"work": body.work, "state": "done", "pct": 100, "message": "源码没变，用上次编好的原版",
+                             "started": time.time(), "seconds": 0, "error": None, "idf": idf["version"], "idf_path": idf["path"],
+                             "board": body.board, "target": re.sub(r"[^a-z0-9]", "", (body.chip or "esp32").lower()),
+                             "reused": True}
+                return bg["job"]
             if not idf:
                 bg["job"] = {"work": body.work, "state": "waiting_tool", "pct": 0,
                              "message": "等编译工具装好就开始编；不挡找关键步骤，烧录前装好就行。"}
@@ -507,6 +515,25 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         """设备上现在是计时版还是原版（存在项目文件夹里，码表重开也认得）。"""
         (Path(project_dir) / "on-device.json").write_text(json.dumps({"fsw": fsw_on, "at": time.strftime("%Y-%m-%d %H:%M")}),
                                                           encoding="utf-8")
+
+    def _orig_ok(project_dir, board):
+        """存着的原版固件是不是现在这份源码、这块板子编的（决策 134）：改过源码再测，还原时不能烧回改之前的旧版本。"""
+        try:
+            fp = json.loads((Path(project_dir) / "project.json").read_text(encoding="utf-8")).get("fingerprint")
+            rec = json.loads((Path(project_dir) / "firmware" / "orig" / "fsw-orig.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return bool(fp) and rec.get("fingerprint") == fp and rec.get("board") == board
+
+    def _save_orig(a, orig_fw):
+        """后台编好的原版存一份，记下是哪份源码、哪块板子编的。"""
+        if not EspIdf.save_firmware(a.work, orig_fw):
+            return
+        try:
+            fp = json.loads((Path(a.project_dir) / "project.json").read_text(encoding="utf-8")).get("fingerprint")
+        except (OSError, ValueError):
+            fp = None
+        (orig_fw / "fsw-orig.json").write_text(json.dumps({"fingerprint": fp, "board": a.board}), encoding="utf-8")
 
     def _wait_bg(job, work):
         """插之前等后台把原始代码编完：原版编好的固件要先存下来，还原时烧它。"""
@@ -639,10 +666,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if not plan["ok"]:
                 return _fail(job, "insert", plan["message"])
             if not bg["job"] or bg["job"].get("work") != body.work:  # 码表重开过：原版再编一次（只是检查，很快）
-                bgbuild_start(BgBuildBody(work=body.work, chip=body.chip, board=body.board))
+                bgbuild_start(BgBuildBody(work=body.work, chip=body.chip, board=body.board, project_dir=body.project_dir))
             b = _wait_bg(job, body.work)
-            if b and b["state"] == "done" and not orig_fw.exists():
-                EspIdf.save_firmware(body.work, orig_fw)
+            if b and b["state"] == "done" and not b.get("reused") and not _orig_ok(body.project_dir, body.board):
+                _save_orig(body, orig_fw)
             rec = ins.apply(body.work, plan, backup)
             if not rec["ok"]:
                 return _fail(job, "insert", rec["message"])
@@ -670,8 +697,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "orig", b.get("message") or "原版编译没通过", error=b.get("error"))
             if not b or b["state"] != "done":
                 return _fail(job, "orig", "原始代码还没编好，没法编计时版。回首页重新选一次源码。")
-            if not orig_fw.exists():
-                EspIdf.save_firmware(a.work, orig_fw)
+            if not b.get("reused") and not _orig_ok(a.project_dir, a.board):
+                _save_orig(a, orig_fw)
             t0 = time.time()
             try:
                 r = bg_builder(a.work, b["target"], b.get("board"), b["idf_path"],
@@ -1575,6 +1602,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(400, "先选一个固件源码位置")
         unpack = ascii_work_root(live["data"]) / "_unpack" / hashlib.sha1(str(path).encode()).hexdigest()[:10]
         r = prepare(path, data_dir=live["data"], board=body.board, unpack_to=unpack)
+        if r.get("status") == "changed" and bg["job"] and bg["job"].get("work") == r.get("work"):
+            bg["job"] = None  # 源码改过：上次在后台编的原版不算数，要按改过的源码再编（决策 134）
         if r.get("project_dir"):
             if not (T().path and T().path.parent == Path(r["project_dir"]) and "identify" not in T().data["stages"]):
                 tline["cur"] = tln.Timeline(Path(r["project_dir"]) / "timeline.json")  # 新的一次测量
