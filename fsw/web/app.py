@@ -229,6 +229,7 @@ class RestoreBody(BaseModel):
 
 
 TRY_SECONDS = 180  # 试一次最多等多久（决策 107）：烧完就开始听，设备重启、连网、人做一次要测的事都在这里面；不用人判断"准备好了"
+REOPEN_SECS = 8   # 试一次：打开调试口后这么久没有任何输出就重开（设备烧完重启，调试口会断开再回来）
 TRY_SETTLE = 4     # 收到一些计时点后，几秒没有新的就算试通
 
 
@@ -751,8 +752,19 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if not ports:
                     time.sleep(wait_step / 4)
                     continue
+                opened, reopen = time.time(), {"hit": False}
+
+                def stop_or_reopen():  # 决策 127：打开调试口 8 秒还一行输出都没有，多半打开的是设备重启前那个（它断开又回来了）：关掉重开
+                    if not job.get("dev_seen") and time.time() - opened > REOPEN_SECS:
+                        reopen["hit"] = True
+                    return enough() or reopen["hit"]
                 try:
-                    lines = device.read(ports[0], max(1, t_end - time.time()), on_line, stop=enough)
+                    got_lines = device.read(ports[0], max(1, t_end - time.time()), on_line, stop=stop_or_reopen)
+                    if not reopen["hit"] or time.time() >= t_end:
+                        lines = got_lines
+                    else:
+                        job["log"] = "设备还没有输出，重新连一下调试口"
+                        time.sleep(wait_step)
                 except Exception as e:
                     err = e
                     time.sleep(wait_step)
