@@ -877,10 +877,12 @@ function sceneSwitch(k){if(k===scene)return;colStop();col={st:0,att:0,got:[],pha
 // ===== 多轮实测 =====（通用：动作、提示语、阶段名、问题怎么判，都来自场景；数据和报告页同一份）
 let beep=true,actx=null;
 // 声音要在点按钮的那一下打开（Safari 等浏览器不认点击之后才开的声音），顺手放一段无声的，把声音通道打通（决策 115）
-function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();const b=actx.createBuffer(1,1,22050),s=actx.createBufferSource();s.buffer=b;s.connect(actx.destination);s.start(0)}catch(e){}}
+// Safari 只认点击那一下放出的"真声音"才给网页开声音（放一段无声的不算）：所以点开始时直接短"叮"一声（决策 128），也让人知道提示音开着
+function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();
+ const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=880;g.gain.value=.15;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+.06);beepLog('点开始时')}catch(e){}}
 let dings=0,beepMsg='';
 function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();dings++;if(dings<=3||dings%10===0)beepLog('响');const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.25;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
-function beepBtn(){return `<button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>${beep?'<button class="pill" data-beeptest="1">试听</button>':''}`}
+function beepBtn(){return `<span style="display:inline-flex;gap:10px;align-items:center"><button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>${beep?'<button class="pill" data-beeptest="1">试听</button>':''}</span>`}
 function beepLog(what){try{fetch('/api/client-log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({what,state:actx?actx.state:'none',dings,ua:navigator.userAgent,hidden:document.hidden})})}catch(e){}}
 function beepNote(){return CX().beepNote}
 function needMore(){const g=okRounds(),C=CX(),L=DX().lines.length-1;if(g.length<10)return false;const all=g.map(x=>x.e[L]),half=Math.floor(g.length/2),run=all.slice(0,half);const stable=Math.abs(med(run)-med(all))<.05;const few=C.probs.some(p=>{const n=g.filter(x=>x.probs.some(q=>q.k===p.k)).length;return n>0&&n<=3})&&g.length<30;return !stable||few}

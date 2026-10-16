@@ -277,3 +277,9 @@ def test_try_reopens_the_port_when_it_hears_nothing(tmp_path, monkeypatch):
     fwait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
     assert j["status"] == "done" and Silent.opens == 2
+
+
+def test_unlock_plays_a_real_sound_for_safari():
+    """决策 128：Safari 只认点击那一下放出的真声音；放一段无声的不算，声音一直没打开（用户记录：多轮实测时一直是 suspended）。"""
+    u = grab("unlockAudio")
+    assert "createOscillator" in u and "createBuffer(1,1" not in u
