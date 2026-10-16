@@ -239,3 +239,26 @@ def test_needed_value_not_recorded_is_said_not_failed(door):
 def test_expect_defaults_to_the_standard(door):
     plan = ins.parse_plan(reply(plan_with_value("(int)g_reader.mode")), door, STEPS, needs=NEED)
     assert plan["values"]["P2"]["expect"] == 1
+
+
+# ---------- 决策 118："这一轮走到某一步之后才记"：上一轮剩下的不会被记成这一轮的 ----------
+@pytest.mark.skipif(not shutil.which("cc"), reason="这台电脑没有 C 编译器")
+def test_mark_once_after_ignores_leftovers_before_the_step(tmp_path):
+    (tmp_path / "fw_stopwatch.h").write_text(ins.HEADER, encoding="utf-8")
+    (tmp_path / "esp_timer.h").write_text("#pragma once\n#include <stdint.h>\nint64_t esp_timer_get_time(void);\n", encoding="utf-8")
+    (tmp_path / "m.c").write_text('#include "fw_stopwatch.h"\nint64_t esp_timer_get_time(void){static int64_t t=1000;return t+=10;}\n'
+                                  'int main(){FSW_ROUND_RESET();'
+                                  'FSW_MARK_ONCE_AFTER(7, 5, 5);'   # 上一轮剩下的一包声音：这一轮还没走到 P5，不记
+                                  'FSW_MARK_ONCE(5, 0);'            # 收到开口指令
+                                  'FSW_MARK_ONCE_AFTER(7, 5, 6);'   # 这一轮真正的第一包声音：记
+                                  'FSW_MARK_ONCE_AFTER(7, 5, 6);'   # 只记第一次
+                                  'FSW_ROUND_RESET();FSW_MARK_ONCE_AFTER(7, 5, 5);return 0;}\n', encoding="utf-8")
+    subprocess.run(["cc", "m.c", "-o", "m", "-I."], cwd=tmp_path, check=True)
+    out = subprocess.run(["./m"], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.splitlines()
+    assert [l.split(",")[1] for l in out] == ["RESET", "P5", "P7", "RESET"]
+    assert out[2].endswith(",6")
+
+
+def test_prompt_tells_ai_to_use_after_for_points_that_leftovers_can_trigger():
+    assert "FSW_MARK_ONCE_AFTER(编号, 前一步编号, 附加值)" in ins.PROMPT
+    assert ins._marks(["        FSW_MARK_ONCE_AFTER(7, 5, static_cast<int>(GetDeviceState()));"]) == [(7, "static_cast<int>(GetDeviceState())")]

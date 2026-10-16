@@ -526,7 +526,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         try:
             last = json.loads((proj / "fsw-plan.json").read_text(encoding="utf-8"))
             cached = last["reply"] if (fp and cfg().reuse_last and last.get("fingerprint") == fp
-                                       and last.get("steps") == body.steps) else None
+                                       and last.get("steps") == body.steps and last.get("ver") == ins.PLAN_VER) else None
         except (OSError, ValueError, KeyError):
             cached = None
         return fp, cached
@@ -633,7 +633,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             plan = ins.parse_plan(text, body.work, steps, needs)
             job["seconds"]["insert"] = round(time.time() - t0, 1)
             if plan["ok"] and fp:
-                (proj / "fsw-plan.json").write_text(json.dumps({"fingerprint": fp, "steps": steps, "reply": text},
+                (proj / "fsw-plan.json").write_text(json.dumps({"fingerprint": fp, "steps": steps, "reply": text, "ver": ins.PLAN_VER},
                                                                ensure_ascii=False), encoding="utf-8")
             if not plan["ok"]:
                 return _fail(job, "insert", plan["message"])
