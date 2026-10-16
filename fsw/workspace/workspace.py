@@ -78,10 +78,19 @@ def prepare(src, data_dir, board=None, unpack_to=None):
         return info
     if info["needs_board"]:
         chosen = next((b for b in info["boards"] if b["id"] == board), None)
+        if not chosen and board is None:  # 再测：用上次选的板子，不再让人重选（决策 130）
+            last = find_project(Path(data_dir).expanduser(), project_key(info))
+            try:
+                last_board = json.loads((last / "project.json").read_text(encoding="utf-8")).get("board") if last else None
+            except (OSError, ValueError):
+                last_board = None
+            chosen = next((b for b in info["boards"] if b["id"] == last_board), None)
+            if chosen:
+                info["board_from"] = "last"
         if not chosen:
             return {"ok": True, "status": "needs_board", "info": info}
         info.update(chip=chosen["chip"], board=chosen["id"], needs_board=False,
-                    chip_why="你选的板子的配置")
+                    chip_why="上次选的板子的配置" if info.get("board_from") == "last" else "你选的板子的配置")
     root = Path(info["root"])
     key = project_key(info)
     data_dir = Path(data_dir).expanduser()
