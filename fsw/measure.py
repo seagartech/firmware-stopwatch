@@ -91,6 +91,9 @@ def compute(cur, spec):
     return {"segs": segs, "ends": [ends[l["name"]] for l in spec.lines], "probs": probs}
 
 
+STALE_US = 500_000  # 比起点早半秒以上，算这一轮开始之前的
+
+
 class Collector:
     """一行行喂进来，一轮收齐就交出这一轮。"""
 
@@ -114,10 +117,11 @@ class Collector:
         out = []
         if name == "RESET":
             # 没有起点的一轮不算一轮（比如对话类喊唤醒词那一下：设备进聆听就清零，但没有"你说完"），不报没收全
-            if self.started and self.cur and not self.done and self.spec.start in self.cur:
+            if self.first and self.cur and not self.done:
+                # 开始读（或接着测重新打开调试口）时这一轮已经开始了：缺了的点可能是断开那一下丢的，算"开头没收到"，不算没收全（决策 112）
+                out.append({"half": True})
+            elif self.started and self.cur and not self.done and self.spec.start in self.cur:
                 out.append(self._bad())
-            elif self.first and self.cur and not self.done:
-                out.append({"half": True})  # 开始读时这一轮已经过了起点：不算，但要说一声，别让人以为收到了
             self.started, self.cur, self.done, self.first = True, {}, False, False
             self.reset_us = us
             return out
@@ -126,7 +130,7 @@ class Collector:
         self.cur.setdefault(name, (us, val))
         if all(x in self.cur for x in self.spec.need):
             self.done = True
-            out.append(self._ok())
+            out.append(self._ok_or_stale())
         return out
 
     def progress(self):
@@ -137,6 +141,17 @@ class Collector:
         """停下时：正在收、还没收齐的这一轮不算（也不算"没收全"）。接着收时，从那一刻起当作新一轮的开头。"""
         self._open()
         return []
+
+    def _ok_or_stale(self):
+        """比起点还早的点不是这一轮的（决策 111）：比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它，
+        这一轮真正的那一次没记到。这样的轮不能算（也不能拿它判问题），写清楚是哪个点，自动补一轮。"""
+        t0 = self.cur[self.spec.start][0]
+        stale = [x for x in self.spec.need if x != self.spec.start and self.cur[x][0] < t0 - STALE_US]
+        if not stale:
+            return self._ok()
+        self.att += 1
+        return {"ok": False, "att": self.att, "stale": True,
+                "missing": [self.spec.names.get(x, x) + "（记到的是这一轮开始之前的）" for x in stale]}
 
     def _ok(self):
         self.att += 1

@@ -277,7 +277,7 @@ let REAL=null,hBoardQ='',hBoardNeed=false;
 const IDF=()=>REAL?(REAL.idf_min?REAL.idf_min+' 或更新':'（项目没写要哪个版本）'):FF[scene].idf+' 或更新';
 const CHIP=()=>REAL?(REAL.chip?`芯片 ${REAL.chip}${REAL.board?`，板子 ${REAL.board}`:''}`:'还没选板子'):FF[scene].chip;
 async function api(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json()}
-async function realPick(body,label,board){hErr='';envBack='home';hBoardNeed=false;hSrc=label||body.path||'';hReading=true;hStage=1;if(!board)hSay='';render();
+async function realPick(body,label,board){const quiet=!!board&&!!REAL;hErr='';envBack='home';hBoardNeed=false;hSrc=label||body.path||'';if(!quiet){hReading=true;hStage=1;if(!board)hSay='';render()}  // 只是选板子：页面不跳回"正在读源码"，不闪（决策 113）
  let r;try{r=await api('/api/source/inspect',{...body,board:board||null})}catch(e){r={ok:false,message:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
  hReading=false;
  if(!r.ok){REAL=null;hSrc='';hStage=0;hErr=r.kind==='multiple'?`<b>${r.message}</b><div class="acts" style="margin:8px 0 0">${r.projects.map(p=>`<button class="btn" data-pickroot="${p.root.replace(/"/g,'&quot;')}">${p.name}<span class="note">　${p.root}</span></button>`).join('')}</div>`:r.message;render();return}
@@ -871,15 +871,19 @@ function sceneSwitch(k){if(k===scene)return;colStop();col={st:0,att:0,got:[],pha
 
 // ===== 多轮实测 =====（通用：动作、提示语、阶段名、问题怎么判，都来自场景；数据和报告页同一份）
 let beep=true,actx=null;
+// 声音要在点按钮的那一下打开（Safari 等浏览器不认点击之后才开的声音），顺手放一段无声的，把声音通道打通（决策 115）
+function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();const b=actx.createBuffer(1,1,22050),s=actx.createBufferSource();s.buffer=b;s.connect(actx.destination);s.start(0)}catch(e){}}
 function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.06;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
 function beepBtn(){return `<button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>`}
 function beepNote(){return CX().beepNote}
 function needMore(){const g=okRounds(),C=CX(),L=DX().lines.length-1;if(g.length<10)return false;const all=g.map(x=>x.e[L]),half=Math.floor(g.length/2),run=all.slice(0,half);const stable=Math.abs(med(run)-med(all))<.05;const few=C.probs.some(p=>{const n=g.filter(x=>x.probs.some(q=>q.k===p.k)).length;return n>0&&n<=3})&&g.length<30;return !stable||few}
+let moreWhy='';
 function enough(){const g=okRounds(),C=CX(),D=DX(),L=D.lines.length-1,ln=D.lines[L];if(g.length<10)return '';
  const all=g.map(x=>x.e[L]),fin=med(all),run=all.map((_,i)=>med(all.slice(0,i+1))),half=Math.floor(g.length/2);
- const stable=Math.abs(run[half-1]-fin)<.05,cap=g.length>=30;
+ const cap=g.length>=30,stable=cap||Math.abs(run[half-1]-fin)<.05;  // 到 30 轮就不再催：再测下去一般用时变化也不大
  const rare=C.probs.map(p=>({p,ns:g.filter(x=>x.probs.some(q=>q.k===p.k)).map(x=>x.n)})).filter(o=>o.ns.length>0);
  const few=rare.filter(o=>o.ns.length<=3&&!cap),more=!stable||few.length>0;
+ moreWhy=more?(!stable?`一般用时还在变：测到一半时 ${f(run[half-1])} 秒，现在 ${f(fin)} 秒，差 ${f(Math.abs(run[half-1]-fin))} 秒（差 0.05 秒以内算稳）`:`「${few[0].p.t}」只出现了 ${few[0].ns.length} 次，还分不清是偶尔还是常态`)+'。最多建议测到 30 轮。':'';
  const W=940,H=150,l=46,r=10,t=14,b=24,lo=Math.min(...run,fin-.1),hi=Math.max(...run,fin+.1);
  const X=i=>l+(W-l-r)*i/Math.max(1,g.length-1),Y=v=>t+(H-t-b)*(1-(v-lo)/(hi-lo));
  const band=`<rect x="${l}" y="${Y(fin+.05)}" width="${W-l-r}" height="${Y(fin-.05)-Y(fin+.05)}" fill="var(--ok)" opacity=".15"/>`;
@@ -896,7 +900,7 @@ function enough(){const g=okRounds(),C=CX(),D=DX(),L=D.lines.length-1,ln=D.lines
  <h2 style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">测的够不够<span class="ev ${more?'warn':'ok'}" style="font-size:15px">${more?'建议再测 10 轮':'✓ 够了，可以看结果'}</span></h2>
  <div class="eblk"><div class="ehead"><b>① 一般用时稳了吗</b>${v(stable,'稳了','还在变')}</div><p class="note" style="margin:2px 0 0">线是"测到第几轮时，${ln.end}的一般用时"。后半段落在绿色带里就是稳了。</p>${chart1}</div>
  ${rare.length?`<div class="eblk"><div class="ehead"><b>② 偶尔出的问题看清了吗</b>${v(!few.length,'看清了','次数太少')}</div><p class="note" style="margin:2px 0 6px">一格一轮，亮的是出了这个问题的那轮。只出现 1～3 次，还分不清是偶尔还是常态。</p>${rare.map(strip).join('')}</div>`:''}
- <p class="note" style="margin:6px 0 0">${more?'不再测也能出报告，报告里会注明"次数少，只供参考"。':''}按收到的数算的，不用大模型。</p></section>`}
+ <p class="note" style="margin:6px 0 0">${more?`为什么建议再测：${moreWhy}<br>不再测也能出报告，报告里会注明"次数少，只供参考"。`:''}按收到的数算的，不用大模型。</p></section>`}
 const MIN_ROUNDS=3;  // 至少几轮能出报告（3～9 轮只适合跑流程，报告注明）
 let colVar='b',colN=20,col={st:0,att:0,got:[],phase:0},colT=null;
 const CC=()=>COLLECT[scene];
@@ -1163,7 +1167,7 @@ function popHTML(){const F=FF[scene],C=CC();
   if(EXP.state==='fail')return box('导出报告',`<p style="color:var(--bad)">✕ 没导出成功：${htmlEsc(EXP.err)}</p>`,`<button class="btn pri" data-expgo="1">再试一次</button><button class="btn" data-pop="close">取消</button>`);
   if(EXP.state==='wait')return box('导出报告',`<p><span class="spin"></span> 等"为什么、怎么改"写完，写完马上自动导出。</p>`,`<button class="btn" data-expgo="1">不等了，现在导出</button><button class="btn" data-pop="close">取消</button>`);
   const advFail=ADV&&ADV.status==='failed'&&repKey().startsWith('real');
-  return box('导出报告',`${busy?'<div class="why" style="border-left-color:var(--warn);margin:0 0 10px">"为什么、怎么改"还在写（AI 一般 1～2 分钟）。现在导出的话，报告里没有建议。</div>':advFail?'<div class="why" style="border-left-color:var(--bad);margin:0 0 10px">"为什么、怎么改"没写成，现在导出的报告里没有建议。可以先关掉这个框，在报告里点「重试」，写好再导出。</div>':''}<p class="note" style="margin:0 0 8px">存成一个网页文件：断网也能打开，可以直接发给别人。</p><dl class="kv" style="grid-template-columns:4em 1fr"><dt>存到</dt><dd><div class="inrow"><input type="text" id="exp-dir" value="${htmlEsc(tilde(EXP.dir))}" readonly><button class="btn" data-expdir="1">换个文件夹</button></div><p class="note" style="margin:4px 0 0">默认放在被测源码的同级目录。</p></dd><dt>文件名</dt><dd><span class="code">${htmlEsc((expWhat()||'报告').replace(/[\\/:*?"<>|\s]+/g,'-'))}_测完时间.html</span></dd></dl>`,busy?`<button class="btn pri" data-expwait="1">等写完自动导出</button><button class="btn" data-expgo="1">现在就导出</button><button class="btn" data-pop="close">取消</button>`:`<button class="btn pri" data-expgo="1">导出</button><button class="btn" data-pop="close">取消</button>`)}
+  return box('导出报告',`${busy?'<div class="why" style="border-left-color:var(--warn);margin:0 0 10px">"为什么、怎么改"还在写（AI 一般 1～2 分钟）。<br>现在就导出：数字、图和要你拍板都是码表按数据算的，和写完再导出一模一样，可信；只是少了 AI 写的"为什么、怎么改"（每个问题的原因、方案、待办）。<br>等写完自动导出：多了这部分，别的一样。</div>':advFail?'<div class="why" style="border-left-color:var(--bad);margin:0 0 10px">"为什么、怎么改"没写成，现在导出的报告里没有建议。可以先关掉这个框，在报告里点「重试」，写好再导出。</div>':''}<p class="note" style="margin:0 0 8px">存成一个网页文件：断网也能打开，可以直接发给别人。</p><dl class="kv" style="grid-template-columns:4em 1fr"><dt>存到</dt><dd><div class="inrow"><input type="text" id="exp-dir" value="${htmlEsc(tilde(EXP.dir))}" readonly><button class="btn" data-expdir="1">换个文件夹</button></div><p class="note" style="margin:4px 0 0">默认放在被测源码的同级目录。</p></dd><dt>文件名</dt><dd><span class="code">${htmlEsc((expWhat()||'报告').replace(/[\\/:*?"<>|\s]+/g,'-'))}_测完时间.html</span></dd></dl>`,busy?`<button class="btn pri" data-expwait="1">等写完自动导出</button><button class="btn" data-expgo="1">现在就导出</button><button class="btn" data-pop="close">取消</button>`:`<button class="btn pri" data-expgo="1">导出</button><button class="btn" data-pop="close">取消</button>`)}
  if(pop==='readlog')return box('读取过程',`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(usedLLM())}</span></div>${readBox()}`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='steps'){const n=live().length,mid=STEPS.filter(x=>x.sure!=='高').length;
   return box('找完了',`<p>找到 ${STEPS.length} 个关键步骤。接下来按顺序做三件事：</p><ol class="notes" style="font-size:15px;color:var(--fg)">${F.sideAsk?`<li>回答一个问题："${F.sideAsk.q}"要不要一起测</li>`:''}<li>看一眼 ${mid} 个需核对的步骤，对不对</li><li>点「确认，去插计时点」</li></ol>`,
@@ -1401,7 +1405,7 @@ document.addEventListener('click',e=>{
   const cv=e.target.closest('[data-colvar]');if(cv){colVar=cv.dataset.colvar;render();return}
   if(e.target.closest('[data-beep]')){beep=!beep;render();return}
   const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
-  const ca=e.target.closest('[data-col]');if(ca){const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
+  const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
   if(e.target.closest('[data-resume]')){page='home';hStage=2;render();window.scrollTo(0,0);return}
   const tk=e.target.closest('[data-test]');if(tk){const i=document.getElementById('set-key'),v=i?i.value.trim():'';keyErr='';if(v&&!v.startsWith('•'))keyDraft=v;tk.disabled=true;tk.textContent='正在测试……';
    api('/api/llm/test',{provider:setLLM,key:v&&!v.startsWith('•')?v:null}).then(r=>{keyTested=!!r.ok;keyErr=r.ok?'':r.message;render()}).catch(()=>{keyErr='码表后台没有回应，看看运行码表的窗口是不是关了。';render()});return}

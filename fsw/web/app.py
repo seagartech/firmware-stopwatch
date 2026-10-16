@@ -181,6 +181,23 @@ def _log(job, msg, pct=None, show=None):
     job.update(upd)
 
 
+def _overall(fw_dir):
+    """烧录工具按段写（引导程序、分区表、程序……），每段各自从 0 到 100%：合成一条只往前走的进度（决策 114）。"""
+    try:
+        n = max(1, len(json.loads((Path(fw_dir) / "flasher_args.json").read_text(encoding="utf-8")).get("flash_files") or {}))
+    except (OSError, ValueError):
+        n = 1
+    st = {"seg": 0, "last": 0, "out": 0}
+
+    def step(pct):
+        if pct < st["last"] - 5 and st["seg"] < n - 1:  # 新的一段开始了
+            st["seg"] += 1
+        st["last"] = pct
+        st["out"] = max(st["out"], min(100, int((st["seg"] * 100 + pct) / n)))
+        return st["out"]
+    return step
+
+
 def _garbled(line):
     """一行像不像乱码（波特率不对时设备输出就是这样）。"""
     if not line:
@@ -689,7 +706,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 T().wait("flash", time.time() - w0, "等设备插上")
             port = port_finder()[0]
             job.update(status="running", port=port, log=f"设备已连上 {port}")
-            r = device.flash(fsw_fw, port, lambda pct, msg: _log(job, msg, pct, f"正在写进设备：{pct}%"))
+            ov = _overall(fsw_fw)
+            r = device.flash(fsw_fw, port, lambda pct, msg: (lambda o: _log(job, msg, o, f"正在写进设备：{o}%"))(ov(pct)))
             job["seconds"]["flash"] = r.get("seconds")
             if not r.get("ok"):
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))

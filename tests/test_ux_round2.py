@@ -58,7 +58,7 @@ def test_tool_output_control_chars_are_removed():
 
 def test_flash_line_is_plain_words_and_full_log_works(tmp_path):
     from tests.test_fsw_api import setup, start_insert, wait  # noqa: F401
-    assert "正在写进设备：{pct}%" in open("fsw/web/app.py", encoding="utf-8").read()
+    assert "正在写进设备：{o}%" in open("fsw/web/app.py", encoding="utf-8").read()
     assert 'data-fulllog' in JS and "FSWJ.tail" in JS
     assert '<button class="pill">完整日志</button>' not in JS  # 不再有点了没反应的按钮
 
@@ -117,3 +117,38 @@ def test_export_buttons_keep_the_dialog_open_to_show_the_result():
     """对话框里的按钮默认会关掉对话框；导出、等写完导出要把框留着，结果在框里说（用户：导出没有成功或失败的提醒）。"""
     assert "if(e.target.closest('[data-expgo]')){pop='export';" in JS and "if(e.target.closest('[data-expwait]')){pop='export';" in JS
     assert "没写成，现在导出的报告里没有建议" in JS
+
+
+# ---- 第二次亲手操作（决策 113～116） ----
+def test_picking_a_board_does_not_flash_the_reading_screen():
+    r = JS[JS.index("async function realPick("):][:400]
+    assert "const quiet=!!board&&!!REAL" in r and "if(!quiet){" in r
+
+
+def test_flash_progress_is_one_bar_over_all_regions():
+    src = open("fsw/web/app.py", encoding="utf-8").read()
+    assert "def _overall(" in src  # 烧录工具一段一段写（引导程序、分区表、程序），每段各自 0～100%：合成一条
+
+
+def test_beep_is_unlocked_inside_the_click():
+    assert "function unlockAudio(" in JS and "unlockAudio();" in JS[JS.index("const ca=e.target.closest('[data-col]')"):][:300]
+
+
+@node
+def test_more_rounds_suggested_at_most_until_30_and_says_why():
+    e = grab("enough")
+    assert "stable=cap||" in e.replace(" ", "")  # 到 30 轮不再因为"还在变"催
+    assert "moreWhy" in JS
+
+
+def test_export_dialog_says_what_now_export_contains():
+    assert "数字、图和要你拍板都是码表按数据算的" in JS
+
+
+def test_overall_flash_progress_never_goes_back(tmp_path):
+    import json as _j
+    from fsw.web.app import _overall
+    (tmp_path / "flasher_args.json").write_text(_j.dumps({"flash_files": {"0x0": "b", "0x8000": "p", "0x10000": "a"}}))
+    ov = _overall(tmp_path)
+    seq = [ov(p) for p in (0, 50, 100, 0, 100, 0, 30, 65, 100)]  # 引导程序、分区表、程序三段
+    assert seq == sorted(seq) and seq[-1] == 100 and seq[2] < 50

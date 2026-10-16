@@ -93,3 +93,20 @@ def test_page_listens_to_the_push_and_keeps_polling_as_fallback():
     from tests.test_boss_short import JS
     assert "new EventSource('/api/collect/events')" in JS
     assert "fetch('/api/collect')" in JS  # 推送断了就退回定时查询
+
+
+# ---- 第二次亲手操作发现的（决策 111、112） ----
+def test_point_recorded_before_the_start_belongs_to_before_this_round():
+    """决策 111：比起点还早的点（比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它），不是这一轮的；
+    这一轮真正的那一次没记到，这轮不能算（不判吞字），写清楚原因，自动补一轮。"""
+    stale = ["FSW,RESET,1000000,0", "FSW,P7,1200000,5"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10) if i != 7]
+    out = feed(stale + ["FSW,RESET,9000000,0"])
+    assert len(out) == 1 and out[0]["ok"] is False and out[0].get("stale")
+    assert out[0]["missing"]  # 写出是哪个点
+
+
+def test_first_round_after_reconnect_missing_a_point_is_half_not_incomplete():
+    """决策 112：接着测时重新打开调试口，设备可能正说到一半，有的点在断开那一下丢了：算"开头没收到"，不算"没收全"。"""
+    part = [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10) if i != 7]  # 起点有，中间丢了一个
+    out = feed(part + ["FSW,RESET,9000000,0"])
+    assert out == [{"half": True}]
