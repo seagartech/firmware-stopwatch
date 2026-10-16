@@ -8,9 +8,10 @@ def test_try_box_does_not_show_raw_device_lines():
     assert "设备最新一行" not in t and "fullLogBtn()" in t
 
 
-def test_collecting_shows_only_the_stop_button():
-    """测的时候只放"停止实测"，不放一个点不了的"查看报告"和"还差：还在测"。"""
+def test_collecting_keeps_a_grey_report_button_with_clear_words():
+    """测的时候"查看报告"照旧灰着显示（按钮统一规则，决策 141），提示字改成"测完才能看"，不再是别扭的"还在测"。"""
     assert "blk('[data-col=\"stop\"]','还在测')" not in JS
+    assert JS.count("blk('[data-col=\"stop\"]','测完才能看')") == 2
 
 
 def test_restore_keeps_saying_restoring_while_the_page_redraws():
