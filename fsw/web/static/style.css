@@ -217,3 +217,10 @@ table.num td.r,table.num th.r{white-space:nowrap}
 /* 选好板子：框里是全称，前面一个对勾（决策 120） */
 .bpick.picked input{border-color:var(--ok);padding-left:2em;font-weight:600}
 .bpick.picked::before{content:"✓";position:absolute;left:.7em;top:50%;transform:translateY(-50%);color:var(--ok);font-weight:700;pointer-events:none}
+
+/* 提示的颜色跟着内容走（决策 129） */
+.toast{display:flex;gap:12px;align-items:flex-start;max-width:min(92vw,560px)}
+.toast.t-ok{border-color:var(--ok)}
+.toast.t-bad{border-color:var(--bad);border-width:2px;background:color-mix(in srgb,var(--bad) 7%,var(--panel))}
+.toast.t-warn{border-color:var(--warn)}
+.toast .tclose{border:0;background:none;font-size:20px;line-height:1;cursor:pointer;color:var(--muted);padding:0 2px}

@@ -1337,13 +1337,21 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         fsw["job"] = job
 
         def burn(port):
-            r = device.flash(orig_fw, port, lambda pct, msg: None)
+            for k in range(4):  # 刚测完调试口可能还没放开、或设备正在重连：等一下再烧，别马上报错（决策 129）
+                r = device.flash(orig_fw, port, lambda pct, msg: None)
+                if r.get("ok") or not re.search(r"busy|Could not open|doesn't exist|Errno 16", str(r.get("error") or ""), re.I):
+                    break
+                time.sleep(wait_step * 2)
+                port = (port_finder() or [port])[0]
             out.update(flashed=bool(r.get("ok")), port=port, error=r.get("error"), waiting=False)
             if r.get("ok"):
                 _on_device(a.project_dir, False)
                 out["say"] = "已还原：源码放回原样，原版已经烧回设备。"
             else:
-                out["say"] = f"源码已还原，但原版没烧上：{_plain(r.get('error'))}。插好线再点一次「还原成原版」。"
+                busy = re.search(r"busy|Errno 16", str(r.get("error") or ""), re.I)
+                out["say"] = ("源码已还原，原版没烧上：调试口被别的程序占着。关掉它（比如串口监视器）再点一次「还原成原版」。" if busy else
+                              "源码已还原，原版没烧上：看看线插好没有，再点一次「还原成原版」。")
+                out["detail"] = _plain(r.get("error"))  # 原话放在详情里，不堆在提示里
             job.update(status="restored", restore=dict(out))
             T().end("restore")
 
