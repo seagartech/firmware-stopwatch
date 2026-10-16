@@ -31,6 +31,7 @@ STD = {
     "advise": (60, 180),
     "restore": (60, 120),
 }
+PLAY_MAX = 30  # 设备放一句回答不会超过这么久；两轮之间多出来的算等人
 TOTAL = {"tool": {"first": (480, 900), "again": (180, 360)}, "human": (720, None)}
 
 
@@ -76,8 +77,10 @@ def split_rounds(rounds):
     ok = [r for r in rounds if r.get("ok") and r.get("t")]
     speak = sum(r["t"][1] - r["t"][0] for r in ok)
     react = sum(r["t"][2] - r["t"][1] for r in ok)
-    play = sum(b["t"][0] - a["t"][2] for a, b in zip(ok, ok[1:]) if b["t"][0] > a["t"][2])
-    return {"speak": round(speak, 3), "react": round(react, 3), "play": round(play, 3),
+    gaps = [b["t"][0] - a["t"][2] for a, b in zip(ok, ok[1:]) if b["t"][0] > a["t"][2]]
+    play = sum(min(g, PLAY_MAX) for g in gaps)
+    idle = sum(g - PLAY_MAX for g in gaps if g > PLAY_MAX)  # 两轮之间太久：人在等、或者有一轮没算上，算等人
+    return {"speak": round(speak, 3), "react": round(react, 3), "play": round(play, 3), "idle": round(idle, 3),
             "ok": len([r for r in rounds if r.get("ok")]), "bad": len([r for r in rounds if not r.get("ok")])}
 
 
@@ -100,7 +103,8 @@ def account(data, device=None):
     for key, name, book in STAGES:
         s = st.get(key) or {}
         secs = round(s["end"] - s["start"], 1) if s.get("start") is not None and s.get("end") is not None else None
-        own = round(secs - wait_of.get(key, 0), 1) if secs is not None else None
+        idle = (device or {}).get("idle", 0) if key == "collect" else 0
+        own = round(secs - wait_of.get(key, 0) - idle, 1) if secs is not None else None
         row = {"key": key, "name": name, "secs": own, "book": book, "note": "" if secs is not None else "没记下"}
         if key in ("identify", "insert") and s:
             row["note"] = "用上次结果，没调用大模型" if s.get("reused") else ("用核对时提前准备好的插法" if s.get("prepared") else "")
@@ -122,6 +126,9 @@ def account(data, device=None):
             if own is not None and book in books and books[book] is not None:
                 books[book] += own
         rows.append(row)
+    if (device or {}).get("idle"):
+        books["wait"] += device["idle"]
+        waits = waits + [{"stage": "collect", "secs": round(device["idle"], 1), "why": f"多轮实测两轮之间超过 {PLAY_MAX} 秒的部分（人在等、或者有一轮没算上）"}]
     books = {k: (round(v, 1) if v is not None else None) for k, v in books.items()}
     c = data.get("counts", {})
     counts = {"said": c.get("try_said", 0) + (device or {}).get("ok", 0) + (device or {}).get("bad", 0),
