@@ -75,6 +75,12 @@ static inline void fsw_mark_once_armed(int id, int32_t v) {
     if (__atomic_load_n(&fsw_armed, __ATOMIC_RELAXED)) fsw_mark_once(id, v);
 }
 
+// 这一轮走到某一步（after_id 已经记过）之后才记（决策 118）：上一轮剩下的东西在这一轮早先触发时不记，
+// 比如上一句回答剩下的一包声音在新一轮聆听时才到
+static inline void fsw_mark_once_after(int id, int after_id, int32_t v) {
+    if (fsw_ok(after_id) && __atomic_load_n(&fsw_done[after_id], __ATOMIC_RELAXED)) fsw_mark_once(id, v);
+}
+
 // 高频位置：只在内存里记最后一次，到后面某个计时点再打印（附加值 = 这一轮发生了几次）
 static inline void fsw_keep_last(int id) {
     if (!fsw_ok(id)) return;
@@ -106,6 +112,7 @@ static inline void fsw_round_reset(void) {
 #define FSW_MARK(id, v) fsw_mark((id), (int32_t)(v))
 #define FSW_MARK_ONCE(id, v) fsw_mark_once((id), (int32_t)(v))
 #define FSW_MARK_ONCE_ARMED(id, v) fsw_mark_once_armed((id), (int32_t)(v))
+#define FSW_MARK_ONCE_AFTER(id, after, v) fsw_mark_once_after((id), (after), (int32_t)(v))
 #define FSW_ARM() fsw_arm()
 #define FSW_KEEP_LAST(id) fsw_keep_last(id)
 #define FSW_FLUSH_LAST(id) fsw_flush_last(id)
@@ -116,6 +123,7 @@ static inline void fsw_round_reset(void) {
 #define FSW_MARK(id, v) do {} while (0)
 #define FSW_MARK_ONCE(id, v) do {} while (0)
 #define FSW_MARK_ONCE_ARMED(id, v) do {} while (0)
+#define FSW_MARK_ONCE_AFTER(id, after, v) do {} while (0)
 #define FSW_ARM() do {} while (0)
 #define FSW_KEEP_LAST(id) do {} while (0)
 #define FSW_FLUSH_LAST(id) do {} while (0)
@@ -124,6 +132,7 @@ static inline void fsw_round_reset(void) {
 #endif  // FW_STOPWATCH_ENABLE
 """
 
+PLAN_VER = 2  # 插入提示词改过（决策 118 加了 FSW_MARK_ONCE_AFTER）：之前存的插入方案不再沿用
 HELPERS = {"include", "reset", "arm", "flush"}
 LINE_OK = re.compile(r'^\s*(//[^\n]*|#include\s+["<][^"<>\n]*fw_stopwatch\.h[">]\s*(//[^\n]*)?|FSW_[A-Z_]+\([^;\n]*\);\s*(//[^\n]*)?)?$')
 ONCE = {"first": "一轮只记第一次", "last": "一轮里记最后一次", "every": "每次都记"}
@@ -141,6 +150,9 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
 - FSW_KEEP_LAST(编号);  高频位置用：只在内存里记最后一次，再在之后的某个计时点处用 FSW_FLUSH_LAST(编号); 打印出来
 - FSW_ROUND_RESET();  一轮开始时清零"只记第一次"的标记，放在每轮开始的地方（比如进入聆听状态、读到卡）
 - FSW_ARM(); 和 FSW_MARK_ONCE_ARMED(编号, 附加值);  同一处代码别的时候也会走到（比如提示音也走播放）时用：只在 FSW_ARM() 之后才记
+- FSW_MARK_ONCE_AFTER(编号, 前一步编号, 附加值);  这一轮走到"前一步"（那个用 FSW_MARK_ONCE 记的计时点）之后才记，只记第一次。
+  会被上一轮剩下的东西提前触发的点要用它：比如"收到第一段声音"，上一句回答剩下的一包声音可能在新一轮聆听时才到，
+  用 FSW_MARK_ONCE 会记成那一包，这一轮真正的第一包反而记不到。前一步选这一轮里它前面、一定会先发生的那个计时点（比如"收到开口指令"）
 
 {values}## 你的任务
 读代码，确定每个计时点具体插在哪一行的后面（after_line 是原文件现在的行号，0 表示插在文件最前面），写出要插的几行（带上和周围一样的缩进）。
@@ -205,7 +217,7 @@ def build_prompt(steps, header, needs=None):
                          values_out=VALUES_OUT if nb else "")
 
 
-MARK_CALL = re.compile(r"FSW_(MARK|MARK_ONCE|MARK_ONCE_ARMED)\(\s*(\d+)\s*,\s*(.*)\)\s*;")
+MARK_CALL = re.compile(r"FSW_(MARK|MARK_ONCE|MARK_ONCE_ARMED|MARK_ONCE_AFTER)\(\s*(\d+)\s*,\s*(.*)\)\s*;")
 CAST = re.compile(r"\b(?:static_cast|reinterpret_cast)\s*<\s*[A-Za-z_][\w:]*\s*>\s*\(|\(\s*(?:unsigned\s+)?[A-Za-z_][\w:]*\s*\)")
 VALUE_TOKENS = re.compile(r"\s*(?:[A-Za-z_]\w*|::|->|\.|\(|\)|\d+|\*|&|-)")
 
@@ -229,7 +241,14 @@ def value_ok(expr):
 
 def _marks(lines):
     """计时点语句里的 (编号, 附加值)。"""
-    return [(int(m.group(2)), m.group(3).strip()) for l in lines if isinstance(l, str) and (m := MARK_CALL.search(l))]
+    out = []
+    for l in lines:
+        if isinstance(l, str) and (m := MARK_CALL.search(l)):
+            v = m.group(3).strip()
+            if m.group(1) == "MARK_ONCE_AFTER":  # 第二个参数是"前一步编号"，附加值在后面
+                v = re.sub(r"^\d+\s*,\s*", "", v)
+            out.append((int(m.group(2)), v))
+    return out
 
 
 def _fail(kind, message, **extra):
