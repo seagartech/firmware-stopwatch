@@ -881,9 +881,11 @@ function sceneSwitch(k){if(k===scene)return;colStop();col={st:0,att:0,got:[],pha
 // ===== 多轮实测 =====（通用：动作、提示语、阶段名、问题怎么判，都来自场景；数据和报告页同一份）
 let beep=true,actx=null;
 // 声音要在点按钮的那一下打开（Safari 等浏览器不认点击之后才开的声音），顺手放一段无声的，把声音通道打通（决策 115）
-// Safari 只认点击那一下放出的"真声音"才给网页开声音（放一段无声的不算）：所以点开始时直接短"叮"一声（决策 128），也让人知道提示音开着
-function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();
- const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=880;g.gain.value=.15;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+.06);beepLog('点开始时')}catch(e){}}
+// Safari 只在点击那一下真的放出声音时才给网页开声音（只放一个空的不算，决策 128）。放一段听不见的（音量 0.001），
+// 不让人以为"收好一轮了"（决策 131）；页面上任何一次点击，声音还没开就顺手开一下，等到多轮实测时早就开好了
+function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state==='running')return;actx.resume();
+ const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=440;g.gain.value=.001;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+.08);beepLog('点击时打开声音')}catch(e){}}
+document.addEventListener('click',()=>unlockAudio(),true);
 let dings=0,beepMsg='';
 function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();dings++;if(dings<=3||dings%10===0)beepLog('响');const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.25;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
 function beepBtn(){return `<span style="display:inline-flex;gap:10px;align-items:center"><button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>${beep?'<button class="pill" data-beeptest="1">试听</button>':''}</span>`}
