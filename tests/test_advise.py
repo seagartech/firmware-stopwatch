@@ -169,3 +169,23 @@ def test_prompt_says_only_put_problems_the_card_discusses():
     d, j = judged("voice")
     p = adv.build_prompt(j, d["scenario"])
     assert "真正讨论" in p and "第几轮" in p
+
+
+def test_card_covering_two_segments_is_accepted_and_keeps_the_first():
+    """2026-10-16 第三次亲手操作：一张卡片同时讲两段偶尔特别慢，AI 把段写成"P1-P2, P2-P3"，格式检查整份不要了（决策 119）。
+    两段都对得上就收下，段记第一个，另存全部。"""
+    from fsw import advise as adv
+    d = demo("dialog")
+    j = J.judge(d["scenario"], demo_rounds(d))
+    segs = list(d["scenario"]["segments"])[:2]
+    card = {"when": [adv.problems(j, d["scenario"])[0]["key"]], "seg": ", ".join(segs)}
+    adv._norm_seg(card, d["scenario"])
+    assert card["seg"] == segs[0] and card["segs"] == segs
+    bad = {"seg": "P1-P2, 不存在"}
+    adv._norm_seg(bad, d["scenario"])
+    assert bad["seg"] == "P1-P2, 不存在"  # 对不上的照旧交给格式检查拦
+
+
+def test_prompt_says_one_segment_per_card():
+    from fsw import advise as adv
+    assert "seg 只写一段" in adv.PROMPT
