@@ -30,7 +30,7 @@ def test_report_uses_the_start_label_and_lag_line():
 
 
 def test_beep_is_quieter():
-    assert "g.gain.value=.25" not in grab("ding") and "g.gain.value=.08" in grab("ding")
+    assert "g.gain.value=.25" not in grab("ding") and "g.gain.value=.15" in grab("ding")
 
 
 def test_report_api_gives_start_lag_from_the_check(tmp_path):
