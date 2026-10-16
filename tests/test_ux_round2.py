@@ -283,3 +283,44 @@ def test_unlock_plays_a_real_sound_for_safari():
     """决策 128：Safari 只认点击那一下放出的真声音；放一段无声的不算，声音一直没打开（用户记录：多轮实测时一直是 suspended）。"""
     u = grab("unlockAudio")
     assert "createOscillator" in u and "createBuffer(1,1" not in u
+
+
+# ---- 决策 129：提示按类型上色，出错的不自己消失；还原时调试口忙就等一下再烧 ----
+def test_error_toast_is_red_and_stays():
+    t = JS[JS.index("let toastT=null;function toast("):][:700]
+    assert "kind==='bad'" in t and "'toast t-'+kind" in t and "if(kind!=='bad')toastT=setTimeout" in t and "tclose" in t
+
+
+def test_restore_waits_when_port_busy_and_keeps_message_short(tmp_path):
+    from tests.test_fsw_api import FakeDevice, start_insert, wait as fwait, run_to_try, fake_build_output
+    from fastapi.testclient import TestClient
+    from fsw.llm import FakeLLM
+    from fsw.web.app import create_app
+    from tests.identify_fixtures import door_source
+    from tests.test_instrument import reply
+
+    class Busy(FakeDevice):  # 还原时前两次调试口被占着
+        busy = 0
+
+        def flash(self, fw, port, on_progress):
+            if str(fw).endswith("orig") and Busy.busy < 2:
+                Busy.busy += 1
+                return {"ok": False, "error": "A fatal error occurred: Could not open /dev/cu.usbmodem1101, the port is busy or doesn't exist."}
+            return super().flash(fw, port, on_progress)
+
+    def builder(work, target, board, idf, progress):
+        fake_build_output(work)
+        return {"ok": True, "seconds": 0.1, "error": None}
+    dev = Busy()
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=lambda p, k: FakeLLM(reply()),
+                              idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
+                              cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.usbmodem1101"],
+                              bg_builder=builder, device=dev, wait_step=0.01))
+    c.post("/api/settings", json={"llm_provider": "cc"})
+    r = c.post("/api/source/inspect", json={"path": str(door_source(tmp_path / "door"))}).json()
+    c.post("/api/bgbuild/start", json={"work": r["work"], "chip": "ESP32-S3"})
+    start_insert(c, r)
+    fwait(c, lambda j: j["status"] == "inserted")
+    run_to_try(c)
+    j = c.post("/api/fsw/restore", json={"project_dir": r["project_dir"]}).json()
+    assert j["flashed"] and Busy.busy == 2  # 忙了两次，第三次烧上了，不用人再点
