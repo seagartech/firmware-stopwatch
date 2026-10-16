@@ -884,7 +884,7 @@ let beep=true,actx=null;
 // Safari 只在点击那一下真的放出声音时才给网页开声音（只放一个空的不算，决策 128）。放一段听不见的（音量 0.001），
 // 不让人以为"收好一轮了"（决策 131）；页面上任何一次点击，声音还没开就顺手开一下，等到多轮实测时早就开好了
 function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state==='running')return;actx.resume();
- const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=440;g.gain.value=.001;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+.08);beepLog('点击时打开声音')}catch(e){}}
+ const o=actx.createOscillator(),g=actx.createGain(),t=actx.currentTime;o.frequency.value=20;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.00001,t+.04);g.gain.linearRampToValueAtTime(0,t+.08);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+.1);beepLog('点击时打开声音')}catch(e){}}  // 20 赫兹、慢慢起慢慢收：人耳听不到，也没有"咔"的一下
 document.addEventListener('click',()=>unlockAudio(),true);
 let dings=0,beepMsg='';
 function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();dings++;if(dings<=3||dings%10===0)beepLog('响');const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.25;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
