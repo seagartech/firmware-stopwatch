@@ -40,9 +40,17 @@ def test_first_round_half_seen_is_reported_not_silently_dropped():
     assert out == [{"half": True}]
 
 
-def test_wake_word_round_after_a_start_is_still_ignored():
-    """有"开始"、后面有点但没有起点（比如对话类喊唤醒词，设备回一句"你好呀"）：照旧不算、不提示。"""
+def test_round_without_start_is_not_counted_but_reported():
+    """有"开始"、后面大部分点都到了，就是没有起点：不算一轮，但报出来（决策 133）。
+    以前悄悄不算（当它是喊唤醒词），2026-10-16 30 轮真测里有一次真问了问题、设备没记到起点，报告却写"没有丢掉的"。"""
     out = feed(["FSW,RESET,1000000,0"] + ROUND[1:] + ["FSW,RESET,9000000,0"])
+    assert out == [{"nostart": True}]
+    assert meas.collect(["FSW,RESET,1000000,0"] + ROUND[1:] + ["FSW,RESET,9000000,0"], meas.Spec.from_scenario(SC)) == []
+
+
+def test_only_a_few_points_without_start_is_still_ignored():
+    """只到了一两个点（比如进聆听时换个表情、又回去待机）：不是一次真的对话，照旧不算、不提示。"""
+    out = feed(["FSW,RESET,1000000,0", ROUND[3], "FSW,RESET,9000000,0"])
     assert out == []
 
 

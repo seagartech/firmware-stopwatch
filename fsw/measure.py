@@ -123,6 +123,9 @@ class Collector:
                 out.append({"half": True})
             elif self.started and self.cur and not self.done and self.spec.start in self.cur:
                 out.append(self._bad())
+            elif self.started and not self.done and len([x for x in self.spec.need if x in self.cur]) * 2 >= len(self.spec.need):
+                # 大部分点都到了、就是没有起点：是一次真的对话，只是设备没记到起点。不算一轮，但要报出来（决策 133）
+                out.append({"nostart": True})
             self.started, self.cur, self.done, self.first = True, {}, False, False
             self.occ = {}
             self.reset_us = us
@@ -183,7 +186,7 @@ def collect(lines, spec):
     out = []
     for l in lines:
         out += c.feed(l)
-    return [r for r in out + c.finish() if not r.get("half")]  # 整份日志一起算时，开头那半轮不用提示
+    return [r for r in out + c.finish() if not r.get("half") and not r.get("nostart")]  # 整份日志一起算时，开头那半轮不用提示
 
 
 def demo_lines(demo, rounds, start=0, drop_at=0):

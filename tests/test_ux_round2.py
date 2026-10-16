@@ -169,6 +169,23 @@ def test_report_says_how_many_rounds_were_used_and_dropped():
     out = run(["qualityLine"], 'qualityLine({ok:30,missing:2,stale:1,half:0})')
     assert "用了 30 轮" in out and "2 轮没收全" in out and "1 轮记到的是上一轮剩下的" in out
     assert "没有丢掉的" in run(["qualityLine"], 'qualityLine({ok:20,missing:0,stale:0,half:0})')
+    out = run(["qualityLine"], 'qualityLine({ok:30,missing:0,stale:0,half:0,nostart:1,startName:"设备听出你停了"})')
+    assert "1 次没记到起点「设备听出你停了」" in out and "没有丢掉的" not in out  # 决策 133
+
+
+def test_report_api_counts_rounds_without_start(tmp_path):
+    from tests.test_first_round_and_push import make
+    from tests.test_collect_api import wait
+    from tests.test_standards import PAGE
+    lines = []
+    for k in range(4):
+        pts = [f"FSW,P{i},{k * 10_000_000 + 3_000_000 + i * 100_000},0" for i in range(1, 10)]
+        lines += [f"FSW,RESET,{k * 10_000_000 + 1_000_000},0"] + (pts[1:] if k == 1 else pts)
+    c = make(tmp_path, lines + ["FSW,RESET,99000000,0"])
+    c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 3, "project_dir": str(tmp_path / "p")})
+    wait(c, lambda j: j["status"] == "done")
+    q = c.get("/api/report").json()["quality"]
+    assert q["ok"] == 3 and q["nostart"] == 1 and q["startName"]
 
 
 def test_report_api_gives_quality(tmp_path):

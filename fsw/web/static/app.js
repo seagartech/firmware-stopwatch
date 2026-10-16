@@ -183,7 +183,7 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
   <li><b class="lvtag lv-should">建议改</b>偶尔特别慢、先后顺序反了，但不到每 10 次一次；或一般用时超出合理范围、没到"算慢"。</li>
   <li><b class="lvtag lv-ok">可以不改</b>在合理范围里，只是占时最多。</li></ul></details>`}
 // 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
-function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:''].filter(Boolean);
+function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:'',Q.nostart?`${Q.nostart} 次没记到起点「${Q.startName||'起点'}」`:''].filter(Boolean);
  return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}。数字都是码表按这些轮算的，不经过 AI。</p>`}
 function subline(D){
   const bits=[];
