@@ -192,7 +192,24 @@ function subline(D){
   return bits.join('；')+'。';
 }
 
-function dev(D){const T=D.S.tech;
+// 这次测试本身用了多久（决策 99）：码表自己记的每段用时，按四笔账分类，对照用时标准判"好 / 能忍 / 超了"。只在技术细节里
+let TIMING=null,timingAt=0;
+function timingLoad(){if(Date.now()-timingAt<3000)return;timingAt=Date.now();fetch('/api/timing').then(r=>r.ok?r.json():null).then(j=>{if(j){const ch=JSON.stringify(j)!==JSON.stringify(TIMING);TIMING=j;if(ch&&page==='report'&&mode==='dev')render()}}).catch(()=>{})}
+const mmssT=x=>x==null?'没记下':x<60?`${x.toFixed(1)} 秒`:`${Math.floor(x/60)} 分 ${Math.round(x%60)} 秒`;
+const VTAG={'好':'c-ok','能忍':'c-warn','超了':'c-bad'};
+function timingBox(t){if(!t)return '';const B=t.books,N=t.names,c=t.counts,stdT=s=>s?`好 ≤${mmssT(s[0])}${s[1]!=null?`，能忍 ≤${mmssT(s[1])}`:''}`:'—';
+ const chip=v=>v?`<span class="chip ${VTAG[v]}">${v}</span>`:'';
+ const rows=t.stages.map(s=>`<tr><td style="font-family:var(--sans)">${s.name}</td><td class="r">${mmssT(s.secs)}${s.per_round!=null?`<br><span class="note">每轮 ${s.per_round} 秒</span>`:''}</td><td style="font-family:var(--sans)">${{tool:N.tool,human:N.human,collect:'人配合 + 被测设备'}[s.book]}</td><td style="font-family:var(--sans)">${s.key==='collect'?'每轮 ':''}${stdT(s.std)}</td><td style="font-family:var(--sans)">${chip(s.verdict)}${s.note?` <span class="note">${s.note}</span>`:''}</td></tr>`).join('');
+ return `<section class="panel scroll"><h2>这次测试本身用了多久</h2><p class="note" style="margin:-4px 0 8px">码表自己记的每段开始、结束时间；按${t.first?'第一次测':'再测（能用上次结果）'}的标准判。等人的时间不算进各段。</p>
+  <table class="num"><thead><tr><th>四笔账</th><th class="r">合计</th><th>标准</th><th>判断</th></tr></thead><tbody>
+  <tr><td style="font-family:var(--sans)"><b>${N.tool}</b></td><td class="r">${mmssT(B.tool)}</td><td style="font-family:var(--sans)">${stdT(t.std_total.tool)}</td><td>${chip(t.verdict.tool)}</td></tr>
+  <tr><td style="font-family:var(--sans)">${N.device}</td><td class="r">${mmssT(B.device)}</td><td style="font-family:var(--sans)">不考码表（设备反应、放完回答）</td><td></td></tr>
+  <tr><td style="font-family:var(--sans)">${N.human}</td><td class="r">${mmssT(B.human)}</td><td style="font-family:var(--sans)">${stdT(t.std_total.human)}</td><td>${chip(t.verdict.human)}</td></tr>
+  <tr><td style="font-family:var(--sans)">${N.wait}</td><td class="r">${mmssT(B.wait)}</td><td style="font-family:var(--sans)">不算</td><td></td></tr></tbody></table>
+  <p style="margin:8px 0">说了 ${c.said} 句（试一次 + 多轮实测）· 补测 ${c.redo} 轮 · 弹提示 ${c.false_hints} 次 · 点了 ${c.clicks} 次 · 调用大模型 ${c.llm_calls} 次</p>
+  <details class="lvwhy"><summary>每段用时</summary><table class="num"><thead><tr><th>段</th><th class="r">用时</th><th>记在</th><th>标准</th><th>判断</th></tr></thead><tbody>${rows}</tbody></table>
+  ${t.waits.length?`<ul class="notes">${t.waits.map(w=>`<li>等人：${w.why} ${mmssT(w.secs)}</li>`).join('')}</ul>`:''}</details></section>`}
+function dev(D){const T=D.S.tech;if(D.S.real)timingLoad();
   const segRows=D.allSegs.map(s=>{const over=s.max>s.med*2.5&&s.max-s.med>.3;return `<tr><td style="font-family:var(--sans)">${s.name}（${s.code}）</td><td><span class="code">${T.loc[s.k]}</span></td><td style="font-family:var(--sans)">${s.owner}</td><td class="r">${f(s.med)}</td><td class="r">${rangeTxt(s.v,s.v.map((x,i)=>(D.rounds[i]||{}).n||i+1))}</td><td class="r">${s.ok}</td><td style="font-family:var(--sans)">${D.J?(()=>{const [v,c]=segJudge(D,s),j=D.J.segments.find(x=>x.k===s.k);return `<span class="chip ${c}">${v}</span>${j&&j.outside?' <span class="chip c-gray">设备外</span>':''}`})():over?'<span class="chip c-warn">偶发特别慢</span>':'<span class="chip c-ok">正常</span>'}</td></tr>`}).join('');
   const lineRows=D.lines.map(l=>{const [v,c]=D.verdict(l);return `<tr><td style="font-family:var(--sans)"><b>${l.name}合计</b>：${l.segs.map(k=>D.S.segs[k].name).join(' → ')}</td><td></td><td></td><td class="r">${f(l.med)}</td><td class="r">${rangeTxt(l.ends,l.ends.map((x,i)=>(D.rounds[i]||{}).n||i+1))}</td><td class="r">${l.ok?`${l.ok[0]}～${l.ok[1]??'不限'}`:'—'}</td><td style="font-family:var(--sans)"><span class="chip ${c}">${v}</span>${l===D.main&&D.exp?` <span class="chip ${D.exp[1]}">体验${D.exp[0]}</span>`:''}</td></tr>`}).join('');
   const bad=[...new Set([...D.reversed,...D.slowRounds])].sort((a,b)=>a.n-b.n);
@@ -202,6 +219,7 @@ function dev(D){const T=D.S.tech;
    <dt>计时点开销</dt><dd>每个计时点往调试口打印一行，约 0.002～0.003 秒（按调试口速度推算，未实测）。<br>一轮最多经过 ${T.pts} 个计时点，设备那几段的数字最多偏大约 ${ovLo}～${ovHi} 秒；服务器、网络那几段不受影响。<br>想确认开销，可以在"插计时点和烧录"页切回原版，各收一次比较。</dd></dl></section>
   <section class="panel scroll"><h2 style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">分段用时<button class="pill" data-go="range">合理范围依据</button></h2><table class="num"><thead><tr><th>段（计时点）</th><th>代码位置${T.locNote||''}</th><th>谁负责</th><th class="r">中位数</th><th class="r">最小～最大</th><th class="r">合理</th><th>判断</th></tr></thead><tbody>${segRows}${lineRows}</tbody></table></section>
   <section class="panel scroll"><h2>有问题的轮</h2>${bad.length?`<table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}</tr></thead><tbody>${bad.map(r=>`<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${f(e)}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<p class="note">没有。</p>'}</section>${fixDev(D)}
+  ${D.S.real?timingBox(TIMING||(JREP&&JREP.timing)):''}
   <section class="panel"><h2>原始日志</h2><p style="margin:0 0 8px"><span class="code">${T.log}</span></p><ul class="notes" style="margin:0 0 8px"><li>设备调试口输出的原样记录，没有删改：固件原有的日志和码表插的计时点行（FSW 开头）都在里面。</li><li>报告里所有数字都从这份文件算出来。</li><li>合理范围改过以后，报告顶上会提示用新范围更新，不用重测。</li></ul><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 

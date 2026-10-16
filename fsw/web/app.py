@@ -23,6 +23,7 @@ from fsw import instrument as ins
 from fsw import measure as meas
 from fsw import judge as jdg
 from fsw import advise as advs
+from fsw import timeline as tln
 from fsw import standards as stds
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
@@ -456,6 +457,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         pd = Path(a.project_dir)
         return pd / "fsw-backup", pd / "firmware" / "orig", pd / "firmware" / "fsw"
 
+    # 码表自己记每段用时（决策 99）：选源码时开一份，存在项目文件夹的 timeline.json；测完也放一份进这次的结果文件夹
+    tline = {"cur": tln.Timeline()}
+
+    def T():
+        return tline["cur"]
+
     def _fail(job, kind, message, **extra):
         job.update(status="failed", err={"kind": kind, "message": message, **extra})
 
@@ -536,6 +543,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             elif prep["steps"] != body.steps:
                 redo = "你改了步骤，AI 提前按原来的步骤准备的插法作废了，按你改过的步骤重新生成"
         fsw["prep"] = None
+        T().end("check")
+        T().begin("insert")
+        T().count("clicks")
         calls = 1 if prep and not cached and prep["work"] == body.work else 0  # 提前准备的那次也算一次调用
         model = None if cached or use_prep else _model()[1]
         job = {"phase": "insert", "status": "running", "pct": 0, "log": redo or "AI 在读代码，确定每个计时点插在哪一行",
@@ -602,6 +612,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             fsw["plan"] = plan
             job.update(status="inserted", view=ins.diff_view(rec, steps), notes=plan["notes"], log="插好了，先看改动",
                        total=len(rec["steps"]))
+            T().end("insert", reused=bool(cached), prepared=bool(job.get("prepared")))
+            T().count("llm_calls", job.get("calls", 0))
+            T().begin("confirm")
 
         threading.Thread(target=run, daemon=True).start()
         return job
@@ -612,6 +625,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job.update(status="running", err=None, cancel=False)
 
         def build():
+            T().end("confirm")
+            T().begin("build")
             job.update(phase="build", pct=0, log="准备编译")
             b = _wait_bg(job, a.work)
             if b and b["state"] == "failed":
@@ -637,10 +652,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                              error=short, step=step, step_name=s["n"] if s else None, where=where)
             if not EspIdf.save_firmware(a.work, fsw_fw):
                 return _fail(job, "build", "编译说通过了，但没找到编出来的固件文件（build/flasher_args.json）。点\"重新编译\"再试一次。")
+            T().end("build")
             return True
 
         def flash():
             job.update(phase="flash", pct=0, log="查设备")
+            T().begin("flash")
+            w0 = time.time() if not port_finder() else None
             while not port_finder():
                 if job.get("cancel"):  # 等设备的时候点了还原：不烧了
                     return None
@@ -648,6 +666,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 time.sleep(wait_step)
             if job.get("cancel"):
                 return None
+            if w0:
+                T().wait("flash", time.time() - w0, "等设备插上")
             port = port_finder()[0]
             job.update(status="running", port=port, log=f"设备已连上 {port}")
             r = device.flash(fsw_fw, port, lambda pct, msg: job.update(pct=pct, log=msg))
@@ -655,14 +675,21 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if not r.get("ok"):
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))
             _on_device(a.project_dir, True)
+            T().end("flash")
             return True
 
         def ready():
             """烧完先停下：设备会重启、连网，人要先喊唤醒词再说一句，等点了"准备好了"才开始试一次。"""
-            job.update(phase="try", status="ready_try", pct=0, got=[], log="等你准备好：先喊唤醒词，再说一句")
+            job.update(phase="try", status="ready_try", pct=0, got=[], log="等你准备好：先喊唤醒词，再说一句", ready_at=time.time())
             return None
 
         def try_once():
+            if job.get("ready_at"):
+                T().wait("ready", time.time() - job.pop("ready_at"), "等你准备好、点「准备好了」")
+            if "try" not in T().data["stages"]:
+                T().begin("try")
+            T().count("try_said")
+            T().count("clicks")
             job.update(phase="try", pct=0, got=[], log="等计时点", try_secs=TRY_SECONDS)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
             seen, last = set(), {"t": None}
@@ -691,6 +718,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                                         f"再做一次要测的事（对话类：先喊唤醒词，再说一句）。{why}",
                              error=f"（{TRY_SECONDS} 秒内没有计时点输出）", offer_restore=job["try_fails"] >= 2)
             job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
+            T().end("try")
             return True
 
         order = ["build", "flash", "ready"] if start != "try" else ["try"]
@@ -773,6 +801,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             col["job"] = job
         job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
         raw = open(job["raw_log"], "a", encoding="utf-8")
+        T().count("clicks")
+        if body.source == "device":
+            if not body.resume:
+                T().begin("collect")
+            T().copies = [Path(job["raw_log"]).parent / "timeline.json"]  # 这次的结果文件夹里也放一份
 
         def ok_count():
             return len([r for r in job["rounds"] if r["ok"]])
@@ -814,6 +847,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 waiting = quiet["any"] and not mid  # 收齐一轮、等你做下一次：两次之间正常停顿，不算出错
                 if job["status"] == "running" and not waiting and time.time() - quiet["since"] > NO_DATA_SECS:
                     secs = int(time.time() - quiet["since"])
+                    if not job.get("hint"):
+                        job["hints"] = job.get("hints", 0) + 1  # 弹了几次提示（人配合那笔账里算"被打断几次"）
                     job["hint"] = (f"这一轮做到一半，{secs} 秒没有下一个计时点：可能这一次没走完（比如没听清、服务器没回）。"
                                    "再做一次要测的事就行，这一轮不算、会自动补。" if mid else
                                    f"已经 {secs} 秒设备一点输出都没有：看看线是不是插在了别的设备上，或者设备卡住了，拔插一下试试。"
@@ -832,8 +867,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 ports = port_finder()
                 if not ports:
                     job.update(status="waiting_device" if job["status"] != "paused" else "paused")
+                    job.setdefault("_away", time.time())
                     time.sleep(wait_step)
                     continue
+                if job.get("_away"):
+                    T().wait("collect", time.time() - job.pop("_away"), "设备没插 / 拔线了，等插回")
                 job.update(status="running", message="", port=ports[0])
                 quiet.update(since=time.time(), lines=0, odd=0)
                 got0 = quiet["lines"] + len(job["rounds"])
@@ -857,6 +895,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 coll.finish()
                 if job is col["job"]:
                     job["status"] = "done" if ok_count() >= job["target"] else "stopped"
+                    if body.source == "device":
+                        T().end("collect")
 
         threading.Thread(target=run, daemon=True).start()
         return _col_view(job)
@@ -900,8 +940,20 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(404, "还没有测完的轮")
         out = jdg.judge(sc, ok)
         keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names")
-        return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep},
+        return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep}, "timing": _timing() if raw else None,
                 "stale": bool(stale), "stale_since": stale, "measured_at": (job or {}).get("measured_at") if ok and same else None}
+
+    def _timing():
+        job = col["job"]
+        dev = None
+        if job and job.get("raw_log"):
+            dev = {**tln.split_rounds(job.get("rounds", [])), "hints": job.get("hints", 0)}
+        return tln.account(T().data, dev)
+
+    @app.get("/api/timing")
+    def timing():
+        """这次测试本身用了多久（四笔账、每段用时、对照 14 号文档的标准）。"""
+        return _timing()
 
     @app.post("/api/report/refresh")
     def report_refresh():
@@ -922,6 +974,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         """导出：网页把报告拼成一个 HTML 文件（样式、切换都在文件里，断网能开），这里只核对后存下。
         真测的存在项目文件夹的 reports/，演示数据的存在结果文件夹的 demo-reports/；文件名"场景_测完时间.html"，不覆盖。"""
         html = body.html
+        T().begin("export")
+        T().count("clicks")
         if not html.lstrip().lower().startswith("<!doctype html"):
             raise HTTPException(400, "导出的内容不是网页")
         if KEYLIKE.search(html):
@@ -945,6 +999,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             p, n = folder / f"{name}_{stamp}-{n}.html", n + 1
         p.write_text(html, encoding="utf-8")
         exported.add(p.resolve())
+        T().end("export")
         if real:  # 记在项目里：首页"以前测过的"点这条能打开最近一份
             ej = Path(job["raw_log"]).parent.parent.parent / "exports.json"
             try:
@@ -1096,6 +1151,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             pass
         job = {"status": "running", "started": time.time(), "read": "", "fixes": None, "fine": "", "message": "", "root": root}
         adv["job"] = job
+        T().begin("advise")
+        T().count("clicks")
 
         def run():
             save = Path(body.project_dir) / "advice" if body.project_dir else None
@@ -1105,8 +1162,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             except Exception as e:
                 r = {"ok": False, "kind": "other", "message": f"写建议时码表出错了：{e}"}
             job["seconds"] = r.get("seconds", round(time.time() - job["started"], 1))
+            if r.get("called", True):
+                T().count("llm_calls")
             if r["ok"]:
                 job.update(status="done", fixes=r["fixes"], fine=r["fine"], called=r.get("called", True))
+                T().end("advise")
             else:
                 job.update(status="failed", kind=r.get("kind"), message=r["message"])
 
@@ -1138,6 +1198,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if not a:
             raise HTTPException(409, "还没插过计时点，不用还原")
         backup, orig_fw, _ = _fsw_dirs(a)
+        T().begin("restore")
+        T().count("clicks")
         if fsw["job"]:
             fsw["job"]["cancel"] = True  # 还在等设备烧计时版的，不烧了
         ins.restore(a.work, backup)
@@ -1155,6 +1217,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 _on_device(a.project_dir, False)
         if fsw["job"]:
             fsw["job"].update(status="restored", restore=out)
+        T().end("restore")
         return out
 
     # ---- 编译工具帮装（决策 48）：后台跑乐鑫官方安装方式，点"保存"回首页也照样在装 ----
@@ -1243,6 +1306,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job.update({k: v for k, v in r.items() if k in ("page", "found", "kind", "message", "reused", "summary", "doubts")})
             job["seconds"] = r.get("seconds", round(time.time() - job["started"], 1))
             job["state"] = "done" if r.get("ok") else "failed"
+            if not r.get("reused"):
+                T().count("llm_calls")
+            if r.get("ok"):
+                T().end("identify", reused=bool(r.get("reused")))
+                T().begin("check")
 
         threading.Thread(target=run, daemon=True).start()
         return job
@@ -1253,6 +1321,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(400, "找不到复制好的源码，请回首页重新选一次固件源码。")
         if not body.what.strip():
             raise HTTPException(400, "先写要测从什么到什么。")
+        T().end("source")
+        T().begin("identify")
+        T().count("clicks")
         return _identify(body)
 
     @app.post("/api/identify/retry")
@@ -1343,7 +1414,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         else:
             raise HTTPException(400, "先选一个固件源码位置")
         unpack = ascii_work_root(live["data"]) / "_unpack" / hashlib.sha1(str(path).encode()).hexdigest()[:10]
-        return prepare(path, data_dir=live["data"], board=body.board, unpack_to=unpack)
+        r = prepare(path, data_dir=live["data"], board=body.board, unpack_to=unpack)
+        if r.get("project_dir"):
+            if not (T().path and T().path.parent == Path(r["project_dir"]) and "identify" not in T().data["stages"]):
+                tline["cur"] = tln.Timeline(Path(r["project_dir"]) / "timeline.json")  # 新的一次测量
+                T().begin("source")
+            T().count("clicks")
+        return r
 
     @app.middleware("http")
     async def no_stale_page(request, call_next):
