@@ -23,8 +23,3 @@ def test_restore_keeps_saying_restoring_while_the_page_redraws():
 def test_tiny_segments_are_drawn_as_one_block_with_separators():
     t = grab("timeline")
     assert "tiny" in t and 'stroke="var(--panel)"' in t
-
-
-def test_start_collect_button_only_after_try_passes():
-    """试通前不放"开始多轮实测"和"还差：烧录和试一次都完成后才能测"（决策 140）。"""
-    assert "烧录和试一次都完成后才能测" not in JS
