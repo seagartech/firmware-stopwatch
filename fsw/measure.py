@@ -107,6 +107,7 @@ class Collector:
         name, us, val = p
         out = []
         if name == "RESET":
+            self.reset_us = us
             # 没有起点的一轮不算一轮（比如对话类喊唤醒词那一下：设备进聆听就清零，但没有"你说完"），不报没收全
             if self.started and self.cur and not self.done and self.spec.start in self.cur:
                 out.append(self._bad())
@@ -132,7 +133,10 @@ class Collector:
     def _ok(self):
         self.att += 1
         self.n += 1
-        return {"ok": True, "n": self.n, "att": self.att, **compute(self.cur, self.spec)}
+        # 三个设备时刻（秒）：开始聆听、起点、最后一个计时点。码表算"说话、设备反应、放完回答"各多久用（决策 99）
+        t = [getattr(self, "reset_us", None), self.cur[self.spec.start][0], max(v[0] for v in self.cur.values())]
+        times = [round(x / 1e6, 3) for x in t] if None not in t else None
+        return {"ok": True, "n": self.n, "att": self.att, **compute(self.cur, self.spec), "t": times}
 
     def _bad(self):
         self.att += 1
