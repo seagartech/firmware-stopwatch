@@ -428,6 +428,7 @@ function settingsPage(){
    <div class="inrow"><input type="text" id="set-data" value="${htmlEsc(tilde(dataDraft||SAVED.data_dir||'~/firmware-stopwatch-data'))}" readonly><button class="btn" data-datadir="1">更换位置</button></div>
    <p class="note">每个项目一个文件夹：识别结果、合理范围、每次的原始日志和报告。都在你电脑上。</p>
   </section>
+  <section class="panel"><h2>提示音</h2><p class="note" style="margin:0 0 8px">多轮实测时，收好一轮"叮"一声，没收全低一声。点"试听"听听这台电脑上能不能听到。</p><div class="acts" style="margin:0;align-items:center"><button class="btn" data-beeptest="1">试听</button>${beepMsg?`<span class="note">${beepMsg==='running'?'浏览器的声音是开着的：要是没听到，看看电脑音量、有没有静音、有没有接了别的耳机。':`浏览器没让网页出声（${htmlEsc(beepMsg)}）：再点一次「试听」；还不行的话看看浏览器对这个网页是不是设了"不允许自动播放"。`}</span>`:''}</div></section>
   <div class="acts" style="justify-content:center;margin:4px 0 8px"><button class="btn pri" data-save="1" style="min-width:10em">保存</button></div>
 </div>`;
 }
@@ -877,7 +878,7 @@ function sceneSwitch(k){if(k===scene)return;colStop();col={st:0,att:0,got:[],pha
 let beep=true,actx=null;
 // 声音要在点按钮的那一下打开（Safari 等浏览器不认点击之后才开的声音），顺手放一段无声的，把声音通道打通（决策 115）
 function unlockAudio(){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();const b=actx.createBuffer(1,1,22050),s=actx.createBufferSource();s.buffer=b;s.connect(actx.destination);s.start(0)}catch(e){}}
-let dings=0;
+let dings=0,beepMsg='';
 function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();if(actx.state!=='running')actx.resume();dings++;if(dings<=3||dings%10===0)beepLog('响');const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=bad?330:880;g.gain.value=.25;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(bad?.35:.12))}catch(e){}}
 function beepBtn(){return `<button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>${beep?'<button class="pill" data-beeptest="1">试听</button>':''}`}
 function beepLog(what){try{fetch('/api/client-log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({what,state:actx?actx.state:'none',dings,ua:navigator.userAgent,hidden:document.hidden})})}catch(e){}}
@@ -1409,7 +1410,7 @@ document.addEventListener('click',e=>{
   const sgb=e.target.closest('[data-seg]');if(sgb){segSel=sgb.dataset.seg;render();return}
   const cmv=e.target.closest('[data-cmpvar]');if(cmv){cmpVar=cmv.dataset.cmpvar;render();return}
   const cv=e.target.closest('[data-colvar]');if(cv){colVar=cv.dataset.colvar;render();return}
-  if(e.target.closest('[data-beeptest]')){unlockAudio();ding(false);beepLog('试听');return}
+  if(e.target.closest('[data-beeptest]')){unlockAudio();ding(false);setTimeout(()=>{beepMsg=actx?actx.state:'none';beepLog('试听');render()},400);return}
   if(e.target.closest('[data-beep]')){beep=!beep;render();return}
   const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
   const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
