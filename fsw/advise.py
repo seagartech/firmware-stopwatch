@@ -94,7 +94,7 @@ why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的�
 ## 最后输出
 只输出一个 ```json 代码块：
 ```json
-{{"fixes": [{{"when": ["问题编号"], "seg": "主要涉及的段编号", "why": "…", "impact": "…",
+{{"fixes": [{{"when": ["问题编号"], "seg": "主要涉及的段编号（seg 只写一段；讲了几段就写最主要的那段）", "why": "…", "impact": "…",
   "opts": [{{"name": "…", "how": "…", "size": "…", "rk": "…", "effect": "约 … 秒（估算）", "cost": "…", "work": "小", "wn": "…", "who": "固件研发", "rec": 1}}],
   "rec": "…", "dev": {{"data": "…", "cause": "…", "change": "…", "size": "…", "rk": "…", "verify": "…"}}}}],
  "fine": "…"}}
@@ -128,6 +128,17 @@ def _fail(kind, message, **extra):
     return {"ok": False, "kind": kind, "message": message, **extra}
 
 
+def _norm_seg(f, scenario):
+    """一张卡片讲了几段（AI 写成"P1-P2, P2-P3"）：每段都对得上就收下，段记第一个，全部另存在 segs（决策 119）。"""
+    seg = f.get("seg")
+    if isinstance(seg, list):
+        seg = ", ".join(map(str, seg))
+    if isinstance(seg, str) and seg not in scenario["segments"]:
+        parts = [x.strip() for x in re.split(r"[,，、/;；\s]+", seg) if x.strip()]
+        if len(parts) > 1 and all(x in scenario["segments"] for x in parts):
+            f["seg"], f["segs"] = parts[0], parts
+
+
 def check(data, j, scenario):
     """逐项核对 AI 的卡片；返回 (卡片, 问题列表)。"""
     if not isinstance(data, dict) or not isinstance(data.get("fixes"), list):
@@ -143,6 +154,7 @@ def check(data, j, scenario):
         when = f.get("when") or []
         if not when or any(k not in keys for k in when):
             bad.append(f"{where}的问题编号对不上：{when}")
+        _norm_seg(f, scenario)
         if f.get("seg") is not None and f.get("seg") not in scenario["segments"]:
             bad.append(f"{where}说的段没有这一段：{f.get('seg')}")
         for k, name in (("why", "为什么"), ("impact", "对用户的影响"), ("rec", "建议")):
