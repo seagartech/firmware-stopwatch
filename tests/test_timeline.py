@@ -91,7 +91,7 @@ def test_missing_stage_is_not_made_up(tmp_path):
 def test_round_times_split_into_speak_react_play():
     """每轮记三个设备时刻：开始聆听、你说完（起点）、最后一个计时点。放完回答 = 下一轮开始聆听 - 这一轮最后一个点；最后一轮放到哪不知道，不算。"""
     rs = tln.split_rounds([{"ok": True, "t": [1.0, 3.8, 4.4]}, {"ok": False}, {"ok": True, "t": [10.0, 12.0, 13.0]}])
-    assert rs == {"speak": 4.8, "react": 1.6, "play": 5.6, "ok": 2, "bad": 1}
+    assert rs == {"speak": 4.8, "react": 1.6, "play": 5.6, "idle": 0, "ok": 2, "bad": 1}
 
 
 def test_collector_records_the_three_device_times():
@@ -140,3 +140,13 @@ def test_tech_details_show_the_timing_box_and_manager_view_does_not(tmp_path):
     assert "这次测试本身用了多久" in html and "码表耗时" in html and "等人" in html
     assert "说了 22 句" in html and "补测 1 轮" in html and "c-warn\">能忍" in html
     assert "timingBox(" in grab("dev") and "timingBox(" not in grab("reportPage")  # 负责人版不加
+
+
+def test_long_gap_between_rounds_is_waiting_not_playback():
+    """2026-10-16 真测：第 19、20 轮之间隔了 424 秒（有一轮没算上，人在等）。放回答不会这么久：两轮之间超过 30 秒的部分算等人。"""
+    rs = tln.split_rounds([{"ok": True, "t": [1.0, 3.0, 4.0]}, {"ok": True, "t": [9.0, 11.0, 12.0]}, {"ok": True, "t": [436.0, 438.0, 439.0]}])
+    assert rs["play"] == 5.0 + 30.0 and rs["idle"] == 394.0
+    a = tln.account({"stages": {"collect": {"start": 0, "end": 440}}, "waits": [], "counts": {}}, {**rs, "hints": 0})
+    assert a["books"]["wait"] == 394.0 and a["books"]["device"] == 1 + 1 + 1 + 5 + 30  # 设备反应每轮 1 秒，放回答 5 + 30
+    s = next(x for x in a["stages"] if x["key"] == "collect")
+    assert s["secs"] == 440 - 394 and s["per_round"] == round(46 / 3, 1)
