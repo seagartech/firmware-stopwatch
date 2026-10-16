@@ -122,7 +122,7 @@ def test_backend_records_each_stage(setup, tmp_path):  # noqa: F811
     for k in ("insert", "confirm", "build", "flash", "try", "restore"):
         assert s[k]["secs"] is not None, k
     assert s["identify"]["note"] == "没记下"  # 这个测试没走找关键步骤：照实写，不编
-    assert any(w["why"].startswith("等你准备好") for w in t["waits"])
+    assert not any(w["why"].startswith("等你准备好") for w in t["waits"])  # 决策 107：不再停下等人点"准备好了"
     assert t["counts"]["said"] == 1 and t["counts"]["llm_calls"] == 1
     saved = json.loads((Path(r["project_dir"]) / "timeline.json").read_text(encoding="utf-8"))
     assert "build" in saved["stages"]

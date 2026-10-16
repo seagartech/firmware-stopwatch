@@ -162,6 +162,25 @@ def _open_file(path):
         subprocess.Popen(["xdg-open", path])
 
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _plain(text):
+    """工具输出里控制颜色、进度条的字符去掉（决策 106）：网页上原样显示就是乱码。"""
+    return ANSI.sub("", str(text or "")).replace("\r", "").strip()
+
+
+def _log(job, msg, pct=None, show=None):
+    """编译、烧录、试一次的输出：去掉控制字符，留最近 200 行给"完整日志"；页面上那一行可以换成人话。"""
+    m = _plain(msg)
+    if m:
+        job["tail"] = (job.get("tail") or [])[-199:] + [m]
+    upd = {"log": show or m or job.get("log", "")}
+    if pct is not None:
+        upd["pct"] = pct
+    job.update(upd)
+
+
 def _garbled(line):
     """一行像不像乱码（波特率不对时设备输出就是这样）。"""
     if not line:
@@ -192,7 +211,7 @@ class RestoreBody(BaseModel):
     project_dir: str | None = None   # 码表重开过：按项目文件夹里存的插入记录还原
 
 
-TRY_SECONDS = 45   # 试一次最多等多久：设备烧完重启、连网，人还要喊唤醒词再说一句
+TRY_SECONDS = 180  # 试一次最多等多久（决策 107）：烧完就开始听，设备重启、连网、人做一次要测的事都在这里面；不用人判断"准备好了"
 TRY_SETTLE = 4     # 收到一些计时点后，几秒没有新的就算试通
 
 
@@ -638,7 +657,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             t0 = time.time()
             try:
                 r = bg_builder(a.work, b["target"], b.get("board"), b["idf_path"],
-                               lambda pct, msg: job.update(pct=pct, log=msg))
+                               lambda pct, msg: _log(job, msg, pct))
             except Exception as e:
                 r = {"ok": False, "error": str(e)}
             job["seconds"]["build"] = r.get("seconds", round(time.time() - t0, 1))
@@ -670,7 +689,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 T().wait("flash", time.time() - w0, "等设备插上")
             port = port_finder()[0]
             job.update(status="running", port=port, log=f"设备已连上 {port}")
-            r = device.flash(fsw_fw, port, lambda pct, msg: job.update(pct=pct, log=msg))
+            r = device.flash(fsw_fw, port, lambda pct, msg: _log(job, msg, pct, f"正在写进设备：{pct}%"))
             job["seconds"]["flash"] = r.get("seconds")
             if not r.get("ok"):
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))
@@ -684,29 +703,43 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             return None
 
         def try_once():
-            if job.get("ready_at"):
+            if job.get("ready_at"):  # 码表重开前停在"准备好了"的老状态
                 T().wait("ready", time.time() - job.pop("ready_at"), "等你准备好、点「准备好了」")
             if "try" not in T().data["stages"]:
                 T().begin("try")
             T().count("try_said")
             T().count("clicks")
-            job.update(phase="try", pct=0, got=[], log="等计时点", try_secs=TRY_SECONDS)
+            job.update(phase="try", status="running", pct=0, got=[], log="等设备开机", try_secs=TRY_SECONDS,
+                       try_started=time.time(), dev_seen=None)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
             seen, last = set(), {"t": None}
 
             def on_line(line):
+                if not job.get("dev_seen") and _plain(line):
+                    job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 new = ins.count_marks([line]) & want
                 if new - seen:
                     last["t"] = time.time()
                 seen.update(new)
-                job.update(got=sorted(seen), log=line[:200])
+                job["got"] = sorted(seen)
+                _log(job, line[:300])
 
             def enough():  # 都收到了；或者收到了一些、之后几秒再没有新的，就算试通
                 return seen == want or (seen and last["t"] and time.time() - last["t"] > TRY_SETTLE)
-            try:
-                lines = device.read(job["port"] or port_finder()[0], TRY_SECONDS, on_line, stop=enough)
-            except Exception as e:
-                return _fail(job, "try", "试一次没收到计时点", error=f"打不开调试口：{e}")
+            t_end, lines, err = time.time() + TRY_SECONDS, None, None
+            while lines is None and time.time() < t_end:  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
+                ports = port_finder()
+                if not ports:
+                    time.sleep(wait_step / 4)
+                    continue
+                try:
+                    lines = device.read(ports[0], max(1, t_end - time.time()), on_line, stop=enough)
+                except Exception as e:
+                    err = e
+                    time.sleep(wait_step)
+            if lines is None:
+                return _fail(job, "try", "设备的调试口一直打不开。看看线插好没有，或者有没有别的软件（比如串口监视器）占着它。",
+                             error=f"打不开调试口：{err}" if err else "没看到设备")
             got = ins.count_marks(lines) & want
             job["got"] = sorted(got)
             if not got:
@@ -714,14 +747,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 odd = sum(1 for l in lines if _garbled(l))
                 why = ("收到的都是乱码，多半是波特率不对（码表按 115200 读）。" if lines and odd >= len(lines) / 2 else
                        "常见原因：没触发到；串口被别的软件占着（比如串口监视器）；波特率不对（码表按 115200 读）。")
-                return _fail(job, "try", f"{TRY_SECONDS} 秒内没收到计时点。重来：点「再试一次」，等设备准备好，"
-                                        f"再做一次要测的事（对话类：先喊唤醒词，再说一句）。{why}",
+                return _fail(job, "try", f"{TRY_SECONDS // 60} 分钟里没收到计时点。点「再试一次」，然后做一次要测的事。", why=why,
                              error=f"（{TRY_SECONDS} 秒内没有计时点输出）", offer_restore=job["try_fails"] >= 2)
             job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
             T().end("try")
             return True
 
-        order = ["build", "flash", "ready"] if start != "try" else ["try"]
+        order = ["build", "flash", "try"] if start != "try" else ["try"]  # 烧完直接试一次，不再停下等人点"准备好了"
 
         def run():
             for name in order[order.index(start) if start in order else 0:]:
@@ -1238,16 +1270,40 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         except (OSError, ValueError, KeyError):
             source = None
         cmp = ins.compare(a.work, source) if source and Path(source).is_dir() else {"same": None, "diff": [], "files": 0}
-        out = {"same": cmp["same"], "diff": cmp["diff"][:10], "files": cmp["files"], "flashed": False, "port": None}
+        out = {"same": cmp["same"], "diff": cmp["diff"][:10], "files": cmp["files"], "flashed": False, "port": None, "waiting": False}
         ports = port_finder()
-        if ports and orig_fw.exists():
-            r = device.flash(orig_fw, ports[0], lambda pct, msg: None)
-            out.update(flashed=bool(r.get("ok")), port=ports[0], error=r.get("error"))
+        job = fsw["job"] or {}
+        fsw["job"] = job
+
+        def burn(port):
+            r = device.flash(orig_fw, port, lambda pct, msg: None)
+            out.update(flashed=bool(r.get("ok")), port=port, error=r.get("error"), waiting=False)
             if r.get("ok"):
                 _on_device(a.project_dir, False)
-        if fsw["job"]:
-            fsw["job"].update(status="restored", restore=out)
-        T().end("restore")
+                out["say"] = "已还原：源码放回原样，原版已经烧回设备。"
+            else:
+                out["say"] = f"源码已还原，但原版没烧上：{_plain(r.get('error'))}。插好线再点一次「还原成原版」。"
+            job.update(status="restored", restore=dict(out))
+            T().end("restore")
+
+        if ports and orig_fw.exists():
+            burn(ports[0])
+        elif orig_fw.exists():  # 拔了线：源码先还原，说清楚；插上线就自动把原版烧回去（决策 109）
+            out.update(waiting=True, say="源码已还原。设备没插着，原版还没烧回去：插上设备就自动烧，不用再点。")
+            job.update(status="restored", restore=dict(out))
+
+            def wait_and_burn():
+                t_end = time.time() + 1800
+                while time.time() < t_end and job.get("restore", {}).get("waiting"):
+                    p2 = port_finder()
+                    if p2:
+                        return burn(p2[0])
+                    time.sleep(wait_step)
+            threading.Thread(target=wait_and_burn, daemon=True).start()
+        else:
+            out["say"] = "源码已还原。没找到编好的原版固件，设备上的计时版要等下次编好原版再烧回去。"
+            job.update(status="restored", restore=dict(out))
+            T().end("restore")
         return out
 
     # ---- 编译工具帮装（决策 48）：后台跑乐鑫官方安装方式，点"保存"回首页也照样在装 ----

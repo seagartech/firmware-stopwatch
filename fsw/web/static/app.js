@@ -38,7 +38,7 @@ const D0ok=()=>okRounds().length>0;
 async function advStart(){ADV={status:'running',read:''};fixPick=null;render();
  const r=await fetch('/api/advise/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:REAL.work,steps:IDENT.page.steps,what:hSay,project_dir:REAL.project_dir})});
  const j=await r.json();if(!r.ok){ADV={status:'failed',message:j.detail};render();return}ADV=j;clearInterval(advT);
- advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render()}catch(e){}},1000)}
+ advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render();if(x.status==='done'&&EXP.state==='wait'){EXP.state='saving';render();exportReport(EXP.dir)}else if(x.status==='failed'&&EXP.state==='wait'){EXP.state='';render()}}catch(e){}},1000)}
 function advBox(){if(!ADV||ADV.status==='done')return '';
  if(ADV.status==='failed')return `<div class="errbox"><b>为什么、怎么改还没写出来</b><p style="margin:6px 0">${ADV.message||''}</p><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-advretry="1">重试</button></div></div>`;
  return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(ADV.read)}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
@@ -286,12 +286,22 @@ async function realPick(body,label,board){hErr='';envBack='home';hBoardNeed=fals
  // AI 推荐：只给大模型项目概况（目录、说明文件），一般十几秒；没设置大模型就不扫
  if(r.status!=='needs_board'&&envKey()){const me=REAL;fetch('/api/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:r.work,name:REAL.name,chip:REAL.chip,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint})}).then(x=>x.ok?x.json():{phrases:[]}).catch(()=>({phrases:[]})).then(j=>{if(REAL!==me)return;REAL.ai=j.phrases||[];REAL.aiCalled=!!j.called;hScan=2;if(page==='home')render()})}
  else{REAL.ai=[];hScan=2;render()}}
+// 选板子（决策 104）：一个输入框，边输边在下面列出匹配的板子；模糊匹配（cores3、core s3、m5 cs3 都能找到 m5stack/core-s3）；
+// 方向键选、回车定、Esc 收起，也能直接点
+const bNorm=x=>String(x||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+function boardMatch(boards,q){const qn=bNorm(q),toks=String(q||'').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);if(!qn)return boards.slice();
+ const sub=(h,n)=>{let k=0;for(const c of h)if(c===n[k])k++;return k===n.length};
+ const sc=b=>{const id=bNorm(b.id),last=bNorm(b.id.split('/').pop()),chip=bNorm(b.chip);
+  return last===qn?6:last.startsWith(qn)?5:id.includes(qn)?4:toks.length>1&&toks.every(t=>id.includes(t))?3:chip.includes(qn)?2:sub(id,qn)?1:0};
+ return boards.map(b=>[sc(b),b]).filter(x=>x[0]>0).sort((a,b)=>b[0]-a[0]||a[1].id.length-b[1].id.length||a[1].id.localeCompare(b[1].id)).map(x=>x[1])}
+let hBoardOpen=false,hBoardHi=0;
 function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
- const q=hBoardQ.trim().toLowerCase(),list=REAL.boards.filter(b=>!q||b.id.toLowerCase().includes(q)||(b.chip||'').toLowerCase().includes(q));
- const groups={};list.forEach(b=>{const g=b.id.includes('/')?b.id.split('/')[0]:'其他';(groups[g]=groups[g]||[]).push(b)});
- return `<div class="field" style="margin-top:14px"><label for="h-board">这个项目支持 ${REAL.boards.length} 块板子，你用的是哪块？</label>
-  <div class="inrow"><input type="text" id="h-boardq" placeholder="搜索板子，比如 core-s3" value="${hBoardQ}" style="flex:0 1 14em"><select id="h-board" style="flex:1 1 16em;font:inherit;font-size:15px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)"><option value="">${list.length?'选一块板子':'没有匹配的板子'}</option>${Object.entries(groups).map(([g,bs])=>`<optgroup label="${g}">${bs.map(b=>`<option value="${b.id}" ${REAL.board===b.id?'selected':''}>${b.id}（${b.chip}）</option>`).join('')}</optgroup>`).join('')}</select></div>
-  ${REAL.chip?`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>芯片 ${REAL.chip}（按你选的板子）</p>`:hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}</div>`}
+ const list=boardMatch(REAL.boards,hBoardQ),hi=Math.min(hBoardHi,Math.max(0,list.length-1));
+ const drop=hBoardOpen?`<div class="bdrop" id="h-blist" role="listbox" aria-label="匹配的板子">${list.length?list.slice(0,50).map((b,k)=>`<div class="bopt${k===hi?' hi':''}" role="option" aria-selected="${REAL.board===b.id}" data-pickboard="${b.id}">${b.id}<span class="note">　${b.chip}</span></div>`).join('')+(list.length>50?`<div class="note" style="padding:6px 10px">还有 ${list.length-50} 块，多输几个字缩小范围</div>`:''):'<div class="note" style="padding:8px 10px">没有匹配的板子，换个说法试试（比如只输型号里的几个字）</div>'}</div>`:'';
+ return `<div class="field" style="margin-top:14px"><label for="h-boardq">这个项目支持 ${REAL.boards.length} 块板子，你用的是哪块？</label>
+  <div class="bpick"><input type="text" id="h-boardq" role="combobox" aria-expanded="${hBoardOpen}" aria-controls="h-blist" autocomplete="off" placeholder="输入板子型号里的几个字，比如 core-s3" value="${htmlEsc(hBoardQ)}">${drop}</div>
+  ${REAL.chip?`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>已选 ${REAL.board||''}，芯片 ${REAL.chip}</p>`:hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}</div>`}
+function boardPick(id){const w=document.getElementById('h-what');hSay=w?w.value:hSay;hBoardQ=id;hBoardOpen=false;hBoardHi=0;realPick(REAL.body,REAL.label,id)}
 async function uploadDrop(items){const tok=Math.random().toString(36).slice(2,12),files=[];
  const skip=new Set(['.git','build','managed_components','node_modules']);
  const walk=async(entry,pre)=>{if(entry.isFile){files.push([pre+entry.name,await new Promise((ok,no)=>entry.file(ok,no))])}
@@ -356,7 +366,7 @@ function instApply(j){inst.step=j.step||0;inst.pct=j.pct||0;inst.log=j.log||'';i
  if(j.state==='done'){inst.st=2;clearInterval(instPoll);instPoll=null;if(compPending)compPending=false
   fetch('/api/env').then(r=>r.json()).then(e=>{IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);render()});toast('✓ 编译工具装好了')}
  else if(j.state==='failed'){inst.st=3;clearInterval(instPoll);instPoll=null}
- const b=document.getElementById('instbox');if(page==='settings'&&b)b.innerHTML=installBox();
+ const b=document.getElementById('instbox');if(page==='settings'&&b)morphHTML(b,installBox());
  if(page==='flash')render();else if(page==='home'){const lt=document.querySelector('.lights');if(lt)lt.outerHTML=envStatus()}  // 别的页也跟着显示"正在装 xx%" 
  const lt=document.querySelector('.lights');if(lt&&page==='home')lt.outerHTML=envStatus();
  if(j.state!=='running'&&page==='settings')render()}
@@ -374,7 +384,7 @@ function installBox(){const I=INSTALL[setOS],S=I.steps,n=S.length;
  const color=inst.st===1?'var(--speak)':inst.st===2?'var(--ok)':'var(--bad)';
  return `<div class="status"><span><i class="dot" style="background:${color}"></i>${head}</span></div>
   <ol class="isteps">${list}</ol>
-  ${inst.st!==2?`<div class="ilog"><span class="note">最新一行</span><code>${htmlEsc(inst.log)||'…'}</code><button class="pill">完整日志</button></div>`:''}
+  ${inst.st!==2?`<div class="ilog"><span class="note">最新一行</span><code>${htmlEsc(inst.log)||'…'}</code></div>`:''}
   ${inst.st===3?`<p class="note">已下载的部分留着，重试会从断的地方接着装。多次失败可以换网络，或照手动步骤自己装，装好这里也会自动变绿。</p><div class="acts" style="justify-content:flex-start;margin:6px 0 10px"><button class="btn pri" data-inst="retry">重试</button><button class="btn" data-inst="manual">看手动安装步骤</button></div>`:''}
   ${inst.st===1?`<p class="note">关掉这页没关系，安装在后台继续；关掉码表会停，下次打开从断的地方接着装。</p>`:''}`}
 function settingsPage(){
@@ -460,7 +470,7 @@ function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
 let EXP={dir:'',saved:null};
 const expWhat=()=>realFlash()?(IDENT.page.mapWhat||hSay||''):'';  // 文件名用你自己写的场景说法
 function expDone(){return EXP.saved?`<section class="panel expdone" role="status"><div class="acts" style="justify-content:space-between;align-items:center;margin:0;flex-wrap:wrap"><span>✓ 已导出：<span class="code">${htmlEsc(EXP.saved)}</span></span><span style="display:flex;gap:8px"><button class="pill" data-expshow="1">在访达里显示</button><button class="pill" data-expclose="1">关掉</button></span></div></section>`:''}
-async function exportStart(){try{EXP.dir=(await (await fetch('/api/report/export-dir'+(repKey().startsWith('real')?'':'?demo='+encodeURIComponent(scene)))).json()).dir}catch(e){}pop='export';render()}
+async function exportStart(){EXP.state='';EXP.err='';try{EXP.dir=(await (await fetch('/api/report/export-dir'+(repKey().startsWith('real')?'':'?demo='+encodeURIComponent(scene)))).json()).dir}catch(e){}pop='export';render()}
 async function exportReport(folder){
   const keep={mode,fixTodo},m=document.getElementById('main');
   mode='boss';fixTodo=false;render();const boss=m.innerHTML;mode='dev';render();const dev=m.innerHTML;mode=keep.mode;fixTodo=keep.fixTodo;render();
@@ -480,9 +490,9 @@ async function exportReport(folder){
 <div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
 <p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。勾选的方案和待办是导出那一刻的样子；要改勾选，请在码表里打开这份报告。${log}</p></div>
 <script>function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
-  const r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});const j=await r.json();
-  if(!r.ok){toast('✕ '+(j.detail||'导出没成功'));return}
-  EXP.saved=j.path;histLoad();render();window.scrollTo(0,0);return j.path}
+  let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
+  if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
+  EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path}
 function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
   return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${F.title}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
 function myPick(D,FX){initPick(FX);
@@ -566,7 +576,7 @@ const htmlEsc=t=>String(t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>'
 const BGTIME=()=>{if(BG&&BG.seconds!=null){const t=Math.round(BG.seconds);return t>=60?`${Math.floor(t/60)} 分 ${t%60} 秒`:`${t} 秒`}return FF[scene].bg};
 function bgStartReal(){clearInterval(bgT);bgT=null;clearInterval(bgPoll);bgSrc=hSrc;bgSec=0;bgDur=100;BG={state:'running',pct:0};
  const body={work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min};
- const show=s=>{BG=s;bgSec=s.state==='done'?100:(s.pct||0);bgPill();if(pop==='bg')document.getElementById('popdlg').innerHTML=popHTML();if(page==='home'&&hStage===3&&stepsRead===2)document.getElementById('dlg').innerHTML=modalHTML()};
+ const show=s=>{BG=s;bgSec=s.state==='done'?100:(s.pct||0);bgPill();if(pop==='bg')morphHTML(document.getElementById('popdlg'),popHTML());if(page==='home'&&hStage===3&&stepsRead===2)document.getElementById('dlg').innerHTML=modalHTML()};
  const tick=async()=>{let s;try{s=await (await fetch('/api/bgbuild')).json();if(s.state==='waiting_tool'||s.state==='idle'||s.work!==body.work)s=await api('/api/bgbuild/start',body)}catch(e){return}
   show(s);
   if(s.state==='done'||s.state==='failed'){clearInterval(bgPoll);bgPoll=null;if(s.state==='done'){bgShownDone=Date.now();setTimeout(bgPill,5100)}
@@ -574,17 +584,17 @@ function bgStartReal(){clearInterval(bgT);bgT=null;clearInterval(bgPoll);bgSrc=h
  api('/api/bgbuild/start',body).then(show).catch(()=>{});bgPoll=setInterval(tick,1000)}
 function bgStart(){if(REAL&&REAL.work)return bgStartReal();clearInterval(bgT);bgSrc=hSrc;bgSec=0;bgDur=demoErr==='slowbg'?260:70;
  bgT=setInterval(()=>{if(!envComp())return;bgSec+=7;const done=bgDone();
-  bgPill();if(pop==='bg')document.getElementById('popdlg').innerHTML=popHTML();
+  bgPill();if(pop==='bg')morphHTML(document.getElementById('popdlg'),popHTML());
   if(done){clearInterval(bgT);bgT=null;bgShownDone=Date.now();setTimeout(bgPill,5100);if(page==='flash'||page==='steps'||(page==='home'&&hStage===3))render()}},400)}
 // 真找：后台调用大模型只读源码，这里每秒问一次进度（已等多少秒、读了几处代码、已找到哪几个）
 let IDENT=null,reuseLast=true;
 const LLMN={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code','claude-api':'Claude','claude-code':'本机 Claude Code'};
 const usedLLM=()=>LLMN[(IDENT&&IDENT.provider)||SAVED.llm_provider||setLLM];
 const mmss=x=>{x=Math.round(x||0);return x<60?`${x} 秒`:`${Math.floor(x/60)} 分 ${x%60} 秒`};
-function identApply(j){IDENT=j;readSec=Math.round(j.seconds||0);readFound=(j.found||[]).length;
+function identApply(j){IDENT=j;readSec=j.state==='running'&&j.started?Math.max(0,Math.round(Date.now()/1000-j.started)):Math.round(j.seconds||0);readFound=(j.found||[]).length;
  if(j.state==='done'){clearInterval(readT);readT=null;FF[scene]={...FF[scene],...j.page};mapSel=j.page.mapSel;dropped=new Set();edits={};added=[];alsoFace=true;applyScene();readFound=STEPS.length;stepsRead=2;render();return}
  if(j.state==='failed'){clearInterval(readT);readT=null;stepsRead=3;render();return}
- const b=document.getElementById('readbox');if(b)b.innerHTML=readBox()}
+ const b=document.getElementById('readbox');if(b)morphHTML(b,readBox())}
 async function identStart(retry){clearInterval(readT);stepsRead=1;readSec=0;readFound=0;IDENT=null;if(bgSrc!==hSrc)bgStart();
  const r=await fetch(retry?'/api/identify/retry':'/api/identify/start',{method:'POST',headers:{'Content-Type':'application/json'},body:retry?'{}':JSON.stringify({work:REAL.work,what:hSay,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint,chip:CHIP(),reuse:reuseLast})});
  const j=await r.json();if(!r.ok){IDENT={state:'failed',kind:'start',message:j.detail,found:[]};stepsRead=3;render();return}
@@ -592,7 +602,7 @@ async function identStart(retry){clearInterval(readT);stepsRead=1;readSec=0;read
 function readStart(){if(REAL&&REAL.work)return identStart();clearInterval(readT);stepsRead=1;readSec=0;readFound=0;if(bgSrc!==hSrc)bgStart();
  readT=setInterval(()=>{readSec+=7;if(readSec>=42)readFound=Math.min(STEPS.length,readFound+2);
   if(readFound>=STEPS.length&&readSec>=70){clearInterval(readT);readT=null;stepsRead=2;if(page==='home'&&hStage===3){render()}else if(page==='steps')render();return}
-  const b=document.getElementById('readbox');if(b)b.innerHTML=readBox()},400)}
+  const b=document.getElementById('readbox');if(b)morphHTML(b,readBox())},400)}
 function readBox(){const llm=usedLLM();
  if(REAL&&IDENT)return readBoxReal(llm);
  const st=stepsRead===2?3:readSec<6?0:readFound===0?1:2;
@@ -603,13 +613,15 @@ function readBox(){const llm=usedLLM();
   ${row(2,'它边回答，这里边列出找到的步骤',`${stepsRead===2?'找完了，共':'已找到'} ${readFound} 个`)}</ol>
   ${stepsRead===2?foundList():`${readFound?`<div class="list">${STEPS.slice(0,readFound).map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} 第 ${x.l} 行</span></div>`).join('')}</div>`:''}
   <p class="note">只发了代码，没发任何"标准答案"；结果先存在本机，源码没变下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}`}
+// 没法知道真实进度的等待（大模型读代码）：按一般用时估一个进度，最多到 95%，等完了才满（决策 105）
+const estPct=(sec,typ)=>Math.min(95,Math.round(100*(1-Math.exp(-sec/typ))));
 function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,found=J.found||[];
  const st=done?3:fail?(found.length?2:1):!found.length&&readSec<6?0:found.length?2:1;
  const row=(i,t,d)=>`<li class="istep ${i<st?'ok':i===st?(fail?'bad':'cur'):''}"><b>${i<st?'✓':fail&&i===st?'!':i+1}</b><span>${t}<small>${d}</small></span></li>`;
  if(J.reused)return `<ol class="isteps">${row(0,'挑出要读的代码','码表自己做，不用大模型')}${row(1,'源码和要测的都没变，直接用上次的结果','没有调用大模型，不花钱（设置页可以关掉这个）')}${row(2,'列出找到的步骤',`共 ${STEPS.length} 个`)}</ol>${foundList()}`;
  return `<ol class="isteps">
   ${row(0,'挑出要读的代码',`码表自己做，不用大模型：${htmlEsc(REAL.name)} 复制好的那份源码，大模型只能读、改不了任何文件`)}
-  ${row(1,`交给 ${llm}，等它读完`,`已等 ${mmss(readSec)}。大模型要边读代码边想，这一步没有百分比，一般 1～3 分钟（估算）`)}
+  ${row(1,`交给 ${llm}，等它读完`,`已等 ${mmss(readSec)}，一般 1～3 分钟。${st===1?`<span class="pbar"><i style="width:${estPct(readSec,150)}%"></i></span>进度条是按一般用时估的，不是真实进度`:''}`)}
   ${row(2,'它边回答，这里边列出找到的步骤',`${done?'找完了，共':'已找到'} ${done?STEPS.length:found.length} 个`)}</ol>
   ${done?foundList():`${found.length?`<div class="list">${found.map((n,k)=>{const at=((J.at||[])[k]||'').match(/([^/\s]+):(\d+)$/);return `<div class="srow"><b>${htmlEsc(n)}</b>${at?`<span class="note">${htmlEsc(at[1])} 第 ${at[2]} 行</span>`:''}</div>`}).join('')}</div>`:''}`}
   ${fail?`<p class="note" style="color:var(--bad)">✕ ${J.message||'没找完'}</p><div class="acts" style="justify-content:flex-start;margin:6px 0"><button class="btn pri" data-idretry="1">重试</button><button class="btn" data-go="settings">到设置页换大模型</button>${/no_start|no_end/.test(J.kind||'')?'<button class="btn" data-mclose="1">换个说法写</button>':''}</div>`:''}
@@ -624,7 +636,7 @@ function bgPill(){const el=document.getElementById('bgpill');if(!el)return;let h
  if(bgSrc&&hSrc){if(bgFailed())h=`<button class="bgp warn" data-bgpop="1">原始代码编译没通过</button>`;else if(!envComp()||bgWaitTool())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
   else if(!bgDone())h=`<button class="bgp" data-bgpop="1" title="点开看详情"><span class="spin"></span>后台在编原始代码 ${bgPct()}%</button>`;
   else if(Date.now()-bgShownDone<5000)h=`<span class="bgp ok">✓ 原始代码已编好</span>`}
- el.innerHTML=h}
+ morphHTML(el,h)}
 function bgRow(){const done=bgDone(),noTool=!envComp();
  return `<div class="bgrow">${done?'✓':noTool?'!':'<span class="spin"></span>'} <b>后台在编原始代码（选好源码就开始了）</b>：${done?'编好了，用了 '+BGTIME():noTool?(inst.st===1?'等编译工具装好就开始':'等编译工具装好就开始，烧录前装好就行'):bgPct()+'%（验证期实测约 2 分钟）'}<span class="note">　不用管；插完计时点后编译要用它，没编完不挡「下一步」</span></div>`}
 function bgLight(){return bgDone()?`<span><i class="dot" style="background:var(--ok)"></i>后台：原版编译通过（${BGTIME()}）</span>`:`<span><i class="dot" style="background:var(--warn)"></i>后台：原版还在编（${bgPct()}%），不挡核对和插计时点，编译那步会等它</span>`}
@@ -731,7 +743,7 @@ const FST=()=>{const F=FF[scene];return [
  ['让 AI 插计时点',FSWJ&&FSWJ.reused?'源码和步骤都没变，用上次的插入方案，没调用大模型（设置页可以关掉）；码表自己检查"只加不删"':FSWJ&&FSWJ.prepared?'用你核对步骤时 AI 在后台提前准备好的插法（调用 1 次大模型），不用再等；码表自己检查"只加不删"':FSWJ&&FSWJ.redo?`${htmlEsc(FSWJ.redo)}（这一步一共调用 ${FSWJ.calls} 次大模型）；码表自己检查"只加不删"`:`按你确认的步骤插入计时语句，再调用一次大模型；码表自己检查"只加不删"`,FSWJ&&FSWJ.view?`改了 ${FSWJ.view.files} 个文件：新增 ${FSWJ.view.added} 行，删除 ${FSWJ.view.deleted} 行 ✓`:F.ins],
  ['编译',`${bgDone()?'原始代码已经编过':'等后台把原始代码编完后'}，只重编改过的文件，一般 1 分钟左右（按改动的文件数估算）`,F.build],
  ['烧录到设备','通过 USB 线写进设备','Writing at 0x0012c000... ({p} %)'],
- ['试一次：确认计时点有输出',realFlash()?`烧好后设备会重启。等它准备好，点「准备好了」，然后${trySay()}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`:`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
+ ['试一次：确认计时点有输出',realFlash()?`烧好后设备会重启，码表自己看它开机没有；开机后按提示做一次要测的事，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`:`烧好后设备会重启。请${F.trig}，码表看设备有没有把计时点打出来。只是试一下，不算进数据。`,F.fswLog]]};
 let demoErr=FAIL==='nodev'?'':FAIL,justFlashed=false,flashVar='b',fl={st:0,step:0,pct:0,log:''},flT=null,flNoDev=false,diffOk=false,diffFile=0,swOn=true,onDev='orig';
 function flStop(){clearInterval(flT);flT=null}
 // 真插计时点（选了真源码、真找完步骤时）：后台做"插 → 等你确认 → 编译 → 烧录 → 试一次"，这里每 0.7 秒问一次
@@ -770,26 +782,38 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
   fl.log=FST()[fl.step][2].replace('{n}',Math.round(fl.pct*16.3)).replace('{p}',Math.min(fl.pct,99));
   if(page==='flash')render()},350)}
 function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
- const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code><button class="pill">完整日志</button></div>`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
+ const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code>${fullLogBtn()}</div>${fullLog()}`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
  if(E.kind==='insert')return box('计时点没插上',E.message,'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
  if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过（编译工具、依赖或板子配置的问题），和插的计时点无关，烧录前要先解决。码表不替你改代码。`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
  if(E.kind==='build')return E.step?box('编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点：「${htmlEsc(E.step_name||E.step)}」那一处（${htmlEsc(E.where)}）。<br>码表自己的问题，不用你改代码。`,E.error,`<button class="btn pri" data-flx="drop">撤掉这处计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`)
   :box('编译没通过',`${htmlEsc(E.message)}${E.error?'。报错里没对上是哪一处计时点，看下面的报错，或者重新插入。':''}`,E.error,`<button class="btn pri" data-flx="rebuild">重新编译</button><button class="btn" data-fl="redo">重新插入</button>`);
  if(E.kind==='burn')return box('烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。',E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`);
- return box('试一次没收到计时点',`${htmlEsc(E.message)}${E.offer_restore?'<br>试了几次都不行：可以先还原成原版，设备回到原来的样子，不会坏。':''}`,E.error,`<button class="btn pri" data-flx="retry">再试一次</button>${E.offer_restore?'<button class="btn" data-hrestore="'+htmlEsc(REAL.project_dir)+'">还原成原版</button>':''}`)}
+ return box('试一次没收到计时点',`${htmlEsc(E.message)}${E.why?`<details class="lvwhy" style="margin-top:6px"><summary>可能的原因</summary><p class="note" style="margin:6px 0 0">${htmlEsc(E.why)}</p></details>`:''}${E.offer_restore?'<br>试了几次都不行：可以先还原成原版，设备回到原来的样子，不会坏。':''}`,E.error,`<button class="btn pri" data-flx="retry">再试一次</button>${E.offer_restore?'<button class="btn" data-hrestore="'+htmlEsc(REAL.project_dir)+'">还原成原版</button>':''}`)}
 function flErr(){if(realFlash()&&FSWJ&&FSWJ.err)return flErrReal();const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
  const E={orig:['原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(BG&&BG.message)}`,htmlEsc(BG&&BG.error),`<button class="btn" data-bgpop="1">看详情</button>`],build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} 第 ${p.l} 行）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
   burn:['烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。','A fatal error occurred: The chip stopped responding.',`<button class="btn pri" data-flx="reburn">重新烧录</button>`],
   try:['试一次没收到计时点',`烧录成功，设备也重启了，但${F.trig}后 15 秒内没收到计时点。常见原因：<br>1. 没触发到：再${C.act}一次试试。<br>2. 串口被别的软件占着（比如别的串口监视器）：关掉它。<br>3. 设备在反复重启：点「完整日志」看。`,'（15 秒内没有新输出）',`<button class="btn pri" data-flx="retry">再试一次</button>`]}[fl.err];
- return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code><button class="pill">完整日志</button></div><div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
+ return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code>${fullLogBtn()}</div>${fullLog()}<div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
 function flList(from=0,to=4){const n=to-from+1;
  const li=FST().slice(from,to+1).map(([t,d],j)=>{const i=from+j,done=fl.st===2||(fl.st>=1&&i<fl.step)||(fl.st===3&&i<=fl.step-1),cur=(fl.st===1||fl.st===4||fl.st===5||fl.st===6)&&i===fl.step,bad=(fl.st===4||fl.st===5)&&cur;
   return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small>${REAL?'':'<button class="pill" data-fl="plug">演示：设备已插上</button>'}`:''}</span></li>`}).join('');
  const say=FF[scene].big;
  const N=realFlash()&&FSWJ?FSWJ.total||live().length:live().length,got=realFlash()&&FSWJ?(FSWJ.got||[]).length:Math.min(N,Math.round(fl.pct/100*N));
  const big=fl.st===6&&to>=4?`<div class="bigask"><b>试一次：${trySay()}</b><span class="note">设备烧完会重启。等它准备好（有屏幕的，等回到待命画面），再点「准备好了」；点了以后最多等 ${FSWJ&&FSWJ.try_secs||45} 秒。只是确认计时点能收到，不算进数据。</span><button class="btn pri" data-flx="trygo">准备好了</button></div>`
-  :fl.st===1&&fl.step===4&&to>=4?`<div class="bigask"><b>${realFlash()?'现在：'+trySay():'试一次：'+say}</b><span class="note">${realFlash()?`最多等 ${FSWJ&&FSWJ.try_secs||45} 秒，收到计时点就停。`:FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`:fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点。没收到：${tryMissing().join("、")||"—"}。这一次没走到这一步（有的计时点只在某些情况下才走到，比如喊醒那一下设备不会判断你说完了），不影响多轮实测`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
- return `<ol class="isteps">${li}</ol>${big}${fl.st===1&&fl.step!==4?`<div class="ilog"><span class="note">最新一行</span><code>${fl.log||'…'}</code><button class="pill">完整日志</button></div>`:''}`}
+  :fl.st===1&&fl.step===4&&to>=4?(realFlash()?tryBox(got,N):`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`):fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点。没收到：${tryMissing().join("、")||"—"}。这一次没走到这一步（有的计时点只在某些情况下才走到，比如喊醒那一下设备不会判断你说完了），不影响多轮实测`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
+ return `<ol class="isteps">${li}</ol>${big}${fl.st===1&&fl.step!==4?`<div class="ilog"><span class="note">${fl.step===1&&realFlash()?'正在':'最新一行'}</span><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`:''}`}
+// 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
+const tryAct=()=>{const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
+function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
+ if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;
+ return `<div class="bigask"><b>现在对设备：${tryAct()}</b>
+  <span class="note">设备已经开机了。只是确认计时点能收到，不算进数据。</span>
+  ${idle?`<span class="note" style="color:var(--warn)">已经 ${since} 秒没收到计时点：设备可能还在联网，或者还没被唤醒。请现在再做一次。</span>`:''}
+  <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点　·　设备最新一行：<code>${htmlEsc(J.log||'…')}</code></span></div>`}
+// 完整日志（决策 106）：编译、烧录、试一次时设备和工具的输出，最近 200 行，去掉了控制字符
+let showFull=false;
+const fullLogBtn=()=>realFlash()&&FSWJ&&(FSWJ.tail||[]).length?`<button class="pill" data-fulllog="1">${showFull?'收起日志':'完整日志'}</button>`:'';
+const fullLog=()=>showFull&&realFlash()&&FSWJ&&(FSWJ.tail||[]).length?`<pre class="logtail">${htmlEsc(FSWJ.tail.join('\n'))}</pre>`:'';
 
 let diffOpen=new Set();
 function diffViewReal(){const V=FSWJ.view;
@@ -1124,7 +1148,7 @@ function modalHTML(){const F=FF[scene],llm=usedLLM();
    <p class="note" style="margin:0">接下来码表把代码交给大模型（${llm}），找出中间经过的关键步骤，一般 1～3 分钟。</p>
    <div class="acts"><button class="btn" data-mclose="1" id="dlg-back">关闭</button><button class="btn pri" data-mfind="1">开始找关键步骤</button></div>`;
  if(hStage===3)return `<h2 id="dlg-t">${stepsRead===2?'找完了':stepsRead===3?'没找完':'正在找关键步骤'}</h2><p class="note" style="margin-top:0">${pName} · 要测：${meant}</p>${stepsRead===2?`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(llm)}</span>${bgFoundSpan()}</div>`:''}<div id="readbox">${readBox()}</div>
-   <div class="acts" style="justify-content:flex-end"><button class="btn pri" ${stepsRead===2?'data-mnext="1"':blk('',stepsRead===3?'没找完，点「重试」找完后才能点':'还在找，找完就能点')}>下一步</button></div>`;
+   <div class="acts" style="justify-content:flex-end"><button class="btn pri" ${stepsRead===2?'data-mnext="1"':blk('',stepsRead===3?'没找完，点「重试」找完后才能点':'AI 还在读代码，读完才能点下一步（一般 1～3 分钟）')}>下一步</button></div>`;
  const rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
  return `<h2 id="dlg-t">找完了</h2><div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(llm)}</span>${bgFoundSpan()}</div>
    <p style="margin:10px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
@@ -1133,7 +1157,13 @@ function modalHTML(){const F=FF[scene],llm=usedLLM();
    <div class="acts" style="justify-content:flex-end"><button class="btn pri" data-mnext="1">下一步</button></div>`}
 function popHTML(){const F=FF[scene],C=CC();
  const box=(t,body,acts)=>`<h2>${t}</h2>${body}<div class="acts">${acts}</div>`;
- if(pop==='export')return box('导出报告',`<p class="note" style="margin:0 0 8px">存成一个网页文件：断网也能打开，可以直接发给别人。</p><dl class="kv" style="grid-template-columns:4em 1fr"><dt>存到</dt><dd><div class="inrow"><input type="text" id="exp-dir" value="${htmlEsc(tilde(EXP.dir))}" readonly><button class="btn" data-expdir="1">换个文件夹</button></div><p class="note" style="margin:4px 0 0">默认放在被测源码的同级目录。</p></dd><dt>文件名</dt><dd><span class="code">${htmlEsc((expWhat()||'报告').replace(/[\\/:*?"<>|\s]+/g,'-'))}_测完时间.html</span></dd></dl>`,`<button class="btn pri" data-expgo="1">导出</button><button class="btn" data-pop="close">取消</button>`);
+ if(pop==='export'){const busy=ADV&&ADV.status==='running'&&repKey().startsWith('real');
+  if(EXP.state==='saving')return box('导出报告','<p><span class="spin"></span> 正在存……</p>','');
+  if(EXP.state==='ok')return box('导出报告',`<p>✓ 已导出：</p><p class="code" style="overflow-wrap:anywhere">${htmlEsc(EXP.saved)}</p>${EXP.partial?'<p class="note" style="color:var(--warn)">导出时"为什么、怎么改"还没写完，这份里没有建议。写完后再导出一份。</p>':''}`,`<button class="btn pri" data-hopen="${htmlEsc(EXP.saved)}">打开看看</button><button class="btn" data-pop="close">关闭</button>`);
+  if(EXP.state==='fail')return box('导出报告',`<p style="color:var(--bad)">✕ 没导出成功：${htmlEsc(EXP.err)}</p>`,`<button class="btn pri" data-expgo="1">再试一次</button><button class="btn" data-pop="close">取消</button>`);
+  if(EXP.state==='wait')return box('导出报告',`<p><span class="spin"></span> 等"为什么、怎么改"写完，写完马上自动导出。</p>`,`<button class="btn" data-expgo="1">不等了，现在导出</button><button class="btn" data-pop="close">取消</button>`);
+  const advFail=ADV&&ADV.status==='failed'&&repKey().startsWith('real');
+  return box('导出报告',`${busy?'<div class="why" style="border-left-color:var(--warn);margin:0 0 10px">"为什么、怎么改"还在写（AI 一般 1～2 分钟）。现在导出的话，报告里没有建议。</div>':advFail?'<div class="why" style="border-left-color:var(--bad);margin:0 0 10px">"为什么、怎么改"没写成，现在导出的报告里没有建议。可以先关掉这个框，在报告里点「重试」，写好再导出。</div>':''}<p class="note" style="margin:0 0 8px">存成一个网页文件：断网也能打开，可以直接发给别人。</p><dl class="kv" style="grid-template-columns:4em 1fr"><dt>存到</dt><dd><div class="inrow"><input type="text" id="exp-dir" value="${htmlEsc(tilde(EXP.dir))}" readonly><button class="btn" data-expdir="1">换个文件夹</button></div><p class="note" style="margin:4px 0 0">默认放在被测源码的同级目录。</p></dd><dt>文件名</dt><dd><span class="code">${htmlEsc((expWhat()||'报告').replace(/[\\/:*?"<>|\s]+/g,'-'))}_测完时间.html</span></dd></dl>`,busy?`<button class="btn pri" data-expwait="1">等写完自动导出</button><button class="btn" data-expgo="1">现在就导出</button><button class="btn" data-pop="close">取消</button>`:`<button class="btn pri" data-expgo="1">导出</button><button class="btn" data-pop="close">取消</button>`)}
  if(pop==='readlog')return box('读取过程',`<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(usedLLM())}</span></div>${readBox()}`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='steps'){const n=live().length,mid=STEPS.filter(x=>x.sure!=='高').length;
   return box('找完了',`<p>找到 ${STEPS.length} 个关键步骤。接下来按顺序做三件事：</p><ol class="notes" style="font-size:15px;color:var(--fg)">${F.sideAsk?`<li>回答一个问题："${F.sideAsk.q}"要不要一起测</li>`:''}<li>看一眼 ${mid} 个需核对的步骤，对不对</li><li>点「确认，去插计时点」</li></ol>`,
@@ -1158,7 +1188,10 @@ function flowBar(){if(!flow&&page!=='home')return '';let st;
  const ci=st.findIndex(x=>x[0]===page);if(flow&&ci>flowMax)flowMax=ci;const mx=flow?flowMax:ci;
  return `<ol class="flow" aria-label="测量步骤"><span class="note" style="margin-right:4px">${flow==='retest'?'改完再测':'第一次测'}：</span>${st.map(([id,n,sk],i)=>`<li>${sk?`<span class="fs skip">${n}（跳过）</span>`:i===ci?`<span class="fs cur ${page==='flash'&&(fl.st===5||fl.st===4)?'bad':''}">${page==='flash'&&(fl.st===5||fl.st===4)?'! ':i<mx?'✓ ':''}${n}</span>`:i<mx?`<button class="fs done" data-go="${id}" data-keepflow="1" title="回去看看，已做的不会清掉">✓ ${n}</button>`:i===mx?`<button class="fs goon" data-go="${id}" data-keepflow="1" title="回到做到一半的这一步">${n}（做到这里）</button>`:`<span class="fs">${n}</span>`}</li>`).join('')}</ol>${flow&&ci<mx?`<p class="note" style="margin:-4px 0 10px">在回看已做完的「${st[ci][1]}」，后面已做的都留着。只有在这里改了东西，后面的步骤才要重做。</p>`:''}`}
 let RESTORE=null;
-function restoreBox(sc){const r=restored[sc];if(r&&RESTORE&&realFlash()){const R=RESTORE;return `<section class="panel"><h2>设备上现在是：${R.flashed?'原版':'计时版（源码已还原）'}</h2><p class="note" style="margin:0">${R.same?`✓ 源码已还原，和你原来的源码逐字节比对一致（${R.files} 个文件）。`:R.same===false?`✕ 源码还原后和你原来的源码有 ${R.diff.length} 个文件不一样：${R.diff.map(htmlEsc).join('、')}。`:'源码已还原。'}${R.flashed?`<br>✓ 已把原版烧回设备（${htmlEsc(R.port)}）。`:R.error?`<br>✕ 原版没烧上：${htmlEsc(R.error)}`:'<br>设备没插，原版还没烧回去：插上设备后再点一次「还原成原版」。'}</p>${R.flashed?'':`<div class="acts" style="margin:8px 0 0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
+// 拔了线还原：插上后后台自动烧回原版，这里跟着看结果
+let restoreT=null;
+function restoreWatch(){clearInterval(restoreT);restoreT=setInterval(async()=>{try{const j=await (await fetch('/api/fsw')).json();const R=j.restore;if(R&&!R.waiting){clearInterval(restoreT);restoreT=null;RESTORE=R;onDev=R.flashed?'orig':onDev;toast((R.flashed?'✓ ':'✕ ')+(R.say||''));render()}}catch(e){}},1500)}
+function restoreBox(sc){const r=restored[sc];if(r&&RESTORE&&realFlash()){const R=RESTORE;return `<section class="panel"><h2>设备上现在是：${R.flashed?'原版':'计时版（源码已还原）'}</h2><p class="note" style="margin:0">${R.same?`✓ 源码已还原，和你原来的源码逐字节比对一致（${R.files} 个文件）。`:R.same===false?`✕ 源码还原后和你原来的源码有 ${R.diff.length} 个文件不一样：${R.diff.map(htmlEsc).join('、')}。`:'源码已还原。'}${R.flashed?`<br>✓ 已把原版烧回设备（${htmlEsc(R.port)}）。`:R.waiting?'<br><span class="spin"></span> 设备没插着，原版还没烧回去：插上设备就自动烧，不用再点。':R.error?`<br>✕ 原版没烧上：${htmlEsc(R.error)}`:'<br>原版还没烧回去。'}</p>${R.flashed||R.waiting?'':`<div class="acts" style="margin:8px 0 0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
  return `<section class="panel"><h2>设备上现在是：${r?'原版':'计时版'}</h2>${r?'<p class="note" style="margin:0">✓ 已还原成原版，和你的原版逐字节比对一致。</p>':`<p class="note" style="margin:0 0 8px">计时版每过一个计时点会多打印一行，交货、演示前请还原。<br>还原是直接烧读代码时编好的那份原版，烧完逐字节比对。还要接着测就先别还原。</p><div class="acts" style="margin:0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
 function retestEntry(){return `<section class="panel"><h2>改完以后</h2><p class="note" style="margin:0 0 8px">照上面的建议改完代码、换了模型或升级了版本，点这里再测一次。<br>码表先查改了什么，能跳过的步骤自动跳过，测完直接和这次比。</p><div class="acts" style="margin:0"><button class="btn pri" data-retest="${scene}">改完了，再测一次</button></div></section>`}
 
@@ -1198,15 +1231,31 @@ function retestPage(){const P=PROJ.find(p=>p.scene===scene),R=RT[scene];
  ${conf}
  <section class="panel"><h2>这次改了什么</h2><p class="note" style="margin:-4px 0 8px">${C.whatHint}<br>会写进前后对比和报告。</p><textarea class="rtta" id="rt-what">${C.what}${C.what.endsWith('：')?RT[scene].whatFill:''}</textarea>
   <div class="acts">${C.choice?'':`<button class="btn pri" data-rtgo="1">${C.steps[1][1]?(C.steps[0][1]?'先确认计时点，再插点烧录':'开始插点、烧录'):'开始多轮实测'}</button>`}<button class="btn" data-go="report">不测了，回报告</button></div></section></div>`}
+// 只改变了的地方（决策 103）：页面每隔零点几秒就要更新一次（读秒、进度、收到的轮），以前整页重画，
+// 再加上换页的淡入动画，整页一直闪；输入框也会丢掉光标。现在新旧对比，只改动不一样的节点。
+function morphAttrs(a,b){for(const {name} of [...a.attributes])if(!b.hasAttribute(name)&&!(a.tagName==='DETAILS'&&name==='open'))a.removeAttribute(name);
+ for(const {name,value} of [...b.attributes])if(a.getAttribute(name)!==value)a.setAttribute(name,value)}
+function morphNode(a,b){
+ if(a.nodeType!==b.nodeType||a.nodeName!==b.nodeName){a.replaceWith(b);return}
+ if(a.nodeType!==1){if(a.nodeValue!==b.nodeValue)a.nodeValue=b.nodeValue;return}
+ if(a.isEqualNode(b))return;
+ morphAttrs(a,b);
+ if(a.tagName==='INPUT'||a.tagName==='TEXTAREA'){if(a!==document.activeElement){if(a.type==='checkbox'||a.type==='radio')a.checked=b.hasAttribute('checked');else if(b.hasAttribute('value'))a.value=b.getAttribute('value')}return}
+ morphKids(a,b);
+ if(a.tagName==='SELECT'&&a!==document.activeElement){const o=[...b.options].findIndex(x=>x.hasAttribute('selected'));if(o>=0)a.selectedIndex=o}}
+function morphKids(a,b){const x=[...a.childNodes],y=[...b.childNodes];
+ y.forEach((n,i)=>{if(x[i])morphNode(x[i],n);else a.appendChild(n)});
+ for(let i=y.length;i<x.length;i++)x[i].remove()}
+function morphHTML(el,html){const t=document.createElement(el.tagName);t.innerHTML=html;morphKids(el,t)}
 function render(){if(!scene||!SCENES[scene])return;applyScene();
   if(page==='report'&&(!JREP||JREP._key!==repKey()))fetchReport();
   if(page==='report'&&JREP&&JREP._key===repKey()&&repKey().startsWith('real')&&!ADV&&D0ok())advStart();
   const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
   document.getElementById('nav-home').toggleAttribute('aria-current',page==='home');document.getElementById('nav-set').toggleAttribute('aria-current',page==='settings');
-  document.getElementById('flowbar').innerHTML=flowBar();bgPill();
+  morphHTML(document.getElementById('flowbar'),flowBar());bgPill();
   const isReport=page==='report',isHome=page==='home';
   document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
-  const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;document.getElementById('crumb').innerHTML=isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'';
+  const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;morphHTML(document.getElementById('crumb'),isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'');
   let body;
   if(isHome)body=HOME[homeVar].html();
   else if(isReport)body=reportPage(D);
@@ -1218,11 +1267,12 @@ function render(){if(!scene||!SCENES[scene])return;applyScene();
   else if(page==='retest')body=retestPage();
   else if(page==='range')body=rangePage();
   else body=`<div class="panel todo">这一页还没做样子，按顺序下一步做。</div>`;
-  const mEl=document.getElementById('main'),keepOpen=mEl.dataset.pg===page?new Set([...mEl.querySelectorAll('details[open] > summary')].map(x=>x.textContent)):new Set();
-  mEl.innerHTML=`<div class="view">${body}</div>`;mEl.dataset.pg=page;mEl.querySelectorAll('details > summary').forEach(x=>{if(keepOpen.has(x.textContent))x.parentElement.open=true});
+  const mEl=document.getElementById('main'),same=mEl.dataset.pg===page+'|'+mode&&mEl.firstElementChild;
+  if(same)morphHTML(mEl.firstElementChild,body);else mEl.innerHTML=`<div class="view">${body}</div>`;  // 换页才整页换（带淡入），同一页只改变了的地方
+  if(mEl.dataset.pg!==page+'|'+mode)mEl.dataset.pg=page+'|'+mode;
   const md=document.getElementById('modal');md.hidden=!(isHome&&hStage>=2);
-  if(!md.hidden)document.getElementById('dlg').innerHTML=modalHTML();
-  const pp=document.getElementById('pop');pp.hidden=!pop;if(pop)document.getElementById('popdlg').innerHTML=popHTML();
+  if(!md.hidden)morphHTML(document.getElementById('dlg'),modalHTML());
+  const pp=document.getElementById('pop');pp.hidden=!pop;if(pop)morphHTML(document.getElementById('popdlg'),popHTML());
   document.querySelectorAll('[data-need]').forEach(b=>{if(b.previousElementSibling&&b.previousElementSibling.classList.contains('gate'))return;const g=document.createElement('span');g.className='gate';g.textContent='还差：'+b.dataset.msg;b.before(g)});
   {const m=document.getElementById('main');const need=page==='steps'&&stepsRead===2&&alsoFace===null?'#sideask':null;const el=need&&m.querySelector(need);if(el)el.classList.add('need')}
   document.getElementById('v-boss').setAttribute('aria-pressed',String(mode==='boss'));
@@ -1294,11 +1344,12 @@ document.addEventListener('click',e=>{
    if(a==='paste'){const v=(document.getElementById('h-paste').value||'').trim();if(!v){hErr='先粘贴一个路径。';render();return}realPick({path:v});return}
    api('/api/source/pick',{kind:a==='zip'?'zip':'dir'}).then(r=>{if(r.path)realPick({path:r.path})}).catch(()=>{hErr='打不开选择窗口，可以把路径粘贴到下面的框里。';render()});return}
   const pr=e.target.closest('[data-pickroot]');if(pr){realPick({path:pr.dataset.pickroot});return}
-  const rs=e.target.closest('[data-restore]');if(rs&&realFlash()&&FSWJ&&rs.closest('#main')&&page==='report'){rs.disabled=true;rs.textContent='正在还原……';
-   api('/api/fsw/restore',{}).then(j=>{RESTORE=j;restored[rs.dataset.restore]=true;onDev=j.flashed?'orig':onDev;render()}).catch(()=>{toast('✕ 码表后台没有回应');render()});return}
+  const rs=e.target.closest('[data-restore]');if(rs&&realFlash()&&rs.closest('#main')&&page==='report'){rs.disabled=true;rs.textContent='正在还原……';  // 决策 109：一定问后台，结果说清楚
+   api('/api/fsw/restore',{project_dir:REAL.project_dir}).then(j=>{if(j.detail){toast('✕ '+j.detail);rs.disabled=false;rs.textContent='还原成原版';return}
+    RESTORE=j;restored[rs.dataset.restore]=true;onDev=j.flashed?'orig':onDev;toast((j.flashed?'✓ ':'')+(j.say||'已还原'));render();if(j.waiting)restoreWatch()}).catch(()=>{toast('✕ 码表后台没有回应，看看运行码表的窗口是不是关了');rs.disabled=false;rs.textContent='还原成原版'});return}
   if(rs){restored[rs.dataset.restore]=true;render();return}
   const sgo=e.target.closest('[data-setgo]');if(sgo){page='settings';render();setTimeout(()=>{const el=document.getElementById(sgo.dataset.setgo);if(el){el.scrollIntoView({block:'start'});el.classList.add('flash')}},30);return}
-  const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-board');b&&b.focus();return}const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
+  const sg=e.target.closest('[data-stage]');if(sg){const i=document.getElementById('h-what');const n=+sg.dataset.stage;if(n===2){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-boardq');b&&b.focus();return}const v=(i&&i.value.trim())||'';if(!v){hNeed=true;render();return}hNeed=false;hSay=v.replace(/[<>&"]/g,'');if(!envKey()){pop='env';render();return}}hStage=n;render();return}
   const os=e.target.closest('[data-os]');if(os){setOS=os.dataset.os;if(inst.st!==2){instStop();inst={st:0,step:0,pct:0,log:'',timer:null}}render();return}
   const ins=e.target.closest('[data-inst]');if(ins){const a=ins.dataset.inst;if(a==='manual'){inst.manual=true;render();const m=document.getElementById('manual');m&&m.scrollIntoView({block:'center'});return}instStart(a==='retry');render();return}
   const svr=e.target.closest('[data-stepvar]');if(svr){stepsVar=svr.dataset.stepvar;render();return}
@@ -1334,14 +1385,16 @@ document.addEventListener('click',e=>{
   const cp=e.target.closest('[data-copy]');if(cp){const el=document.getElementById(cp.dataset.copy);if(el){try{navigator.clipboard.writeText(el.textContent)}catch(_){};copied=el.dataset.who;render();setTimeout(()=>{copied=null;if(page==='report')render()},1500)}return}
   if(e.target.closest('#v-exp')){exportStart();return}
   if(e.target.closest('[data-expdir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p&&p.path){EXP.dir=p.path;render()}});return}
-  if(e.target.closest('[data-expgo]')){pop=null;render();exportReport(EXP.dir);return}
+  if(e.target.closest('[data-expgo]')){pop='export';EXP.state='saving';render();exportReport(EXP.dir);return}  // 对话框留着，存好、没存成都在框里说
+  if(e.target.closest('[data-expwait]')){pop='export';EXP.state='wait';render();return}
   if(e.target.closest('[data-expshow]')){api('/api/open-folder',{path:EXP.saved}).then(j=>toast(j.ok?'✓ 已在访达里打开':'✕ '+(j.detail||'打不开')));return}
   if(e.target.closest('[data-expclose]')){EXP.saved=null;render();return}
   const hr=e.target.closest('[data-hrestore]');if(hr){hr.disabled=true;hr.textContent='正在还原……';  // 码表重开过也认得：按项目文件夹里存的插入记录还原
-   api('/api/fsw/restore',{project_dir:hr.dataset.hrestore}).then(j=>{toast(j.detail?'✕ '+j.detail:j.flashed?'✓ 已还原：源码放回原样，设备烧回原版':'✓ 源码已还原；设备没插，插上后再点一次把原版烧回去');histLoad().then(render)});return}
+   api('/api/fsw/restore',{project_dir:hr.dataset.hrestore}).then(j=>{toast(j.detail?'✕ '+j.detail:(j.flashed?'✓ ':'')+(j.say||'已还原'));if(j.waiting)restoreWatch();histLoad().then(render)});return}
   const ho=e.target.closest('[data-hopen]');if(ho){api('/api/history/open',{path:ho.dataset.hopen}).then(j=>toast(j.ok?'✓ 已用浏览器打开这次的报告':'✕ '+(j.detail||'打不开')));return}
   const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}
   const rpv=e.target.closest('[data-repvar]');if(rpv){repVar=rpv.dataset.repvar;render();return}
+  if(e.target.closest('[data-fulllog]')){showFull=!showFull;render();return}
   const td=e.target.closest('[data-todo]');if(td){fixTodo=!fixTodo;render();return}
   const sgb=e.target.closest('[data-seg]');if(sgb){segSel=sgb.dataset.seg;render();return}
   const cmv=e.target.closest('[data-cmpvar]');if(cmv){cmpVar=cmv.dataset.cmpvar;render();return}
@@ -1354,13 +1407,20 @@ document.addEventListener('click',e=>{
    api('/api/llm/test',{provider:setLLM,key:v&&!v.startsWith('•')?v:null}).then(r=>{keyTested=!!r.ok;keyErr=r.ok?'':r.message;render()}).catch(()=>{keyErr='码表后台没有回应，看看运行码表的窗口是不是关了。';render()});return}
   const fil=e.target.closest('[data-fill]');if(fil){const i=document.getElementById('h-what');if(i)i.value=fil.dataset.fill;hSay=fil.dataset.fill;return}
 });
-document.addEventListener('input',e=>{if(e.target.id==='h-boardq'){hBoardQ=e.target.value;const p=e.target.selectionStart;render();const q=document.getElementById('h-boardq');if(q){q.focus();q.setSelectionRange(p,p)}}});
+document.addEventListener('input',e=>{if(e.target.id==='h-boardq'){hBoardQ=e.target.value;hBoardOpen=true;hBoardHi=0;render()}});
+document.addEventListener('focusin',e=>{if(e.target.id==='h-boardq'&&!hBoardOpen){hBoardOpen=true;render()}});
+document.addEventListener('focusout',e=>{if(e.target.id==='h-boardq')setTimeout(()=>{if(hBoardOpen&&document.activeElement&&document.activeElement.id!=='h-boardq'){hBoardOpen=false;render()}},150)});
+document.addEventListener('mousedown',e=>{const o=e.target.closest&&e.target.closest('[data-pickboard]');if(o){e.preventDefault();boardPick(o.dataset.pickboard)}});
+document.addEventListener('keydown',e=>{if(e.target.id!=='h-boardq'||!REAL)return;const list=boardMatch(REAL.boards||[],hBoardQ);
+ if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();hBoardOpen=true;hBoardHi=Math.max(0,Math.min(list.length-1,hBoardHi+(e.key==='ArrowDown'?1:-1)));render();const h=document.querySelector('#h-blist .hi');h&&h.scrollIntoView({block:'nearest'})}
+ else if(e.key==='Enter'&&hBoardOpen&&list.length){e.preventDefault();boardPick(list[Math.min(hBoardHi,list.length-1)].id)}
+ else if(e.key==='Escape'){hBoardOpen=false;render()}});
 document.addEventListener('dragover',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(z){e.preventDefault();z.style.borderColor='var(--speak)'}});
 document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(z)z.style.borderColor=''});
 document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(!z)return;e.preventDefault();uploadDrop(e.dataTransfer.items)});
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
-document.addEventListener('change',e=>{if(e.target.id==='col-n'){const n=Math.round(+e.target.value);if(n>=3&&n<=100){colN=n;render()}else{toast('测几轮要在 3～100 轮之间');e.target.value=[10,20,30].includes(colN)?'':colN}return}if(e.target.id==='h-board'){const w=document.getElementById('h-what');hSay=w?w.value:hSay;if(e.target.value)realPick(REAL.body,REAL.label,e.target.value);return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.id==='set-reuse'){reuseLast=e.target.checked;return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
+document.addEventListener('change',e=>{if(e.target.id==='col-n'){const n=Math.round(+e.target.value);if(n>=3&&n<=100){colN=n;render()}else{toast('测几轮要在 3～100 轮之间');e.target.value=[10,20,30].includes(colN)?'':colN}return}if(e.target.id==='h-board'){return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.id==='set-reuse'){reuseLast=e.target.checked;return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
 document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){

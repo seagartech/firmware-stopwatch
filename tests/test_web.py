@@ -264,10 +264,11 @@ def test_device_status_comes_from_one_place():
     assert "'设备已连上 '+(PORTS[0]||(setOS==='mac'?'/dev/cu.usbmodem1101':'COM3'))" not in js
 
 
-def test_try_once_waits_for_you_to_be_ready():
-    """试一次：先大字提示"先喊唤醒词，再说一句"，点"准备好了"才开始。"""
+def test_try_once_watches_the_device_instead_of_asking_ready():
+    """决策 107、108：烧完不让人判断"准备好了"：设备重启中、开机了分开说，开机后一句话说现在做什么；久了没收到再提醒一句。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
-    assert "先喊唤醒词，再说一句" in js and "准备好了" in js and "data-flx=\"trygo\"" in js and "'ready_try'" in js
+    assert "function tryBox(" in js and "设备刚烧完，正在重启" in js and "现在对设备：" in js and "J.dev_seen" in js
+    assert "可能的原因" in js
 
 
 def test_home_history_is_real_only_demo_only_in_demo_entry():
