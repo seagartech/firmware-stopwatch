@@ -54,3 +54,8 @@ def test_listen_button_reopens_the_sound_channel():
     """Safari 声音状态是开着、喇叭却没声音（2026-10-16 实测）：点"试听"先关掉重开声音通道（决策 136）。"""
     assert "actx.close()" in grab("resetAudio") and "actx=null" in grab("resetAudio")
     assert "[data-beeptest]')){resetAudio();unlockAudio();" in JS
+
+
+def test_settings_say_what_to_do_when_the_beep_is_silent():
+    """Safari 声音卡住（状态开着、没声音），退出重开就好了（2026-10-16 用户实测，决策 138）。"""
+    assert "Command + Q" in JS
