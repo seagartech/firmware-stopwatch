@@ -176,7 +176,8 @@ def test_collect_page_reads_rounds_from_backend():
     """任务 15：多轮实测的每轮数据由后台读设备输出算出来，不再直接拿演示数据里的数。"""
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert "/api/collect/start" in js and "/api/collect/stop" in js and "fetch('/api/collect')" in js
-    assert "EventSource" not in js and "D.rounds[col.got" not in js
+    # 旧的演示数据流（/api/device/stream）不用了；决策 102 起多轮实测进度改用 /api/collect/events 推送
+    assert "/api/device/stream" not in js and "D.rounds[col.got" not in js
 
 
 def test_report_uses_backend_judgment():

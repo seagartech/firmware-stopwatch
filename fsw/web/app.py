@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -822,6 +822,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 quiet["lines"] += 1
                 quiet["odd"] += _garbled(line)
             for r in coll.feed(line):
+                if r.get("half"):  # 开始读时这一次已经过了起点：不算，提示再做一次（决策 101）
+                    job["half"] = job.get("half", 0) + 1
+                    job["half_hint"] = ("这一次开头没收到（码表开始听的时候它已经开始了），不算。"
+                                        "刚才要是在做要测的事，再做一次；只是唤醒设备的话，不用管。")
+                    continue
+                if r["ok"]:
+                    job["half_hint"] = ""
                 job["rounds"].append(r)
             job["progress"], job["last"] = list(coll.progress()), coll.last
             if ok_count() >= job["target"]:
@@ -1180,6 +1187,29 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.get("/api/collect")
     def collect_status():
         return _col_view(col["job"]) if col["job"] else {"status": "idle", "rounds": []}
+
+    @app.get("/api/collect/events")
+    def collect_events():
+        """多轮实测的进度推给网页（服务器推送）：一有变化就推，网页在后台、定时查询被浏览器拖慢时也能马上"叮"一声（决策 102）。
+        测完（或停下）推最后一次就结束；网页断了会退回定时查询。"""
+        def gen():
+            last, beat, job0 = None, time.time(), col["job"]
+            while True:
+                job = col["job"]
+                if job is not job0 and job0 is not None:
+                    return  # 换了一次新的测量：让网页重新连
+                v = _col_view(job) if job else {"status": "idle", "rounds": []}
+                s = json.dumps(v, ensure_ascii=False, default=str)
+                if s != last:
+                    last, beat = s, time.time()
+                    yield f"data: {s}\n\n"
+                    if v.get("status") in ("done", "stopped", "idle"):
+                        return
+                elif time.time() - beat > 15:
+                    beat = time.time()
+                    yield ": 还在\n\n"  # 心跳，免得连接被当成断了
+                time.sleep(0.1)
+        return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/fsw")
     def fsw_status():

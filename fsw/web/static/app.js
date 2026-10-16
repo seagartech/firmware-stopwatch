@@ -890,10 +890,16 @@ function realD(){const P=IDENT.page,[sShort,mEnd]=(P.measure||'起点 → 终点
 const DX=()=>realCol()?realD():build(SCENES[scene]);
 const PH=()=>CX().ph;
 // 多轮实测：后台一行行读设备输出（没真源码时回放演示数据的设备输出），按轮切分、算用时、查问题；这里每 0.3 秒问一次
-function colStop(){if(colT){clearInterval(colT);colT=null}}
+let colES=null;
+function colStop(){if(colT){clearInterval(colT);colT=null}if(colES){colES.close();colES=null}}
+// 收进度：先用服务器推送（网页在后台也能马上收到、马上"叮"）；推送断了就退回每 0.3 秒查一次（决策 102）
+function colWatch(){colStop();const poll=()=>{if(!colT)colT=setInterval(async()=>{try{colApply(await (await fetch('/api/collect')).json())}catch(e){}},300)};
+ if(!window.EventSource){poll();return}
+ try{colES=new EventSource('/api/collect/events');colES.onmessage=e=>{try{colApply(JSON.parse(e.data))}catch(x){}};
+  colES.onerror=()=>{if(colES){colES.close();colES=null}if(col.st===1)poll()}}catch(e){poll()}}
 function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}));const C=CX(),before=col.got.length;if(j.status==='done'||j.status==='stopped'){fetchReport();if(realFlash())histLoad()}
  col.got=(j.rounds||[]).map(r=>r.ok?{n:r.n,e:r.ends,probs:C.probs.filter(p=>(r.probs||[]).includes(p.k)),att:r.att,segs:r.segs}:{bad:true,att:r.att,missing:r.missing||[]});
- col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
+ col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
  const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));
  for(const x of col.got.slice(before))ding(!!x.bad);
  if(j.status==='done'){colStop();col.st=2}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
@@ -903,7 +909,8 @@ async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={
  const body=real?{page:IDENT.page,source:'device',project_dir:REAL.project_dir,rounds:colN,resume:!!keep,what:hSay||IDENT.page.mapWhat||''}
   :{demo:scene,rounds:colN,resume:!!keep,interval:.12,drop_at:keep?0:9};
  try{const r=await fetch('/api/collect/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast('✕ '+(j.detail||'没开始'));col.st=0;render();return}colApply(j)}catch(e){toast('✕ 码表后台没有回应');return}
- colT=setInterval(async()=>{try{colApply(await (await fetch('/api/collect')).json())}catch(e){}},300)}
+ if(beep){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume&&actx.resume()}catch(e){}}  // 点开始时就把声音准备好，网页在后台也能响
+ colWatch()}
 const okRounds=()=>col.got.filter(x=>!x.bad);
 const missTxt=x=>x.missing&&x.missing.length?`没收全：缺「${x.missing.join('」「')}」`:CX().miss;
 function issues(x){if(x.bad)return `<span class="chip c-gray">${missTxt(x)}，不计入，自动补收一轮</span>`;

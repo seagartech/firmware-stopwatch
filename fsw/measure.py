@@ -96,8 +96,14 @@ class Collector:
 
     def __init__(self, spec, att=0, n=0):
         self.spec, self.att, self.n = spec, att, n
-        self.cur, self.done, self.started = None, False, False
         self.last = ""
+        self._open()
+
+    def _open(self):
+        """开始读（或停下再接着读）的那一刻就当作一轮的开头：设备可能在码表开始读之前就已经开始这一轮了，
+        没看到"开始"那一行。这一轮收齐了照样算；只收到半轮就提示再做一次（决策 101）。"""
+        self.cur, self.done, self.started, self.first = {}, False, True, True
+        self.reset_us = None
 
     def feed(self, line):
         p = parse_line(line)
@@ -107,11 +113,13 @@ class Collector:
         name, us, val = p
         out = []
         if name == "RESET":
-            self.reset_us = us
             # 没有起点的一轮不算一轮（比如对话类喊唤醒词那一下：设备进聆听就清零，但没有"你说完"），不报没收全
             if self.started and self.cur and not self.done and self.spec.start in self.cur:
                 out.append(self._bad())
-            self.started, self.cur, self.done = True, {}, False
+            elif self.first and self.cur and not self.done:
+                out.append({"half": True})  # 开始读时这一轮已经过了起点：不算，但要说一声，别让人以为收到了
+            self.started, self.cur, self.done, self.first = True, {}, False, False
+            self.reset_us = us
             return out
         if not self.started or self.done:  # 半轮、或这一轮已经收齐：后面的不管
             return out
@@ -126,8 +134,8 @@ class Collector:
         return got, len(self.spec.need)
 
     def finish(self):
-        """停下时：正在收、还没收齐的这一轮不算（也不算"没收全"）。"""
-        self.cur, self.done, self.started = None, False, False  # 接着收时，等下一轮开始再算
+        """停下时：正在收、还没收齐的这一轮不算（也不算"没收全"）。接着收时，从那一刻起当作新一轮的开头。"""
+        self._open()
         return []
 
     def _ok(self):
@@ -149,7 +157,7 @@ def collect(lines, spec):
     out = []
     for l in lines:
         out += c.feed(l)
-    return out + c.finish()
+    return [r for r in out + c.finish() if not r.get("half")]  # 整份日志一起算时，开头那半轮不用提示
 
 
 def demo_lines(demo, rounds, start=0, drop_at=0):
