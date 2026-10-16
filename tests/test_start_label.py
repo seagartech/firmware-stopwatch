@@ -48,3 +48,9 @@ def test_report_api_gives_start_lag_from_the_check(tmp_path):
     c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 3, "project_dir": str(proj)})
     wait(c, lambda j: j["status"] == "done")
     assert c.get("/api/report").json()["start_lag"]["secs"] == 0.33
+
+
+def test_listen_button_reopens_the_sound_channel():
+    """Safari 声音状态是开着、喇叭却没声音（2026-10-16 实测）：点"试听"先关掉重开声音通道（决策 136）。"""
+    assert "actx.close()" in grab("resetAudio") and "actx=null" in grab("resetAudio")
+    assert "[data-beeptest]')){resetAudio();unlockAudio();" in JS
