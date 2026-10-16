@@ -52,7 +52,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,ok:rng(g.range),v:val(k)}]));
  const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
  const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
- const exp=sc.experience?{fair:sc.experience.fair,label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.source||'体验标准'}）`}:null;
+ const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
   firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],fine:ADV&&ADV.status==='done'&&ADV.fine?htmlEsc(ADV.fine):(()=>{const ok=J.segments.filter(g=>!g.outside&&g.verdict==='正常'&&!g.spiky);return ok.length?`设备自己的几段（${ok.map(g=>`${htmlEsc(g.name)} ${f(g.med)} 秒`).join('、')}）都正常，不用改。`:'设备自己的几段还没有能判的。'})(),
@@ -129,9 +129,9 @@ function timeline(D){
       const c=last?l.col:shared?'var(--soft)':l.soft;
       g+=`<rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" rx="2"><title>${D.S.segs[k].name} ${f(d)} 秒</title></rect>`;
       if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(d)}<title>${nm}</title></text>`}});
-    g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num">${l.end} ${f(D.rep.ends[i])} 秒</text>`;});
+    g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(D.rep.ends[i])} 秒</text>`;});
   if(D.lines.length>1){const a=D.rep.ends[0],b=D.rep.ends[1],y=top+gap-12;
-    g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)">早 ${f(b-a,2)} 秒</text>`;}
+    g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(b-a,2)} 秒</text>`;}
   const segLegend=Object.entries(D.S.segs).filter(([k])=>D.lines.some(l=>l.segs.slice(0,-1).includes(k))).map(([k,s])=>{const c=D.use[k]>1?'var(--soft)':D.lines.find(l=>l.segs.includes(k)).soft;return `<span><i class="sw" style="background:${c}"></i>${s.name}${D.use[k]>1?'（共用）':''}</span>`}).join('');
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
   <div class="legend">${segLegend}<span><i class="sw" style="background:none;border-top:2px dashed var(--est);height:0"></i>${D.S.est.label}（${D.S.est.note}）</span></div>`;
@@ -166,7 +166,7 @@ function lineCards(D){
       :(inR?'用户等得了，技术上也正常。':'用户还等得了，但比这套做法该有的慢，可能有隐患。');
     const head=ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:`<span class="chip ${c}">${v}</span>`;
     return `<div class="panel card"><h3>${l.name} ${head}</h3><p class="num" style="color:var(--fg)">一般 ${f(l.med)} 秒</p>
-     ${ex?`<p>体验标准：超过 ${D.S.exp.fair} 秒算差 → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>`:''}
+     ${ex?`<p>体验标准：超过 ${D.S.exp.fair} 秒算差 → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>${D.S.exp.source?`<p class="note" style="margin:2px 0 0">${htmlEsc(D.S.exp.source)}</p>`:''}`:''}
      <p>合理范围：${l.ok?`${l.ok[0]}～${l.ok[1]??'不限'} 秒 → <b class="${inR?'down':'up'}">${inR?'在范围内':v}</b>`:'还没有'}</p>
      <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
 }
