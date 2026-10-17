@@ -236,3 +236,24 @@ def test_burn_with_compiler_not_loading_is_not_called_unplugged(setup):
     c.post("/api/fsw/run", json={"from": "build"})
     j = wait(c, lambda j: j["status"] in ("failed", "done"))
     assert j["err"]["kind"] == "burn" and j["err"]["cause"] == "tool" and "不是源码的问题" in j["err"]["message"]
+
+
+class SlowSecondReadDevice(FakeDevice):
+    """第一次试一次没收到；再试一次时设备一直开着，过一会儿才有输出。"""
+    def read(self, port, seconds, on_line, stop=None):
+        if self.read_fail:
+            return super().read(port, seconds, on_line, stop)
+        time.sleep(0.5)
+        return super().read(port, seconds, on_line, stop)
+
+
+def test_retry_try_does_not_say_device_is_rebooting(setup):
+    c, r, dev, *_ = setup(device=SlowSecondReadDevice(read_fail=1))
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["err"]["kind"] == "try"
+    c.post("/api/fsw/run", json={"from": "try"})  # 没重新烧录：设备不会重启
+    j = wait(c, lambda j: j["status"] == "running" and j.get("phase") == "try")
+    assert j["dev_seen"]  # 页面不再显示"设备刚烧完，正在重启"
+    assert wait(c, lambda j: j["status"] in ("failed", "done"))["status"] == "done"

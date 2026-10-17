@@ -824,6 +824,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if not r.get("ok"):
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))
             _on_device(a.project_dir, True)
+            job["_just_flashed"] = True  # 刚烧完设备会重启；之后点「再试一次」时设备一直开着，不用再等它开机
             T().end("flash")
             return True
 
@@ -839,8 +840,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 T().begin("try")
             T().count("try_said")
             T().count("clicks")
-            job.update(phase="try", status="running", pct=0, got=[], log="等设备开机", try_secs=TRY_SECONDS,
-                       try_started=time.time(), dev_seen=None)
+            fresh = job.pop("_just_flashed", False)
+            job.update(phase="try", status="running", pct=0, got=[], log="等设备开机" if fresh else "设备开着，等计时点",
+                       try_started=time.time(), dev_seen=None if fresh else time.time())
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
             # 和多轮实测同一个标准：插上的计时点全部收到才算试通。差不多齐了（最多差 2 个）、几秒再没有新的，就停下说差哪几个
             need_n = max(1, len(want) - min(2, len(want) // 4))
