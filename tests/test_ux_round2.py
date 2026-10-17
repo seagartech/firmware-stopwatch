@@ -369,3 +369,10 @@ def test_cancel_while_waiting_does_not_export_later():
 def test_error_toast_has_only_the_close_mark():
     """出错提示：红框、右边一个 × 关掉，前面不再多一个 ✕。"""
     assert "kind==='bad'?m.replace(/^✕\\s*/,''):m" in JS
+
+
+def test_project_name_follows_the_chosen_source_not_demo():
+    """选好源码后"确认要测的内容"里的项目名称按这次的源码和板子取，不能一直是演示数据的名字（取名那句曾被写进注释里）。"""
+    line = next(l for l in JS.splitlines() if "REAL={...r.info" in l)
+    code = line.split("//")[0]
+    assert "pName=REAL.name+(REAL.board?" in code
