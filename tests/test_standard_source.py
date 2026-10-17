@@ -16,7 +16,7 @@ def test_experience_source_says_what_it_is_and_is_not():
 
 def test_chart_uses_the_short_tag_and_cards_give_the_full_source():
     assert "sc.experience.short||'参考值'" in JS
-    assert "D.S.exp.source" in grab("lineCards")
+    assert "htmlEsc(es.source)" in grab("lineCards") and "jl.exp_std" in grab("lineCards")  # 每条线的卡片写全自己的出处
 
 
 def test_chart_labels_sit_on_a_background_so_the_line_does_not_cover_them():

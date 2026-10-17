@@ -41,23 +41,24 @@ def test_open_raw_log_folder_only_inside_our_folders(app):
     assert c.post("/api/open-folder", json={"path": "/etc/passwd"}).status_code == 403
 
 
-def test_report_says_when_ranges_changed_and_refreshes_without_remeasuring(app):
-    c, _, std_dir, tmp_path = app
+def test_first_full_run_fills_the_list_and_report_follows_edits_without_refresh(app):
+    """测满 10 轮：按实测自动建合理范围清单；之后改清单，报告下次打开就按新的判，用时不变，不用点"更新"。"""
+    from fsw import rangelist as rl
+    c, _, _, tmp_path = app
     measured(c, tmp_path)
     r = c.get("/api/report").json()
-    assert not r["stale"]  # 刚测完的不提示
-    f = next(std_dir.glob("*.json"))
-    s = json.loads(f.read_text(encoding="utf-8"))
-    s["segments"]["think"]["range"] = [0.4, 1.2]  # 有人改了"服务器想回答"的合理范围
-    f.write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
-    r = c.get("/api/report").json()
-    assert r["stale"] and r["stale_since"]
-    before = {g["k"]: g for g in r["segments"]}["P2-P5"]
-    assert before["range"] == [0.4, 1.5] and before["verdict"] == "正常"  # 还是按改之前的判
-    r2 = c.post("/api/report/refresh").json()
-    seg = {g["k"]: g for g in r2["segments"]}["P2-P5"]
-    assert not r2["stale"] and seg["range"] == [0.4, 1.2] and seg["verdict"] == "偏慢"  # 按新范围判，用时不变
-    assert seg["med"] == before["med"]
+    proj = tmp_path / "data" / "xiaozhi-1"
+    lst = rl.read(proj)
+    assert lst and r["list_filled"] and r["scenario"]["range_list"]["file"] == rl.FILENAME
+    seg = {g["k"]: g for g in r["segments"]}["P2-P5"]
+    assert seg["verdict"] == "正常" and seg["range"][0] <= seg["min"] and seg["range"][1] >= seg["max"]  # 按实测填，自然在范围里
+    assert "stale" not in r
+    lk = next(k for k, g in lst["segments"].items() if (g["from"], g["to"]) == ("P2", "P5"))
+    c.post("/api/rangelist/edit", json={"kind": "segment", "key": lk, "range": [0.001, seg["med"] / 2], "slow": seg["med"] / 1.5})
+    r2 = c.get("/api/report").json()
+    seg2 = {g["k"]: g for g in r2["segments"]}["P2-P5"]
+    assert seg2["verdict"] == "超过慢阈值" and seg2["med"] == seg["med"]
+    assert not r2["list_filled"] or r2["list_filled"] == r["list_filled"]                   # 有数的段不再自动改
 
 
 # ---- 导出：一个 HTML 文件，存在项目文件夹的 reports/，文件名"场景_测完时间.html"，断网能开 ----

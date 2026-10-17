@@ -231,3 +231,8 @@ table.num td.r,table.num th.r{white-space:nowrap}
 svg text.halo{paint-order:stroke;stroke:var(--panel);stroke-width:5px;stroke-linejoin:round}
 /* 一排按钮里有一个带"还差"小字：同排的按钮按顶部对齐，不被拉高（决策 143） */
 :has(> .needwrap){align-items:flex-start}
+/* 合理范围清单页（减重版）：两张表，就地改两个数；每个框上面写它是什么 */
+.rl-tab td{vertical-align:top}.rl-tab td:first-child{min-width:8.5em}.rl-tab .btn{white-space:nowrap}
+.rl-on td{background:color-mix(in srgb,var(--warn) 6%,transparent)}
+.rl-in{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:transparent;color:inherit}.rl-in.num{width:4.6em}.rl-in.wide{width:100%;min-width:9em;box-sizing:border-box}
+.rl-cap{display:flex;gap:4px;font-size:12px;color:var(--muted);margin-bottom:2px}.rl-cap span{flex:1;text-align:left}.rl-cap span:nth-child(2){flex:0 0 1em}
