@@ -28,6 +28,7 @@ from fsw import advise as advs
 from fsw import timeline as tln
 from fsw import standards as stds
 from fsw import rangelist as rl
+from fsw import carry as cy
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, ToolEnvError, find_idf, find_ports, pick_idf
@@ -616,7 +617,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         try:
             last = json.loads((proj / "fsw-plan.json").read_text(encoding="utf-8"))
             cached = last["reply"] if (fp and cfg().reuse_last and last.get("fingerprint") == fp
-                                       and last.get("steps") == body.steps and last.get("ver") == ins.PLAN_VER) else None
+                                       and cy.sig(last.get("steps")) == cy.sig(body.steps) and last.get("ver") == ins.PLAN_VER) else None
         except (OSError, ValueError, KeyError):
             cached = None
         return fp, cached
@@ -701,7 +702,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             needs = stds.needed_values(steps, stds.find(steps))  # 问题规则要看附加值的计时点：让 AI 顺带记上
             if cached:
                 text = cached
-                job.update(reused=True, log="源码和步骤都没变，用上次的插入方案，没调用大模型")
+                job.update(reused=True, log="计时点那几处和上次一样，用上次的插入方案，没调用大模型")
             elif use_prep:
                 while prep["status"] == "running":
                     job["log"] = f"你核对步骤时 AI 已经在后台按这些步骤准备插法，还差一点（已准备 {int(time.time() - prep['started'])} 秒）"
@@ -1829,7 +1830,26 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def progress(p):
             job.update(found=p["found"], at=p["at"], read=p["read"], last=p["last"], seconds=p["seconds"])
 
+        def carry_over():
+            """改完再测（任务 22）：源码变了、但计时点那几处代码没动：把上次的步骤和插法挪到新行号上存好，下面直接用，不调用大模型。"""
+            if not (body.reuse and not known and body.project_dir and body.fingerprint and cfg().reuse_last):
+                return
+            f = idf._cache_file(body.project_dir, body.fingerprint, body.what, provider)
+            if f.exists():
+                return
+            c = cy.carry(body.project_dir, body.work, body.what, provider)
+            if not c["ok"]:
+                if c["changed"]:
+                    job["carry_changed"] = c["changed"]
+                return
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps({**c["result"], "what": body.what, "provider": provider}, ensure_ascii=False, indent=1), encoding="utf-8")
+            (Path(body.project_dir) / "fsw-plan.json").write_text(json.dumps(
+                {"fingerprint": body.fingerprint, "steps": c["plan_steps"], "reply": c["plan"], "ver": ins.PLAN_VER}, ensure_ascii=False), encoding="utf-8")
+            job["carried"] = {"moved": c["moved"]}
+
         def run():
+            carry_over()
             try:
                 r = idf.identify_cached(model, body.work, body.what, body.project_dir, body.fingerprint, provider,
                                         reuse=body.reuse and not known, chip=body.chip or "", known=known,
