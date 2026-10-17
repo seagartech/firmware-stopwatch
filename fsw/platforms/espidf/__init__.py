@@ -169,7 +169,23 @@ class EspIdf:
         rec = self.idf_path / ".fsw_tools_path"
         if rec.exists():
             env["IDF_TOOLS_PATH"] = rec.read_text(encoding="utf-8").strip()
+        # 乐鑫按 PATH 上第一个合用的 python 的版本去找"idfX.Y_pyA.B_env"。这台电脑上已经装好的那套环境放到 PATH 最前面，
+        # 就一定用它：电脑上有好几个 Python 时（比如 Mac 自带 3.9、另装了 3.10，环境却是用 3.12 装的）也不会挑错
+        py_env = self.installed_python_env(env)
+        if py_env:
+            env["PATH"] = os.pathsep.join([str(py_env)] + ([env["PATH"]] if env.get("PATH") else []))
         return env
+
+    def installed_python_env(self, env):
+        """乐鑫为这个版本装好的 Python 环境的 bin（Windows 是 Scripts）文件夹；装了几套就挑 Python 版本最高的。没有返回 None。"""
+        v = _read_version(self.idf_path)
+        if not v:
+            return None
+        tools = Path(env.get("IDF_TOOLS_PATH") or Path.home() / ".espressif")
+        sub, exe = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python3")
+        major_minor = ".".join(v.split(".")[:2])
+        found = [d / sub for d in (tools / "python_env").glob(f"idf{major_minor}_py*_env") if (d / sub / exe).exists()]
+        return max(found, key=lambda d: version_tuple(d.parent.name.split("_py")[-1])) if found else None
 
     def env(self):
         if self._env is None:
