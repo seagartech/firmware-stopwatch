@@ -107,7 +107,24 @@ def _copy(root, work):
     shutil.copytree(root, work, ignore=shutil.ignore_patterns(*SKIP_DIRS))
 
 
+LAST = "fsw-last"  # 改完再测（任务 22）：作废前把上次的插入方案和原版文件留一份，看计时点那几处改没改
+
+
+def _keep_last(proj):
+    """作废前留一份上次的插入方案和插计时点前的原版文件（两样都有才留），供"计时点那几处没动就沿用"比对。"""
+    proj = Path(proj)
+    plan, files = proj / "fsw-plan.json", proj / "fsw-backup" / "files"
+    if not (plan.is_file() and files.is_dir()):
+        return
+    last = proj / LAST
+    shutil.rmtree(last, ignore_errors=True)
+    last.mkdir(parents=True)
+    shutil.copy2(plan, last / "fsw-plan.json")
+    shutil.copytree(files, last / "files")
+
+
 def _drop_stale(proj):
+    _keep_last(proj)
     for name in STALE:
         p = Path(proj) / name
         if p.is_dir():

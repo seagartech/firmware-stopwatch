@@ -49,8 +49,11 @@ def carry(project_dir, work, what, provider):
     """{"ok": True, "result": 新的识别结果, "plan": 新的插入方案（json 文本）, "moved": 挪了行号的处数}；
     沿用不了：{"ok": False, "why": 一句话, "changed": [变了的计时点名字]}。不调用大模型。"""
     proj, work = Path(project_dir), Path(work)
+    base, orig = proj, proj / "fsw-backup" / "files"
+    if not (proj / "fsw-plan.json").is_file() and (proj / "fsw-last" / "fsw-plan.json").is_file():
+        base, orig = proj / "fsw-last", proj / "fsw-last" / "files"  # 源码改过时码表把上次的作废了，比对用留下的那份
     try:
-        plan = json.loads((proj / "fsw-plan.json").read_text(encoding="utf-8"))
+        plan = json.loads((base / "fsw-plan.json").read_text(encoding="utf-8"))
         data = ins._json_block(plan["reply"])
         inserts = data["inserts"]
     except (OSError, ValueError, KeyError, TypeError):
@@ -64,7 +67,7 @@ def carry(project_dir, work, what, provider):
     for x in inserts:
         f = x.get("file")
         try:
-            old = old_files.setdefault(f, _lines(proj / "fsw-backup" / "files" / f))
+            old = old_files.setdefault(f, _lines(orig / f))
             new = new_files.setdefault(f, _lines(work / f))
         except OSError:
             changed.append(names.get(x.get("step"), x.get("step")))
