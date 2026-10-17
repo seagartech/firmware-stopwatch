@@ -1318,11 +1318,32 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if {(g.get("from"), g.get("to")) for g in psc["segments"].values()} != set(pts) or [l["name"] for l in psc["lines"]] != names:
                 other = other or meta.get("measured_at") or run.name
                 continue
-            segs = {pts[(g.get("from"), g.get("to"))]: round(jdg.med(v), 6) for k, g in psc["segments"].items()
-                    if (v := [r["segs"][k] for r in rounds if r["segs"].get(k) is not None])}
-            lines = {l["name"]: round(jdg.med(v), 6) for i, l in enumerate(psc["lines"])
-                     if (v := [r["ends"][i] for r in rounds if i < len(r["ends"]) and r["ends"][i] is not None])}
-            return {"run": run.name, "measured_at": meta.get("measured_at") or run.name, "n": len(rounds), "segs": segs, "lines": lines}
+            def iqr(v):  # 一次测量的正常波动：中间一半轮次的跨度（第 75 百分位减第 25 百分位）
+                v = sorted(v)
+                q = lambda p: v[0] if len(v) == 1 else v[int(p * (len(v) - 1))] + (v[min(int(p * (len(v) - 1)) + 1, len(v) - 1)] - v[int(p * (len(v) - 1))]) * (p * (len(v) - 1) % 1)
+                return q(.75) - q(.25)
+
+            def seg_vals(rs, k):
+                return [r["segs"][k] for r in rs if r["segs"].get(k) is not None]
+
+            def line_vals(rs, i):
+                return [r["ends"][i] for r in rs if i < len(r["ends"]) and r["ends"][i] is not None]
+            segs, noise = {}, {}
+            for k, g in psc["segments"].items():
+                v, ck = seg_vals(rounds, k), pts[(g.get("from"), g.get("to"))]
+                if v:
+                    segs[ck] = round(jdg.med(v), 6)
+                    c = seg_vals(ok, ck)
+                    noise[ck] = round(max(iqr(v), iqr(c) if c else 0), 6)  # 两次各自的正常波动，取大的
+            lines, noise_l = {}, {}
+            for i, l in enumerate(psc["lines"]):
+                v = line_vals(rounds, i)
+                if v:
+                    lines[l["name"]] = round(jdg.med(v), 6)
+                    c = line_vals(ok, names.index(l["name"]))
+                    noise_l[l["name"]] = round(max(iqr(v), iqr(c) if c else 0), 6)
+            return {"run": run.name, "measured_at": meta.get("measured_at") or run.name, "n": len(rounds), "segs": segs, "lines": lines,
+                    "noise": noise, "noise_lines": noise_l}
         return {"why": f"计时点和上次（{other}）不一样，不和上次比"} if other else None
 
     def _judge_scenario(job, ok):
