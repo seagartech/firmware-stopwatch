@@ -1359,10 +1359,12 @@ function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(ST
  return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colN,colVar,adv:ADV&&ADV.started||null,rtCase,last:page==='home'?LASTP:''}}
 let uiLast='',uiT=null;
 const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
-function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;clearTimeout(uiT);uiT=setTimeout(()=>{uiT=null;uiSend(s)},250)}
+function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;try{sessionStorage.setItem('fsw-ui',s)}catch(e){}  // 这个标签页自己也存一份：别的标签页开了新的一轮，这里刷新也不丢
+ clearTimeout(uiT);uiT=setTimeout(()=>{uiT=null;uiSend(s)},250)}
 window.addEventListener('pagehide',()=>{if(!uiT)return;clearTimeout(uiT);uiT=null;try{navigator.sendBeacon('/api/ui?key='+encodeURIComponent(DEMO),new Blob([uiLast],{type:'application/json'}))}catch(e){uiSend(uiLast)}});
 async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return r.ok?await r.json():null}catch(e){return null}};
- const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),u=U&&U.ui,J=(U&&U.jobs)||{};
+ const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),J=(U&&U.jobs)||{};let u=U&&U.ui;
+ if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')||'null');if(m&&m.v===1)u=m}catch(e){}}
  if(!u||u.v!==1||!SCENES[u.scene]){page=HASH0==='settings'?'settings':'home';return}
  // 关了浏览器或标签页再打开：算新的一轮，从空白首页开始；只有实测、烧录还在后台跑着时才接上，首页顶上给「接着看」
  if(FRESH){const cj=await get('/api/collect'),fj=await get('/api/fsw'),run=x=>!!x&&['running','waiting_device'].includes(x.status);if(!run(cj)&&!run(fj)){page='home';return}}

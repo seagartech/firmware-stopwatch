@@ -81,6 +81,8 @@ def test_fresh_open_goes_home_with_a_way_back():
     assert "if(!run(cj)&&!run(fj)){page='home';return}" in body
     # 刷新和重新打开靠 sessionStorage 分：关了标签页、浏览器就没了
     assert "sessionStorage.getItem('fsw-open')" in JS
+    # 两个标签页：一个开了新的一轮，另一个刷新还按自己那份接着
+    assert "sessionStorage.setItem('fsw-ui',s)" in JS and "if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')" in JS
     # 点首页就收起那条提示
     assert "if(to==='home')LASTP='';" in JS
 
