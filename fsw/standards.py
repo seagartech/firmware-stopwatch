@@ -13,6 +13,8 @@
 import json
 from pathlib import Path
 
+from fsw.scenario import experiences
+
 HERE = Path(__file__).parent / "standards"
 NEAR = 8  # 行号相差几行以内算同一个位置
 
@@ -196,11 +198,11 @@ def real_scenario(page, standard, values=None):
         sl = std_line(items[0][0], items[-1][1])
         lines.append({"name": name, "end": name, "segments": [f"{a}-{b}" for a, b, _ in items],
                       "range": sl["range"] if sl else None, "slow": sl["slow"] if sl else None, "std": sl["name"] if sl else None})
-    exp = None
-    if standard and standard.get("experience"):
-        hit = [l for l in lines if l["std"] == standard["experience"]["line"]]
-        if hit:
-            exp = {**standard["experience"], "line": hit[0]["name"]}
+    exps = []  # 体验标准每条线一条：标准里那条线对上了真线，就挂到真线上
+    for e in experiences(standard or {}):
+        hit = [l for l in lines if l["std"] == e.get("line")]
+        if hit and e.get("fair") is not None:
+            exps.append({**e, "line": hit[0]["name"]})
     problems = []
     names = {l["std"]: l["name"] for l in lines if l["std"]}
     back = {theirs: mine for mine, theirs in mp.items()}
@@ -215,7 +217,7 @@ def real_scenario(page, standard, values=None):
     sname = next((x["n"] for x in steps if x["p"] == start), steps[0]["n"] if steps else "起点")
     return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": start, "name": sname},
             "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
-            "experience": exp, "problems": problems, "standard": (standard or {}).get("name"),
+            "experiences": exps, "problems": problems, "standard": (standard or {}).get("name"),
             "point_names": {x["p"]: x["n"] for x in steps},
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
             "matched": mp}

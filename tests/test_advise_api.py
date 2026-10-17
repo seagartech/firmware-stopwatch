@@ -105,3 +105,19 @@ def test_reads_the_original_source_not_the_copy_with_timing_points(run, tmp_path
     c.post("/api/advise/start", json={"work": str(work), "steps": PAGE["steps"], "project_dir": str(tmp_path / "p")})
     advice_wait(c)
     assert c.get("/api/advise").json()["root"] == str(orig)
+
+
+def test_same_problems_reuse_saved_advice_without_calling_llm(run, tmp_path):
+    """改了合理范围清单、报告重新判定，但要改的问题没变：用上次存下的建议，不再调用大模型；问题变了才重写。"""
+    c, made, work = run([reply(GOOD), reply(GOOD)])
+    body = {"work": str(work), "steps": PAGE["steps"], "project_dir": str(tmp_path / "p")}
+    c.post("/api/advise/start", json=body)
+    first = advice_wait(c)
+    assert first["status"] == "done" and len(made) == 1
+    again = c.post("/api/advise/start", json=body).json()
+    assert again["status"] == "done" and again["called"] is False and again["fixes"] == first["fixes"] and len(made) == 1
+    saved = tmp_path / "p" / "advice" / "advice.json"
+    d = json.loads(saved.read_text(encoding="utf-8"))
+    saved.write_text(json.dumps({**d, "for": "别的问题"}, ensure_ascii=False), encoding="utf-8")   # 问题变了
+    c.post("/api/advise/start", json=body)
+    assert advice_wait(c)["status"] == "done" and len(made) == 2

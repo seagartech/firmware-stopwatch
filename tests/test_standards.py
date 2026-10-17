@@ -56,14 +56,14 @@ def test_real_scenario_takes_ranges_from_the_standard():
     assert talk["name"] == "开口这条" and talk["range"] == [0.7, 2.75]
     assert face["name"] == "表情这条" and face["range"] == [0.5, 1.6] and face["slow"] == 2.0
     assert face["segments"][0] == "P1-P2"                                                # 表情这条也从起点算
-    e = sc["experience"]
+    [e] = sc["experiences"]  # 体验标准每条线一条：标准里只有说话线有，挂到对上的真线
     assert (e["line"], e["fair"], e["good"], e["short"]) == ("开口这条", 1.5, 0.8, "参考值") and "不是国家或行业标准" in e["source"]  # 决策 137
     assert [p["key"] for p in sc["problems"]] == ["rev"]  # 附加值的规则对不上真插的计时点，不用
 
 
 def test_page_without_standard_has_no_ranges_but_still_judges():
     sc = std.real_scenario(PAGE, None)
-    assert all(g["range"] is None for g in sc["segments"].values()) and sc["experience"] is None
+    assert all(g["range"] is None for g in sc["segments"].values()) and sc["experiences"] == []
     rounds = [{"n": i + 1, "segs": {k: 0.1 for k in sc["segments"]}, "ends": [0.3, 0.6], "probs": []} for i in range(20)]
     j = J.judge(sc, rounds)
     assert j["lines"][-1]["verdict"] == "没有范围" and j["labels"][0]["level"] == "可以不改"

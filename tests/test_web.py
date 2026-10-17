@@ -53,7 +53,7 @@ def test_two_demo_scenarios_are_listed(client):
 @pytest.mark.parametrize("sid", ["voice", "door"])
 def test_demo_data_has_everything_the_pages_need(client, sid):
     d = client.get(f"/api/demo/{sid}").json()
-    for key in ["S", "F", "P", "C", "R", "RG", "RT"]:
+    for key in ["S", "F", "P", "C", "R", "RT"]:
         assert key in d, f"演示数据缺 {key}"
     S = d["S"]
     assert 1 <= len(S["lines"]) <= 4
@@ -196,7 +196,7 @@ def test_report_text_uses_names_not_codes_and_open_folder():
     """任务 18：结论建议和待办里把 P2-P5 这类编号换成中文名；原始日志"打开所在文件夹"接后台；合理范围改过提示接后台。"""
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert "function plain(" in js and "plain(F.why)" in js and "为什么：${F.title}。${F.dev.data}" not in js
-    assert "/api/open-folder" in js and "/api/report/refresh" in js
+    assert "/api/open-folder" in js and "/api/report/refresh" not in js  # 改清单后报告自动按新的判，没有"更新"按钮
 
 
 def test_report_export_button_next_to_the_toggle(client):
@@ -306,7 +306,8 @@ def test_real_range_page_shows_this_runs_standard_not_demo():
     """报告里"合理范围依据"：真流程看这次对上的标准和实测基线（只读），不再显示演示数据的标准文件。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "function rangeReal(" in js
-    assert "if(realFlash()&&JREP&&!JREP._none)return rangeReal()" in js.split("function rangePage(")[1][:200]
+    page = js.split("function rangePage(")[1][:600]
+    assert "if(!(realFlash()&&JREP&&!JREP._none))return rangeDemo()" in page and "if(RL.none)return rangeReal()" in page
 
 
 def test_task20_plain_hints_and_restore_entries():

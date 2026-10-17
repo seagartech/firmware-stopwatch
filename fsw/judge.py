@@ -9,12 +9,14 @@
 - 体验可以 + 超出合理范围：可能有隐患
 - 都正常：正常
 结论标签：
-- 必须改：一般用时超过算慢线，或体验标准判"差"，或 10 次里最慢超过算慢线；对错问题（比如回答开头被吞）出现就算
-- 建议改：偶发特别慢、先后反了，但没到上一条（不到每 10 次 1 次以上）；或超出合理范围但不算慢
+- 必须改：中位数超过慢阈值，或体验标准判"差"，或 10 次里最慢超过慢阈值；对错问题（比如回答开头被吞）出现就算
+- 建议改：偶发特别慢、先后反了，但没到上一条（不到每 10 次 1 次以上）；或超出合理范围但未超过慢阈值
 - 可以不改：在合理范围内
 """
 
 import math
+
+from fsw.scenario import experience_of
 
 LEVELS = ["必须改", "建议改", "可以不改"]
 FEW = 20          # 少于 20 轮：结论只供参考
@@ -39,20 +41,22 @@ def stats(vals):
 
 
 def verdict(st, rng, slow, basis="measured"):
-    """每段 / 每条线：正常、偏慢、慢；推算的段只标"推算"；没有范围的不判。"""
+    """每段 / 每条线按中位数判：正常（不超过合理范围上限）、偏慢（超过上限、未超过慢阈值）、超过慢阈值；
+    推算的段只标"推算"；没有范围的不判。"""
     if basis == "estimated":
         return "推算"
     if not rng:
         return "没有范围"
     lo, hi = rng
     if slow is not None and st["med"] > slow:
-        return "慢"
+        return "超过慢阈值"
     if hi is not None and st["med"] > hi:
         return "偏慢"
     return "正常"
 
 
 def experience(line_name, st, exp):
+    """exp：这条线的体验标准（每条线一条，没设定的不判）。"""
     if not exp or exp.get("line") != line_name or exp.get("fair") is None:
         return None
     return "差" if st["med"] > exp["fair"] else "可以"
@@ -72,8 +76,7 @@ def judge(scenario, rounds):
     """scenario：fsw-scenario/1（段、线、合理范围、体验标准、问题规则）；rounds：多轮实测收齐的每一轮。"""
     n = len(rounds)
     segs_def, lines_def = scenario["segments"], scenario["lines"]
-    exp = scenario.get("experience")
-    out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": []}
+    out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": [], "range_list": scenario.get("range_list")}
 
     seg_st = {}
     for k, g in segs_def.items():
@@ -96,9 +99,11 @@ def judge(scenario, rounds):
             continue
         st = stats(ends)
         v = verdict(st, l.get("range"), l.get("slow"))
-        e = experience(l["name"], st, exp)
+        es = experience_of(scenario, l["name"])
+        e = experience(l["name"], st, es)
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
                              "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常",
+                             "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short")} if es else None,
                              "combo": combo(e, v == "正常", v),
                              "over_slow": sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
                              "segments": l["segments"]})
@@ -131,9 +136,9 @@ def judge(scenario, rounds):
         else:
             lv = "可以不改"
         if l is main or lv != "可以不改":  # 别的线没问题就不单列
-            why = ("体验标准判差" if l["exp"] == "差" else "一般用时超过算慢线" if slow is not None and l["med"] > slow
-                   else "10 次里最慢超过算慢线" if slow is not None and p90_ok and l["p90"] > slow
-                   else "超出合理范围但不算慢" if lv == "建议改" else "还没有合理范围" if l["verdict"] == "没有范围"
+            why = ("体验标准判差" if l["exp"] == "差" else "中位数超过慢阈值" if slow is not None and l["med"] > slow
+                   else "10 次里最慢超过慢阈值" if slow is not None and p90_ok and l["p90"] > slow
+                   else "超出合理范围但未超过慢阈值" if lv == "建议改" else "还没有合理范围" if l["verdict"] == "没有范围"
                    else "在合理范围内")
             labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
     for p in scenario.get("problems") or []:
