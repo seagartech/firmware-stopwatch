@@ -1,6 +1,7 @@
 """用户亲手操作后提的问题（2026-10-16，决策 103～110）。网页逻辑用 node 跑纯函数，其余查代码结构；行为在浏览器里回放核对。"""
 
 import json
+from pathlib import Path
 import shutil
 import subprocess
 
@@ -391,3 +392,11 @@ def test_ding_when_round_is_all_in_not_when_it_is_filed():
 def test_resume_clears_the_ding_mark():
     # 正好在"收齐已叮、还没记下"那 1.5 秒里点停止，接着测时清掉记号，下一轮照样叮
     assert "async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0;col.rd=false}" in JS
+
+
+def test_report_table_owner_column_and_reversal_note_do_not_squeeze():
+    # 技术细节表："谁负责"列不被挤成竖排；"第 N 轮先后反了"放数字下一行，不撑宽整列
+    css = (Path(__file__).resolve().parents[1] / "fsw/web/static/style.css").read_text(encoding="utf-8")
+    assert "th.own,td.own{min-width:5.5em}" in css
+    assert '<th class="own">谁负责</th>' in JS and '<td class="own" style="font-family:var(--sans)">${s.owner}</td>' in JS
+    assert '<br><span class="note">第 ${neg.join' in JS
