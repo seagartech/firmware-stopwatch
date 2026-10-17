@@ -257,7 +257,6 @@ class RestoreBody(BaseModel):
 
 TRY_SECONDS = 180  # 试一次最多等多久（决策 107）：烧完就开始听，设备重启、连网、人做一次要测的事都在这里面；不用人判断"准备好了"
 REOPEN_SECS = 8   # 试一次：打开调试口后这么久没有任何输出就重开（设备烧完重启，调试口会断开再回来）
-TRY_SETTLE = 4     # 差不多收齐后，几秒没有新的就停下，说清楚差哪几个（和多轮实测一样要全部收到才算试通）
 
 
 class FswRunBody(BaseModel):
@@ -844,22 +843,33 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机" if fresh else "设备开着，等计时点",
                        try_started=time.time(), dev_seen=None if fresh else time.time())
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
-            # 和多轮实测同一个标准：插上的计时点全部收到才算试通。差不多齐了（最多差 2 个）、几秒再没有新的，就停下说差哪几个
+            # 和多轮实测同一个标准：有一轮（从一个起点到下一个起点）插上的计时点全部收到，才算试通。
+            # 有的点只在某些情况下才走到（比如只喊唤醒词时，设备不会判断"你说完了"），所以某一轮没收全不马上判失败：
+            # 接着听，人可以再做一次，直到有一轮收齐或时间到
             need_n = max(1, len(want) - min(2, len(want) // 4))
-            seen, last = set(), {"t": None}
+            names = {ins.point_id(x, a.steps): x.get("n") for x in a.steps}
+            rounds = {"cur": set(), "best": set()}  # 这一轮收到的、收得最多的那一轮
+            job["missing"] = []
+
+            def feed(line):
+                if line.strip().startswith("FSW,RESET"):
+                    rounds["cur"] = set()
+                    return
+                rounds["cur"] |= ins.count_marks([line]) & want
+                if len(rounds["cur"]) >= len(rounds["best"]):
+                    rounds["best"] = set(rounds["cur"])
 
             def on_line(line):
                 if not job.get("dev_seen") and _plain(line):
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
-                new = ins.count_marks([line]) & want
-                if new - seen:
-                    last["t"] = time.time()
-                seen.update(new)
-                job["got"] = sorted(seen)
+                feed(line)
+                cur = rounds["cur"]
+                job["got"] = sorted(cur)
+                job["missing"] = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - cur)] if cur else []
                 _log(job, line[:300])
 
-            def enough():  # 都收到了；或者差不多齐了、之后几秒再没有新的（再等也不会来了）
-                return seen == want or (len(seen) >= need_n and last["t"] and time.time() - last["t"] > TRY_SETTLE)
+            def enough():  # 有一轮全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
+                return rounds["best"] == want
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end:  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -885,13 +895,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if lines is None:
                 return _fail(job, "try", "设备的调试口一直打不开。看看线插好没有，或者有没有别的软件（比如串口监视器）占着它。",
                              error=f"打不开调试口：{err}" if err else "没看到设备")
-            got = ins.count_marks(lines) & want
+            got = rounds["best"]  # 按收得最多的那一轮判
             job["got"] = sorted(got)
             if got and got != want and len(got) >= need_n:  # 差几个：不算试通，否则正式实测每一轮都会"没收全"
                 job["try_fails"] = job.get("try_fails", 0) + 1
-                names = {ins.point_id(x, a.steps): x.get("n") for x in a.steps}
                 miss = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)]
-                return _fail(job, "try", f"收到 {len(got)} / {len(want)} 个计时点，还差「{'」「'.join(miss)}」。"
+                return _fail(job, "try", f"{TRY_SECONDS // 60} 分钟里收得最全的一轮是 {len(got)} / {len(want)} 个计时点，一直没收到「{'」「'.join(miss)}」。"
                              "多轮实测每一轮都要全部收到才算，这样直接开始会一直没收全。",
                              why="可能这一次没走到这几步（比如只在某些情况下才走的分支），也可能计时点插的位置走不到。"
                                  "点「再试一次」完整做一次要测的事；还是收不到，回到「插计时点」那一步换个位置，或者删掉这一步。",
