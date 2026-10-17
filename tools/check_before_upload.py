@@ -1,4 +1,6 @@
 """上传前把关：扫描要上传的文件里有没有密钥、本机路径、过程文档、私人信息。
+在 git 仓库里还查全部历史提交：每次提交加进来的内容，以及作者、提交者、标签的邮箱
+（推上去的是整个历史，删掉的旧内容和作者信息别人也能看到）。
 
 用法：python tools/check_before_upload.py [要查的文件夹，默认是 repo/]
 发现问题就列出来并以 1 退出；没问题以 0 退出。
@@ -37,6 +39,9 @@ PROCESS_NAMES = [
 ]
 # 这两个文件里必须写出过程文档的名字才能检查它们，只对"过程文档"这一类放行
 SELF_FILES = {"tools/check_before_upload.py", "tests/test_check_before_upload.py"}
+
+# GitHub 给每个账号的匿名邮箱，只有用它当提交邮箱才不暴露真实邮箱
+ANON_EMAIL = re.compile(r"@users\.noreply\.github\.com$")
 
 DEFAULT_PRIVATE_WORDS = Path.home() / ".config" / "firmware-stopwatch" / "upload_private_words.txt"
 
@@ -84,10 +89,66 @@ def _load_private_words(path):
     return [w.strip() for w in lines if w.strip() and not w.strip().startswith("#")]
 
 
-def scan(root, private_words_file=DEFAULT_PRIVATE_WORDS):
+def _git(root, *args):
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, check=True,
+            encoding="utf-8", errors="replace",
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def scan_history(root, private_words=()):
+    """查全部历史提交。不是 git 仓库或还没有提交时什么也不查。"""
+    root = Path(root)
+    if not (root / ".git").exists():
+        return []
+    findings, seen = [], set()
+
+    def add(where, kind, snippet):
+        if (where, kind, snippet) not in seen:
+            seen.add((where, kind, snippet))
+            findings.append(Finding(where, 0, kind, snippet))
+
+    people = _git(root, "log", "--all", "--format=%h%x00%an%x00%ae%x00%cn%x00%ce")
+    tags = _git(root, "for-each-ref", "refs/tags", "--format=%(refname:short)%00%(taggername)%00%(taggeremail)")
+    rows = [line.split("\0") for line in people.splitlines()]
+    rows += [[t, n, e.strip("<>")] for t, n, e in (line.split("\0") for line in tags.splitlines()) if e]
+    for row in rows:
+        where = f"历史提交 {row[0]}"
+        for name, email in zip(row[1::2], row[2::2]):
+            if email and not ANON_EMAIL.search(email):
+                add(where, "私人信息", f"提交邮箱不是 GitHub 匿名邮箱：{_mask(email)}")
+            for w in private_words:
+                if w in name:
+                    add(where, "私人信息", _mask(w))
+
+    commit, rel = "", ""
+    for line in _git(root, "log", "--all", "-p", "--no-color", "--format=@@commit %h").splitlines():
+        if line.startswith("@@commit "):
+            commit = line[9:]
+        elif line.startswith("+++ "):
+            rel = line[6:] if line.startswith("+++ b/") else ""
+        elif line.startswith("+") and rel:
+            where = f"历史提交 {commit} {rel}"
+            text = line[1:]
+            for p in KEY_PATTERNS:
+                for m in p.finditer(text):
+                    add(where, "密钥", _mask(m.group(0)))
+            for p in LOCAL_PATH_PATTERNS:
+                for m in p.finditer(text):
+                    add(where, "本机路径", m.group(0))
+            for w in private_words:
+                if w in text:
+                    add(where, "私人信息", _mask(w))
+    return findings
+
+
+def scan(root, private_words_file=DEFAULT_PRIVATE_WORDS, history=True):
     root = Path(root)
     private_words = _load_private_words(private_words_file)
-    findings = []
+    findings = scan_history(root, private_words) if history else []
     for rel in files_to_upload(root):
         parts = rel.split("/")
         name = parts[-1]
@@ -121,7 +182,7 @@ def main(argv=None):
     root = Path(argv[0]) if argv else Path(__file__).resolve().parent.parent
     findings = scan(root)
     if not findings:
-        print(f"上传前检查：没发现问题，可以上传。（查的是 {root.name}/）")
+        print(f"上传前检查：没发现问题，可以上传。（查的是 {root.name}/，含历史提交）")
         return 0
     print(f"上传前检查：发现 {len(findings)} 处问题，先别上传：")
     for f in findings:

@@ -3,6 +3,7 @@ name = "firmware-stopwatch"
 version = "0.1.0"
 description = "固件码表：找出固件哪一步慢、为什么、怎么改"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
