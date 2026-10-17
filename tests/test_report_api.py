@@ -144,3 +144,17 @@ def test_open_the_report_just_exported_next_to_the_source(app):
     assert c.post("/api/report/open", json={"path": "/etc/passwd"}).status_code == 404  # 不是导出过的文件不开
     js = (Path(__file__).parent.parent / "fsw" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert 'data-ropen="${htmlEsc(EXP.saved)}">打开看看' in js and "'/api/report/open'" in js
+
+
+def test_export_to_default_folder_that_does_not_exist_yet(app):
+    """新数据目录里还没有 demo-reports/：对话框预填的就是它，第一次导出要能自动建，不报"文件夹不存在"。"""
+    c, _, _, tmp_path = app
+    d = c.get("/api/report/export-dir?demo=door").json()["dir"]
+    assert not Path(d).exists()
+    r = c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x", "demo": "door", "folder": d})
+    assert r.status_code == 200 and Path(r.json()["path"]).parent == Path(d)
+    other = tmp_path / "别的不存在的文件夹"
+    assert c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x", "demo": "door", "folder": str(other)}).status_code == 400
+    js = (Path(__file__).parent.parent / "fsw" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    i = js.index("EXP.saved=j.path;EXP.state='ok';")
+    assert "t.classList.contains('t-bad'))t.hidden=true" in js[i - 200:i]  # 重试成功后收起上次的红色提示
