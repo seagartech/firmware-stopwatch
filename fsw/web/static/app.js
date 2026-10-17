@@ -297,7 +297,7 @@ async function realPick(body,label,board){const quiet=!!board&&!!REAL;hErr='';en
  let r;try{r=await api('/api/source/inspect',{...body,board:board||null})}catch(e){r={ok:false,message:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
  hReading=false;
  if(!r.ok){REAL=null;hSrc='';hStage=0;hErr=r.kind==='multiple'?`<b>${r.message}</b><div class="acts" style="margin:8px 0 0">${r.projects.map(p=>`<button class="btn" data-pickroot="${p.root.replace(/"/g,'&quot;')}">${p.name}<span class="note">　${p.root}</span></button>`).join('')}</div>`:r.message;render();return}
- REAL={...r.info,body,label:hSrc,work:r.work,project_dir:r.project_dir,fingerprint:r.fingerprint,ai:null};if(REAL.board&&!hBoardOpen)hBoardQ=REAL.board;  // 再测时板子按上次选的填好（决策 130）pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');IDENT=null;
+ REAL={...r.info,body,label:hSrc,work:r.work,project_dir:r.project_dir,fingerprint:r.fingerprint,ai:null};if(REAL.board&&!hBoardOpen)hBoardQ=REAL.board;pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');IDENT=null;  // 再测时板子按上次选的填好（决策 130）；项目名称按这次选的源码和板子
  hScan=1;newRun();if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);
  // AI 推荐：只给大模型项目概况（目录、说明文件），一般十几秒；没设置大模型就不扫
  if(r.status!=='needs_board'&&envKey()){const me=REAL;fetch('/api/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:r.work,name:REAL.name,chip:REAL.chip,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint})}).then(x=>x.ok?x.json():{phrases:[]}).catch(()=>({phrases:[]})).then(j=>{if(REAL!==me)return;REAL.ai=j.phrases||[];REAL.aiCalled=!!j.called;hScan=2;if(page==='home')render()})}
