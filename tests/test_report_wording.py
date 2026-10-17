@@ -39,13 +39,13 @@ def run(names, expr):
 
 def test_negative_segment_range_says_order_reversed():
     v, ns = [1.39, -4.31, 1.57], [1, 2, 3]
-    txt = run(["f", "rangeTxt"], f"rangeTxt({v},{ns})")
+    txt = run(["f", "fms", "rangeTxt"], f"rangeTxt({v},{ns})")
     assert "-" not in txt.replace("～", "")
     assert txt.startswith("1.39～1.57") and "第 2 轮先后反了" in txt
 
 
 def test_normal_segment_range_unchanged():
-    assert run(["f", "rangeTxt"], "rangeTxt([0.5,0.9,0.7],[1,2,3])") == "0.50～0.90"
+    assert run(["f", "fms", "rangeTxt"], "rangeTxt([0.5,0.9,0.7],[1,2,3])") == "0.50～0.90"
 
 
 SEGS = [{"k": "s4", "name": "等服务器的第一段声音传过来"}, {"k": "s5", "name": "设备解码声音，送进喇叭"}]
@@ -69,3 +69,10 @@ def test_subline_uses_merged_wording():
 def test_subline_still_mentions_unmerged_spiky():
     j = {"labels": [{"kind": "spiky", "k": "spiky:s4", "segment": "s4", "rounds": [16]}], "lines": []}
     assert '"等服务器的第一段声音传过来"偶尔特别慢' in subline_of(j)
+
+
+def test_millisecond_segments_are_not_shown_as_zero():
+    # 几毫秒的段多留一位：0.004～0.012，不再显示成 0.00～0.01；一般的段照旧两位
+    assert run(["f", "fms", "rangeTxt"], "rangeTxt([0.004,0.012,0.008],[1,2,3])") == "0.004～0.012"
+    assert run(["f", "fms"], "[fms(0.003),fms(0.25),fms(1.234),fms(0)]") == ["0.003", "0.25", "1.23", "0.00"]
+    assert '<td class="r">${fms(s.med)}</td>' in JS
