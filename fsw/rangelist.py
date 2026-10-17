@@ -271,7 +271,10 @@ def edit_segment(lst, key, rng, slow, note=""):
     bad = check(rng, slow, f"「{g['name']}」")
     if bad:
         raise ListRuleError(bad)
-    g.update(range=rng, slow=slow, note=(note or "").strip())
+    note = (note or "").strip()
+    if (rng, slow) != (g.get("range"), g.get("slow")) and note == g.get("note") and note.endswith("自动填"):
+        note = "手动改过"  # 数改了、备注没动：别再写"实测自动填"
+    g.update(range=rng, slow=slow, note=note)
     return lst
 
 

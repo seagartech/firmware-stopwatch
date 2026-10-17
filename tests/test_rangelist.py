@@ -79,3 +79,12 @@ def test_broken_file_says_which_line(tmp_path):
     with pytest.raises(rl.ListFormatError) as e:
         rl.read(tmp_path)
     assert all(n > 0 for n, _ in e.value.errors) and "第" in str(e.value)
+
+
+def test_editing_numbers_replaces_the_auto_fill_note():
+    lst, _ = rl.fill(None, door(), rounds(20))
+    auto = lst["segments"]["read"]["note"]
+    rl.edit_segment(lst, "read", [0.01, 0.04], 0.08, auto)                 # 网页上备注框带着原来的字，没改
+    assert lst["segments"]["read"]["note"] == "手动改过"
+    rl.edit_segment(lst, "check", lst["segments"]["check"]["range"], lst["segments"]["check"]["slow"], "厂家说的")
+    assert lst["segments"]["check"]["note"] == "厂家说的"                     # 只改备注照写
