@@ -8,6 +8,7 @@
 密钥只在内存里用，不打印、不写进日志和返回的说法里。
 """
 
+import http.client
 import json
 import os
 import re
@@ -30,10 +31,11 @@ READ_ONLY = "Read,Grep,Glob"  # Claude Code 只开这三个读代码的工具，
 
 
 class LLMError(Exception):
-    def __init__(self, kind, message):
+    def __init__(self, kind, message, detail=""):
         super().__init__(message)
         self.kind = kind
         self.message = message
+        self.detail = detail  # 原始报错，放进页面的"详情"，不放进提示
 
 
 class LLM:
@@ -56,10 +58,21 @@ class LLM:
             "not_installed": "这台电脑上没找到 Claude Code。装好并登录后再选这一项，或者改用填密钥的方式。",
             "not_logged_in": "找到了 Claude Code，但还没登录：在终端里运行 claude，按提示登录一次。",
             "timeout": f"{self.name}太久没读完（超过 {getattr(self, 'timeout', 900) // 60} 分钟），码表先停下了。点重试再来一次。",
+            "slow": f"{self.name}太久没有回复，码表先停下了：可能是网络慢或服务器忙，过一会儿点重试。",
+            "dropped": f"和{self.name}的连接中途断了：看看网络稳不稳，再点重试。",
         }.get(kind, f"{self.name}返回了错误：{detail[:200]}")
 
     def fail(self, kind, detail=""):
-        return LLMError(kind, self._say(kind, detail))
+        return LLMError(kind, self._say(kind, detail), detail)
+
+    def _read_error(self, e):
+        """读回复途中出的错（超时、断连、坏行）：归成大模型错误，原始报错留在 detail 里。"""
+        detail = f"{type(e).__name__}: {e}"
+        if isinstance(e, TimeoutError):
+            return LLMError("slow", self._say("slow"), detail)
+        if isinstance(e, (OSError, http.client.HTTPException)):
+            return LLMError("dropped", self._say("dropped"), detail)
+        return LLMError("other", self._say("other", "回复的格式不对"), detail)
 
     def investigate(self, prompt, root, on_text=None, on_tool=None):
         """自己读源码目录（只读）再回答，返回最后的完整回答。on_text 收到一段段文字，on_tool 收到"读了什么"。"""
@@ -128,8 +141,15 @@ class ClaudeAPI(LLM):
             if e.status_code == 402 or "credit balance" in msg.lower():
                 raise self.fail("no_balance") from e
             raise self.fail("other", f"{e.status_code} {msg}") from e
+        except anthropic.APITimeoutError as e:  # 是它的子类，要放在"连不上"前面：超时不是没联网
+            raise LLMError("slow", self._say("slow"), str(e)) from e
         except anthropic.APIConnectionError as e:
-            raise self.fail("offline") from e
+            raise LLMError("offline", self._say("offline"), str(e)) from e
+        except Exception as e:  # 边答边传的途中超时、断开：SDK 不包，原样抛它底下网络库的异常
+            if type(e).__module__.split(".")[0] not in ("httpx", "httpx2", "httpcore"):
+                raise
+            kind = "slow" if "Timeout" in type(e).__name__ else "dropped"
+            raise LLMError(kind, self._say(kind), f"{type(e).__name__}: {e}") from e
 
     def investigate(self, prompt, root, on_text=None, on_tool=None):
         tools, messages, final = SourceTools(root), [{"role": "user", "content": prompt}], []
@@ -193,7 +213,9 @@ class DeepSeek(LLM):
             kind = {401: "bad_key", 403: "bad_key", 402: "no_balance", 429: "busy"}.get(e.code, "busy" if e.code >= 500 else "other")
             raise self.fail(kind, f"{e.code}") from e
         except (urllib.error.URLError, OSError) as e:
-            raise self.fail("offline") from e
+            if isinstance(getattr(e, "reason", e), TimeoutError):  # 连上了但等不到回复：不是没联网
+                raise self._read_error(getattr(e, "reason", e)) from e
+            raise LLMError("offline", self._say("offline"), f"{type(e).__name__}: {e}") from e
 
     def investigate(self, prompt, root, on_text=None, on_tool=None):
         tools, messages = SourceTools(root), [{"role": "user", "content": prompt}]
@@ -206,8 +228,8 @@ class DeepSeek(LLM):
             with self._post(body) as resp:
                 try:
                     msg = json.loads(resp.read())["choices"][0]["message"]
-                except (ValueError, KeyError, IndexError) as e:
-                    raise self.fail("other", "回复的格式不对") from e
+                except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
+                    raise self._read_error(e) from e  # 读回复时超时、断开、格式不对，都按大模型的错说
             if msg.get("content"):
                 on_text and on_text(msg["content"])
             calls = msg.get("tool_calls") or []
@@ -227,16 +249,19 @@ class DeepSeek(LLM):
         msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
         resp = self._post({"model": self.model, "messages": msgs, "stream": True})
         with resp:
-            for raw in resp:
-                line = raw.decode("utf-8", "replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                piece = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
-                if piece:
-                    yield piece
+            try:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    piece = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
+                    if piece:
+                        yield piece
+            except (ValueError, AttributeError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
+                raise self._read_error(e) from e  # 读到一半超时、断开，或者流里有坏行
 
     def test(self):
         self.timeout = 30
@@ -291,6 +316,7 @@ class ClaudeCode(LLM):
             raise self.fail("not_installed")
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    encoding="utf-8", errors="replace",  # Windows 默认按 GBK 解码，中文会出错
                                     stdin=subprocess.DEVNULL, cwd=cwd, start_new_session=os.name != "nt")
         except OSError as e:
             raise self.fail("not_installed") from e

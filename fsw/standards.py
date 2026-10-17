@@ -45,14 +45,25 @@ def _at(s):
     return f, int(line)
 
 
+def _line(s):
+    """步骤的行号；不是整数（人改过、老的识别结果里留着 "655-660" 这类）就当没有，不对标准，不出错。"""
+    try:
+        return int(s.get("l"))
+    except (TypeError, ValueError):
+        return None
+
+
 def match_points(steps, standard):
     """真步骤的计时点 → 标准里的计时点（一对一，取最近的）。"""
     cands = []
     for s in steps:
+        mine = _line(s)
+        if mine is None:
+            continue
         for sp, info in standard.get("points", {}).items():
             f, line = _at(info["at"])
-            if (s.get("path") or s.get("f")) == f and abs(int(s["l"]) - line) <= NEAR:
-                cands.append((abs(int(s["l"]) - line), s["p"], sp))
+            if (s.get("path") or s.get("f")) == f and abs(mine - line) <= NEAR:
+                cands.append((abs(mine - line), s["p"], sp))
     out, used = {}, set()
     for _, mine, theirs in sorted(cands):
         if mine not in out and theirs not in used:
