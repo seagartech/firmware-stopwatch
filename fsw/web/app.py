@@ -841,7 +841,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             T().count("clicks")
             fresh = job.pop("_just_flashed", False)
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机" if fresh else "设备开着，等计时点",
-                       try_started=time.time(), dev_seen=None if fresh else time.time())
+                       try_started=time.time(), dev_seen=None if fresh else time.time(), boot_quiet=False)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
             # 和多轮实测同一个标准：有一轮（从一个起点到下一个起点）插上的计时点全部收到，才算试通。
             # 有的点只在某些情况下才走到（比如只喊唤醒词时，设备不会判断"你说完了"），所以某一轮没收全不马上判失败：
@@ -888,6 +888,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                         lines = got_lines
                     else:
                         job["log"] = "设备还没有输出，重新连一下调试口"
+                        job["boot_quiet"] = True  # 开机那几行可能在重连前就打完了，设备待机不出声：页面上请人直接做一次，别一直等"开机"
                         time.sleep(wait_step)
                 except Exception as e:
                     err = e

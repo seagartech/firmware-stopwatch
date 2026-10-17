@@ -834,6 +834,7 @@ const stepLog=()=>`<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.l
 // 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
 const tryAct=()=>{const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
 function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
+ if(!up&&J.boot_quiet)return `<div class="bigask"><b>设备可能已经开机了：现在对设备${tryAct()}</b><span class="note">没看到它的开机输出（有的设备开机后不出声，或者开机那几行在码表连上之前就打完了）。看设备已经回到待命画面，就直接做一次；码表收到计时点就算通。</span>${fullLogBtn()}${fullLog()}</div>`;  // 不一直转圈等"开机"
  if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;
  return `<div class="bigask"><b>现在对设备：${tryAct()}</b>
   <span class="note">设备已经开机了。只是确认计时点能收到，不算进数据。</span>
