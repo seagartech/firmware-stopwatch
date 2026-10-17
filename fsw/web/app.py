@@ -1323,7 +1323,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         real = body.demo is None and job and job.get("demo") is None and job.get("raw_log")
         if body.folder:
             folder = Path(body.folder).expanduser()
-            if not folder.is_absolute() or not folder.is_dir():
+            default = folder.is_absolute() and folder.resolve() == Path(_export_dir(body.demo)).expanduser().resolve()
+            if not folder.is_absolute() or not (folder.is_dir() or default):  # 默认文件夹（新数据目录里还没有）可以新建；别的要已有
                 raise HTTPException(400, "存不了：这个文件夹不存在，换一个已有的文件夹")
         else:
             folder = Path(_export_dir(body.demo))
