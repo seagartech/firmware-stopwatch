@@ -215,3 +215,17 @@ def test_compare_noise_is_in_prev_payload(tmp_path):
     p = measure()["prev"]
     assert set(p["noise"]) == set(p["segs"]) and set(p["noise_lines"]) == set(p["lines"])
     assert all(v >= 0 for v in p["noise"].values())
+
+
+def test_lines_follow_the_plan_when_saved_steps_are_from_another_version(setup, tmp_path):  # noqa: F811
+    """升级走查撞到：存下的"找关键步骤"结果是更晚那次（行号多 1），留下的插入方案和原版是更早那次。
+    挪行号以插入方案为准，步骤和插法对得上，插入时才能沿用、不调用大模型。"""
+    proj, src = inserted(setup)
+    (proj / "identify" / "old.json").write_text(json.dumps({
+        "ok": True, "what": WHAT, "provider": "x",
+        "steps": [{"id": s["p"], "name": s["n"], "file": s["path"], "line": s["l"] + 1} for s in STEPS]}, ensure_ascii=False), encoding="utf-8")
+    new = changed_copy(src, tmp_path, lambda d: prepend(d / "main" / "rfid_task.c", 2))
+    c = cy.carry(proj, new, WHAT, "x")
+    lines = {s["id"]: s["line"] for s in c["result"]["steps"]}
+    assert lines == {"P1": 90, "P2": 133, "P5": 55}
+    assert [(p, l) for p, _, l in cy.sig(c["plan_steps"])] == [(k, v) for k, v in lines.items()]
