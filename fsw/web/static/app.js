@@ -37,7 +37,8 @@ let JREP=null,ADV=null,advT=null;
 const D0ok=()=>okRounds().length>0;
 async function advStart(){ADV={status:'running',read:''};fixPick=null;render();
  const r=await fetch('/api/advise/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:REAL.work,steps:IDENT.page.steps,what:hSay,project_dir:REAL.project_dir})});
- const j=await r.json();if(!r.ok){ADV={status:'failed',message:j.detail};render();return}ADV=j;clearInterval(advT);
+ const j=await r.json();if(!r.ok){ADV={status:'failed',message:j.detail};render();return}ADV=j;advWatch()}
+function advWatch(){clearInterval(advT);
  advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render();if(x.status==='done'&&EXP.state==='wait'){EXP.state='saving';render();exportReport(EXP.dir)}else if(x.status==='failed'&&EXP.state==='wait'){EXP.state='';render()}}catch(e){}},1000)}
 function advBox(){if(!ADV||ADV.status==='done')return '';
  if(ADV.status==='failed')return `<div class="errbox"><b>为什么、怎么改还没写出来</b><p style="margin:6px 0">${ADV.message||''}</p><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-advretry="1">重试</button></div></div>`;
@@ -296,7 +297,7 @@ async function realPick(body,label,board){const quiet=!!board&&!!REAL;hErr='';en
  hReading=false;
  if(!r.ok){REAL=null;hSrc='';hStage=0;hErr=r.kind==='multiple'?`<b>${r.message}</b><div class="acts" style="margin:8px 0 0">${r.projects.map(p=>`<button class="btn" data-pickroot="${p.root.replace(/"/g,'&quot;')}">${p.name}<span class="note">　${p.root}</span></button>`).join('')}</div>`:r.message;render();return}
  REAL={...r.info,body,label:hSrc,work:r.work,project_dir:r.project_dir,fingerprint:r.fingerprint,ai:null};if(REAL.board&&!hBoardOpen)hBoardQ=REAL.board;  // 再测时板子按上次选的填好（决策 130）pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');IDENT=null;
- hScan=1;if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);
+ hScan=1;newRun();if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);
  // AI 推荐：只给大模型项目概况（目录、说明文件），一般十几秒；没设置大模型就不扫
  if(r.status!=='needs_board'&&envKey()){const me=REAL;fetch('/api/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:r.work,name:REAL.name,chip:REAL.chip,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint})}).then(x=>x.ok?x.json():{phrases:[]}).catch(()=>({phrases:[]})).then(j=>{if(REAL!==me)return;REAL.ai=j.phrases||[];REAL.aiCalled=!!j.called;hScan=2;if(page==='home')render()})}
  else{REAL.ai=[];hScan=2;render()}}
@@ -574,7 +575,8 @@ function reportPage(D){
 }
 
 let page='home',mode='boss',scene='',homeVar='m',hStage=0,hSay='';
-try{const h=location.hash.slice(1);if(PAGES.some(p=>p.id===h))page=h;const s=localStorage.getItem('fsw-home');}catch(e){}
+// 网址 #页面名 记着在哪一页（D 组）：打开时先不画，等按后台状态接上进度（uiRestore）再画，免得先闪一下空白首页
+let booting=true;const HASH0=(()=>{try{const h=decodeURIComponent(location.hash.slice(1));return PAGES.some(p=>p.id===h)?h:''}catch(e){return ''}})();
 const save=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 // ===== 找关键步骤 =====
 
@@ -592,14 +594,14 @@ const TOOLT=c=>c==='network'?'组件没下载下来，不是源码的问题':'�
 const htmlEsc=t=>String(t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const BGTIME=()=>{if(BG&&BG.seconds!=null){const t=Math.round(BG.seconds);return t>=60?`${Math.floor(t/60)} 分 ${t%60} 秒`:`${t} 秒`}return FF[scene].bg};
 const bgBody=()=>({work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min,project_dir:REAL.project_dir});  // 带上项目：源码没变就用上次编好的原版（决策 134）
-function bgStartReal(){clearInterval(bgT);bgT=null;clearInterval(bgPoll);bgSrc=hSrc;bgSec=0;bgDur=100;BG={state:'running',pct:0};
+function bgStartReal(resume){clearInterval(bgT);bgT=null;clearInterval(bgPoll);bgSrc=hSrc;bgSec=0;bgDur=100;BG=resume&&BG?BG:{state:'running',pct:0};  // resume：刷新后接着看后台正在编的，不重新开始
  const body=bgBody();
  const show=s=>{BG=s;bgSec=s.state==='done'?100:(s.pct||0);bgPill();if(pop==='bg')morphHTML(document.getElementById('popdlg'),popHTML());if(page==='home'&&hStage===3&&stepsRead===2)document.getElementById('dlg').innerHTML=modalHTML()};
  const tick=async()=>{let s;try{s=await (await fetch('/api/bgbuild')).json();if(s.state==='waiting_tool'||s.state==='idle'||s.work!==body.work)s=await api('/api/bgbuild/start',body)}catch(e){return}
   show(s);
   if(s.state==='done'||s.state==='failed'){clearInterval(bgPoll);bgPoll=null;if(s.state==='done'){bgShownDone=Date.now();setTimeout(bgPill,5100)}
    if(page==='flash'||page==='steps'||(page==='home'&&hStage===3))render()}};
- api('/api/bgbuild/start',body).then(show).catch(()=>{});bgPoll=setInterval(tick,1000)}
+ if(resume)tick();else api('/api/bgbuild/start',body).then(show).catch(()=>{});bgPoll=setInterval(tick,1000)}
 function bgStart(){if(REAL&&REAL.work)return bgStartReal();clearInterval(bgT);bgSrc=hSrc;bgSec=0;bgDur=demoErr==='slowbg'?260:70;
  bgT=setInterval(()=>{if(!envComp())return;bgSec+=7;const done=bgDone();
   bgPill();if(pop==='bg')morphHTML(document.getElementById('popdlg'),popHTML());
@@ -1214,6 +1216,8 @@ function popHTML(){const F=FF[scene],C=CC();
  return ''}
 let flowMax=0;
 function flowReset(){flowMax=0}
+// 回看首页时换了固件或板子：真改了东西，这次测量的步骤条作废，后面要重新做（停在回看不作废）
+function newRun(){if(flow!=='first'||flowMax<1)return;flow=null;flowReset();toast('换了固件或板子：后面的步骤要重新做')}
 function stepsChanged(){if(flow==='first'&&flowMax>1){flowMax=1;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;colStop();col={st:0,att:0,got:[],phase:0};toast('步骤改了：插计时点和烧录、多轮实测要重新做')}}
 function flowBar(){if(!flow&&page!=='home')return '';let st;
  if(flow==='first'||!flow){if(!FLOW1.some(x=>x[0]===page))return '';st=FLOW1.map(([id,n])=>[id,n,0])}
@@ -1281,7 +1285,7 @@ function morphKids(a,b){const x=[...a.childNodes],y=[...b.childNodes];
  y.forEach((n,i)=>{if(x[i])morphNode(x[i],n);else a.appendChild(n)});
  for(let i=y.length;i<x.length;i++)x[i].remove()}
 function morphHTML(el,html){const t=document.createElement(el.tagName);t.innerHTML=html;morphKids(el,t)}
-function render(){if(!scene||!SCENES[scene])return;applyScene();
+function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   if(page==='report'&&(!JREP||JREP._key!==repKey()))fetchReport();
   if(page==='report'&&JREP&&JREP._key===repKey()&&repKey().startsWith('real')&&!ADV&&D0ok())advStart();
   const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
@@ -1312,7 +1316,7 @@ function render(){if(!scene||!SCENES[scene])return;applyScene();
   {const m=document.getElementById('main');const need=page==='steps'&&stepsRead===2&&alsoFace===null?'#sideask':null;const el=need&&m.querySelector(need);if(el)el.classList.add('need')}
   document.getElementById('v-boss').setAttribute('aria-pressed',String(mode==='boss'));
   document.getElementById('v-dev').setAttribute('aria-pressed',String(mode==='dev'));
-  syncFlow();
+  syncFlow();syncHash();uiSave();
 }
 // 步骤条同步给后台：后台记下走到哪一步、哪步出错、哪些跳过（刷新网页、以后接真功能都靠它）
 let lastKind='',lastSync='';
@@ -1324,6 +1328,56 @@ function syncFlow(){if(!flow)return;
  const b={reached:flowMax,viewing:ids.includes(page)?page:null,error:err,skipped},k=JSON.stringify(b),kind=flow+'/'+scene;
  if(k===lastSync&&kind===lastKind)return;lastSync=k;
  (kind!==lastKind?post('/api/flow/start',{kind:flow,demo:scene}):Promise.resolve()).then(()=>post('/api/flow/sync',b)).catch(()=>{});lastKind=kind}
+// ===== 刷新、后退不丢进度（D 组）=====
+// 换页写进网址（#页面名），浏览器的后退、前进在码表里换页；页面进度存到后台 /api/ui，刷新或新开标签页时接上，
+// 后台任务（找关键步骤、编原版、插计时点和烧录、多轮实测、写建议）还在跑就接着显示进度
+let histPage=null,navPop=false;
+function syncHash(){if(page===histPage)return;const url=location.pathname+location.search+'#'+page;
+ try{if(histPage===null||navPop)history.replaceState({fsw:page},'',url);else history.pushState({fsw:page},'',url)}catch(e){}histPage=page;navPop=false}
+const PNAME=p=>(FLOW1.find(x=>x[0]===p)||[0,(PAGES.find(x=>x.id===p)||{}).name||p])[1];
+// 这一页现在能不能打开：没做到的、做到了但后台已经没有那一步的进度（比如码表重开过）的，都不能直接打开
+function canView(p){if(p==='home'||p==='settings')return true;
+ const L=flow==='retest'?['retest','steps','flash','collect','compare']:flow==='first'?FLOW1.map(x=>x[0]):[],i=L.indexOf(p),real=!!(REAL&&REAL.work)&&flow==='first';
+ if(i<0&&['steps','flash','collect'].includes(p))return false;
+ if(i>flowMax)return false;
+ if(real){if(p==='steps')return stepsRead>=1;if(p==='flash')return !!(IDENT&&IDENT.page);if(p==='collect')return !!(FSWJ&&FSWJ.status==='done');if(p==='report'||p==='range')return okRounds().length>=MIN_ROUNDS}
+ return true}
+// 去不了就往前找最近一个能接着做的
+function canViewNear(p){const L=flow==='retest'?['retest','steps','flash','collect','compare']:FLOW1.map(x=>x[0]);let i=L.indexOf(p);if(i<0)i=p==='range'?L.length-1:0;
+ for(;i>=0;i--)if(canView(L[i]))return L[i];return 'home'}
+window.addEventListener('popstate',()=>{if(booting)return;let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}if(!PAGES.some(p=>p.id===h)||h===page)return;
+ navPop=true;pop=null;if(hStage>=2)hStage=1;page=canView(h)?h:canViewNear(h);render();window.scrollTo(0,0)});
+function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(STEPS||[]),...added].find(r=>r.p===p);if(x)ed[p]=[x.f,x.l]}
+ return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colN,colVar,adv:ADV&&ADV.started||null,rtCase}}
+let uiLast='',uiT=null;
+const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
+function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;clearTimeout(uiT);uiT=setTimeout(()=>{uiT=null;uiSend(s)},250)}
+window.addEventListener('pagehide',()=>{if(!uiT)return;clearTimeout(uiT);uiT=null;try{navigator.sendBeacon('/api/ui?key='+encodeURIComponent(DEMO),new Blob([uiLast],{type:'application/json'}))}catch(e){uiSend(uiLast)}});
+async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return r.ok?await r.json():null}catch(e){return null}};
+ const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),u=U&&U.ui,J=(U&&U.jobs)||{};
+ if(!u||u.v!==1||!SCENES[u.scene]){page=HASH0==='settings'?'settings':'home';return}
+ scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
+ REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colN=u.colN||colN;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;
+ const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;
+  for(const [p,v] of Object.entries(u.ed||{})){const x=[...STEPS,...added].find(r=>r.p===p);if(x&&v){x.f=v[0];x.l=v[1];edits[p]=true}}};
+ const quiet=j=>{const b=beep;beep=false;try{colApply(j)}finally{beep=b}};  // 接上已测的轮：不再一轮轮"叮"
+ const colResume=j=>{COLJ=j;col={st:['running','waiting_device','paused'].includes(j.status)?1:0,att:0,got:[],phase:0,sc:scene};quiet(j);if(col.st===1)colWatch()};
+ if(REAL&&REAL.work){
+  if(bgSrc&&J.bgbuild===REAL.work){BG=await get('/api/bgbuild');bgStartReal(true)}else if(bgSrc)bgStartReal();
+  const ij=flow==='first'&&J.identify===REAL.work?await get('/api/identify'):null;
+  if(ij&&ij.state&&ij.state!=='idle'&&ij.what===hSay){if(ij.state==='running'){stepsRead=1;identApply(ij);readT=setInterval(async()=>{try{identApply(await (await fetch('/api/identify')).json())}catch(e){}},1000)}else identApply(ij);if(ij.state==='done')keep()}
+  else if(hStage>=3)hStage=1;  // 找关键步骤的进度没了：回到首页"下一步"那里重新开始
+  if(IDENT&&IDENT.page&&flowMax>=2&&J.fsw===REAL.work){const fj=await get('/api/fsw');
+   if(fj&&fj.status&&fj.status!=='idle'){fswApply(fj);diffOk=fj.status==='inserted'?false:!!u.diffOk;if(['running','waiting_device','ready_try'].includes(fj.status))fswPoll();if(fj.status==='done'){onDev='fsw';await loadRCT()}}}
+  if(realCol()&&flowMax>=3){const cj=await get('/api/collect');if(cj&&cj.status!=='idle'&&!cj.demo&&String(cj.raw_log||'').startsWith(REAL.project_dir)){COLJ=cj;await loadRCT();colResume(cj)}}
+  if(u.adv&&okRounds().length){const aj=await get('/api/advise');if(aj&&aj.started===u.adv){ADV=aj;if(aj.status==='running')advWatch()}}}
+ else{stepsRead=flow&&flowMax>=1?2:0;if(stepsRead===2)keep();if(hStage>=3)hStage=1;
+  if(flow&&flowMax>=3){fl={st:2,step:5,pct:0,log:''};diffOk=true;onDev='fsw'}
+  const cj=await get('/api/collect');if(cj&&cj.status!=='idle'&&cj.demo===scene&&flow&&flowMax>=3)colResume(cj)}
+ const want=HASH0&&HASH0!==u.page&&canView(HASH0)?HASH0:u.page||'home';
+ page=canView(want)?want:canViewNear(want);
+ if(page!==want){const L=flow==='retest'?['retest','steps','flash','collect','compare']:FLOW1.map(x=>x[0]),i=L.indexOf(page);if(flow&&i>=0)flowMax=Math.min(flowMax,i)}  // 接不上的那几步不再标成做完
+ if(page!==want)setTimeout(()=>toast(`上次在「${PNAME(want)}」，这一步的进度没能接上，先回到「${PNAME(page)}」，从这里接着做。`),300)}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{
@@ -1362,7 +1416,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-bgpop]')){pop='bg';render();return}
   if(e.target.closest('[data-bgretry]')&&REAL&&REAL.work){pop=null;bgStartReal();render();return}
   const pc=e.target.closest('[data-pop]');if(pc){render();if(pc.dataset.nudge)nudge(pc.dataset.nudge);return}
-  const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if((to==='home'||to==='settings')&&!g.dataset.keepflow)flow=flow&&to==='settings'?flow:null;page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
+  const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;/* 第一次测时点首页只是回看，步骤条留着（D 组） */page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
   const rt=e.target.closest('[data-retest]');if(rt){flowReset();scene=rt.dataset.retest;rtSrc=0;rtOther=false;rtReading=false;rtPath='';page='retest';rtCase=RTCASE;flow='retest';render();window.scrollTo(0,0);return}
   const rv2=e.target.closest('[data-rtvar]');if(rv2){rtCase=rv2.dataset.rtvar;rtSrc=0;rtOther=false;render();return}
   const rs2=e.target.closest('[data-rtsrc]');if(rs2){const a=rs2.dataset.rtsrc,P=PROJ.find(p=>p.scene===scene),F=FF[scene];
@@ -1376,7 +1430,7 @@ document.addEventListener('click',e=>{
   const o=e.target.closest('[data-open]');if(o){scene=o.dataset.open;flow=null;page='report';mode='boss';render();window.scrollTo(0,0);return}
   const v=e.target.closest('[data-var]');if(v){homeVar=v.dataset.var;save('fsw-home',homeVar);render();return}
   const pk=e.target.closest('button[data-pick]');if(pk){const a=pk.dataset.pick;  // 只认首页选源码的按钮（报告里方案的勾选框也叫 data-pick）
-   if(a==='reset'){clearInterval(bgT);bgT=null;bgSrc='';hStage=0;hSrc='';hScan=0;REAL=null;hBoardQ='';render();return}
+   if(a==='reset'){newRun();clearInterval(bgT);bgT=null;bgSrc='';hStage=0;hSrc='';hScan=0;REAL=null;hBoardQ='';render();return}
    if(a==='paste'){const v=(document.getElementById('h-paste').value||'').trim();if(!v){hErr='先粘贴一个路径。';render();return}realPick({path:v});return}
    api('/api/source/pick',{kind:a==='zip'?'zip':'dir'}).then(r=>{if(r.path)realPick({path:r.path})}).catch(()=>{hErr='打不开选择窗口，可以把路径粘贴到下面的框里。';render()});return}
   const pr=e.target.closest('[data-pickroot]');if(pr){realPick({path:pr.dataset.pickroot});return}
@@ -1468,5 +1522,7 @@ document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render
  try{const e=await (await fetch('/api/env')).json();IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);CCST=e.claude_code||null;PORTS=e.ports||[]}catch(e){}
  try{SAVED=(await (await fetch('/api/state')).json()).settings;if(P2UI[SAVED.llm_provider])setLLM=P2UI[SAVED.llm_provider];reuseLast=SAVED.reuse_last!==false;setFirst=!SAVED.llm_provider}catch(e){}
  await histLoad();
+ try{await uiRestore()}catch(e){page='home'}  // 接上次的进度（D 组）
+ booting=false;
  portsWatch(true)
  render()})();
