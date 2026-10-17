@@ -138,3 +138,22 @@ def test_report_compares_with_last_full_run_of_same_points(tmp_path):
         run.rename(proj / "runs" / f"2000020{i}-000000")
     few = measure(5)
     assert "不到 10 轮" in few["prev"]["why"]
+
+
+def test_carry_still_works_after_reselecting_changed_source(setup, tmp_path):  # noqa: F811
+    """真机走查时撞到的：改了源码、回首页重新选一次，码表把上次的插入方案和原版文件作废了，沿用无从比对。
+    现在作废前留一份（fsw-last/），照样能比对、沿用。"""
+    c, r, *_, src = setup()
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    from pathlib import Path
+    proj = Path(r["project_dir"])
+    (proj / "identify").mkdir(exist_ok=True)
+    (proj / "identify" / "old.json").write_text(json.dumps({
+        "ok": True, "what": WHAT, "provider": "x",
+        "steps": [{"id": s["p"], "name": s["n"], "file": s["path"], "line": s["l"]} for s in STEPS]}, ensure_ascii=False), encoding="utf-8")
+    prepend(src / "main" / "rfid_task.c", 1)
+    r2 = c.post("/api/source/inspect", json={"path": str(src)}).json()
+    assert r2["status"] == "changed" and not (proj / "fsw-plan.json").exists()      # 码表照旧作废
+    got = cy.carry(proj, r2["work"], WHAT, "x")
+    assert got["ok"] and {s["id"]: s["line"] for s in got["result"]["steps"]} == {"P1": 89, "P2": 132, "P5": 55}
