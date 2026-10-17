@@ -7,6 +7,7 @@ import hashlib
 import os
 import json
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, ToolEnvError, find_idf, find_ports, pick_idf
 from fsw.platforms.espidf.install import MacInstaller, choose_version
+from fsw.workspace import workspace as ws
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
 
@@ -478,6 +480,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job["pct"], job["message"] = pct, msg
 
         def run():
+            c = _clean_work(body.work, body.project_dir)  # 副本里还插着上次的计时点（没还原就换了板子）：先还原再编原版
+            if not c["ok"]:
+                return job.update(state="failed", error=None, message=c["message"])
             try:
                 r = bg_builder(body.work, target, body.board, idf["path"], progress)
             except Exception as e:  # 编译工具本身出问题也要说清楚，不能一直转圈；这不是源码编不过
@@ -531,10 +536,26 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             return False
         return bool(fp) and rec.get("fingerprint") == fp and rec.get("board") == board
 
+    def _orig_older(project_dir):
+        """存着的原版是改源码之前那份编的（改了源码还没重新插计时点）：还原时照样烧它，把设备上的计时版换掉，但要说清楚。"""
+        try:
+            fp = json.loads((Path(project_dir) / "project.json").read_text(encoding="utf-8")).get("fingerprint")
+            rec = json.loads((Path(project_dir) / "firmware" / "orig" / "fsw-orig.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return bool(fp and rec.get("fingerprint")) and rec["fingerprint"] != fp
+
     def _save_orig(a, orig_fw):
-        """后台编好的原版存一份，记下是哪份源码、哪块板子编的。"""
-        if not EspIdf.save_firmware(a.work, orig_fw):
+        """后台编好的原版存一份，记下是哪份源码、哪块板子编的。
+        先存到旁边核对：编出来的带计时点（编译目录里是计时版）就不存，不然还原时烧回去的是计时版；之前存的原版留着。"""
+        new = orig_fw.with_name("orig.new")
+        if not EspIdf.save_firmware(a.work, new):
             return
+        if any(b"FSW,RESET," in p.read_bytes() for p in new.rglob("*.bin")):
+            shutil.rmtree(new, ignore_errors=True)
+            return
+        shutil.rmtree(orig_fw, ignore_errors=True)
+        new.rename(orig_fw)
         try:
             fp = json.loads((Path(a.project_dir) / "project.json").read_text(encoding="utf-8")).get("fingerprint")
         except (OSError, ValueError):
@@ -549,6 +570,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return b
             job["log"] = f"等后台把原始代码编完再插（{b.get('pct', 0)}%），原版要先存一份"
             time.sleep(wait_step / 4)
+
+    def _clean_work(work, project_dir=None):
+        """编原版、找关键步骤之前：工作副本里不能留着上次的计时点（上次没还原）。有插入记录就先还原，
+        记录和副本对不上就从源码重新复制。只撤副本里的，设备上是哪一版不变，还原成原版照样能烧。"""
+        pd = Path(project_dir) if project_dir else Path(live["data"]).expanduser() / Path(work).parent.name
+        if not (pd / "project.json").exists():
+            return {"ok": True, "did": None}
+        r = ws.ensure_clean(pd)
+        if r.get("changed") and fsw["args"] and Path(fsw["args"].work) == Path(work):
+            fsw["plan"] = None  # 源码在这期间改过：上次的插入方案对不上了
+        return r
 
     def _plan_cache(body):
         """源码和步骤都没变（比如码表重开过）：用上次的插入方案，不再调用大模型；设置里关掉"用上次结果"就不沿用。"""
@@ -628,7 +660,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         (Path(body.project_dir) / "fsw-args.json").write_text(json.dumps(body.model_dump(), ensure_ascii=False), encoding="utf-8")
 
         def run():
-            ins.restore(body.work, backup)  # 上次插过的先还原
+            c = ws.ensure_clean(body.project_dir)  # 上次插过的先还原；插入记录和副本对不上就重新复制，不拿旧备份盖新副本
+            if not c["ok"]:
+                return _fail(job, "insert", c["message"])
             plan_text = {}
 
             class Tap:  # 先拿到插入清单（大模型只读），等原版编完存好，再真正插
@@ -676,7 +710,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             b = _wait_bg(job, body.work)
             if b and b["state"] == "done" and not b.get("reused") and not _orig_ok(body.project_dir, body.board):
                 _save_orig(body, orig_fw)
-            rec = ins.apply(body.work, plan, backup)
+            try:
+                rec = ins.apply(body.work, plan, backup)
+            except Exception as e:  # apply 自己会撤回已改的文件；这里兜住没料到的错，任务不卡在"进行中"
+                rec = {"ok": False, "message": f"插计时点时码表出错了（{e}），一个文件都没改，点\"重新插入\"再试一次。"}
             if not rec["ok"]:
                 return _fail(job, "insert", rec["message"])
             fsw["plan"] = plan
@@ -705,6 +742,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "orig", "原始代码还没编好，没法编计时版。回首页重新选一次源码。")
             if not b.get("reused") and not _orig_ok(a.project_dir, a.board):
                 _save_orig(a, orig_fw)
+            if not ins.current(_fsw_dirs(a)[0]):  # 编原版、找关键步骤时把副本里的计时点撤掉了：按这次的插入方案插回去
+                rec = ins.apply(a.work, fsw["plan"], _fsw_dirs(a)[0]) if fsw["plan"] else \
+                    {"ok": False, "message": "副本里的计时点已经撤掉了（源码改过，或者回去重新找了关键步骤），点\"重新插入\"。"}
+                if not rec["ok"]:
+                    return _fail(job, "insert", rec["message"])
             t0 = time.time()
             try:
                 r = bg_builder(a.work, b["target"], b.get("board"), b["idf_path"],
@@ -851,7 +893,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if not job or not fsw["plan"]:
             raise HTTPException(409, "还没插好计时点")
         backup = _fsw_dirs(a)[0]
-        rec = ins.drop(a.work, fsw["plan"], body.step, backup)
+        try:
+            rec = ins.drop(a.work, fsw["plan"], body.step, backup)
+        except Exception as e:
+            rec = {"ok": False, "message": f"撤掉这处计时点时码表出错了（{e}），点\"重新插入\"再试一次。"}
+        if not rec["ok"]:
+            _fail(job, "insert", rec["message"])
+            return job
         fsw["plan"] = {**fsw["plan"], "inserts": [x for x in fsw["plan"]["inserts"] if x["step"] != body.step]}
         a.steps = [x for x in a.steps if f"P{ins.number(x['p'], a.steps)}" != body.step]
         job.update(view=ins.diff_view(rec, a.steps), total=len(rec["steps"]), dropped=(job.get("dropped") or []) + [body.step])
@@ -1379,9 +1427,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         T().count("clicks")
         if fsw["job"]:
             fsw["job"]["cancel"] = True  # 还在等设备烧计时版的，不烧了
-        ins.restore(a.work, backup)
+        ws.ensure_clean(a.project_dir)  # 插入记录和副本对不上（源码改过、副本重新复制过）就重新复制，不拿旧备份盖
         try:
-            source = json.loads((Path(a.project_dir) / "project.json").read_text(encoding="utf-8"))["source"]
+            pj = json.loads((Path(a.project_dir) / "project.json").read_text(encoding="utf-8"))
+            source = pj.get("root") or pj["source"]
         except (OSError, ValueError, KeyError):
             source = None
         cmp = ins.compare(a.work, source) if source and Path(source).is_dir() else {"same": None, "diff": [], "files": 0}
@@ -1389,6 +1438,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         ports = port_finder()
         job = fsw["job"] or {}
         fsw["job"] = job
+        older = _orig_older(a.project_dir)
 
         def burn(port):
             for k in range(6):  # 刚测完调试口可能还没放开、或设备正在重连：等一下再烧，别马上报错（决策 129）
@@ -1400,7 +1450,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             out.update(flashed=bool(r.get("ok")), port=port, error=r.get("error"), waiting=False)
             if r.get("ok"):
                 _on_device(a.project_dir, False)
-                out["say"] = "已还原：源码放回原样，原版已经烧回设备。"
+                out["say"] = "已还原：源码放回原样，原版已经烧回设备。" if not older else \
+                    "已还原：设备上烧回的是你改源码之前那份原版（改过的源码还没编出原版）；码表里的副本已经是你现在的源码。"
             else:
                 busy = re.search(r"busy|Errno 16", str(r.get("error") or ""), re.I)  # 设备还在重连（not configured）已经在上面等过了
                 out["say"] = ("源码已还原，原版没烧上：" + r["message"] if r.get("cause") == "tool" else
@@ -1531,6 +1582,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(400, "找不到复制好的源码，请回首页重新选一次固件源码。")
         if not body.what.strip():
             raise HTTPException(400, "先写要测从什么到什么。")
+        c = _clean_work(body.work, body.project_dir)  # 上次没还原：大模型要读没插计时点的副本，行号才和原代码对得上
+        if not c["ok"]:
+            raise HTTPException(409, c["message"])
         T().end("source")
         T().begin("identify")
         T().count("clicks")
@@ -1573,6 +1627,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def identify_add(body: AddStepBody):
         """结果页"添加步骤 → 让 AI 找位置"。"""
         _, model = _model()
+        c = _clean_work(body.work)  # 插过计时点又回来加步骤：读没插计时点的副本，行号才对得上
+        if not c["ok"]:
+            raise HTTPException(409, c["message"])
         return idf.add_step(model, body.work, body.sentence.strip(), what=body.what or "")
 
     @app.get("/api/env")
@@ -1625,8 +1682,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(400, "先选一个固件源码位置")
         unpack = ascii_work_root(live["data"]) / "_unpack" / hashlib.sha1(str(path).encode()).hexdigest()[:10]
         r = prepare(path, data_dir=live["data"], board=body.board, unpack_to=unpack)
-        if r.get("status") == "changed" and bg["job"] and bg["job"].get("work") == r.get("work"):
-            bg["job"] = None  # 源码改过：上次在后台编的原版不算数，要按改过的源码再编（决策 134）
+        if (r.get("status") == "changed" or r.get("copied")) and bg["job"] and bg["job"].get("work") == r.get("work"):
+            bg["job"] = None  # 源码改过（或副本重新复制过）：上次在后台编的原版不算数，要按改过的源码再编（决策 134）
+        if r.get("status") == "changed" and fsw["args"] and fsw["args"].work == r.get("work"):
+            fsw["plan"] = None  # 上次的插入方案是按旧源码定的行号
         if r.get("project_dir"):
             if not (T().path and T().path.parent == Path(r["project_dir"]) and "identify" not in T().data["stages"]):
                 tline["cur"] = tln.Timeline(Path(r["project_dir"]) / "timeline.json")  # 新的一次测量
