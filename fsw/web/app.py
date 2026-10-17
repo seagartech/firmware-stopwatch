@@ -27,7 +27,7 @@ from fsw import timeline as tln
 from fsw import standards as stds
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
-from fsw.platforms.espidf import EspIdf, find_idf, find_ports, pick_idf
+from fsw.platforms.espidf import EspIdf, ToolEnvError, find_idf, find_ports, pick_idf
 from fsw.platforms.espidf.install import MacInstaller, choose_version
 from fsw.workspace.workspace import ascii_work_root, prepare
 from fsw.web.flow import Flow, FlowError
@@ -90,7 +90,10 @@ class EspDevice:
         found = pick_idf(self.idf_finder(), None)
         if not found:
             return {"ok": False, "error": "没找到乐鑫编译工具，烧录要用它带的 esptool。"}
-        return EspIdf(found["path"]).flash_saved(fw, port, on_progress=on_progress)
+        try:
+            return EspIdf(found["path"]).flash_saved(fw, port, on_progress=on_progress)
+        except ToolEnvError as e:
+            return {"ok": False, "cause": "tool", "message": e.message, "error": e.detail}
 
     def read(self, port, seconds, on_line, stop=None):
         ser = EspIdf.open_port(port)
@@ -477,11 +480,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def run():
             try:
                 r = bg_builder(body.work, target, body.board, idf["path"], progress)
-            except Exception as e:  # 编译工具本身出问题也要说清楚，不能一直转圈
-                r = {"ok": False, "seconds": round(time.time() - job["started"], 1), "error": str(e)}
+            except Exception as e:  # 编译工具本身出问题也要说清楚，不能一直转圈；这不是源码编不过
+                r = {"ok": False, "seconds": round(time.time() - job["started"], 1), "cause": "tool",
+                     "message": ToolEnvError.message, "error": getattr(e, "detail", None) or str(e)}
             job["seconds"] = r.get("seconds")
             if r.get("ok"):
                 job.update(state="done", pct=100, message="原始代码已编好")
+            elif r.get("cause"):  # 编译工具没加载起来、组件没下载下来：都不是源码的问题
+                job.update(state="failed", cause=r["cause"], error=r.get("error"), message=r["message"])
             else:
                 job.update(state="failed", error=r.get("error"),
                            message="原版编译没通过，不是码表改的：你选的源码本身在这台电脑上编不过"
@@ -694,7 +700,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job.update(phase="build", pct=0, log="准备编译")
             b = _wait_bg(job, a.work)
             if b and b["state"] == "failed":
-                return _fail(job, "orig", b.get("message") or "原版编译没通过", error=b.get("error"))
+                return _fail(job, "orig", b.get("message") or "原版编译没通过", error=b.get("error"), cause=b.get("cause"))
             if not b or b["state"] != "done":
                 return _fail(job, "orig", "原始代码还没编好，没法编计时版。回首页重新选一次源码。")
             if not b.get("reused") and not _orig_ok(a.project_dir, a.board):
@@ -703,9 +709,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             try:
                 r = bg_builder(a.work, b["target"], b.get("board"), b["idf_path"],
                                lambda pct, msg: _log(job, msg, pct))
-            except Exception as e:
-                r = {"ok": False, "error": str(e)}
+            except Exception as e:  # 编译工具本身出问题，不是计时点引起的
+                return _fail(job, "build", ToolEnvError.message, error=getattr(e, "detail", None) or str(e), cause="tool")
             job["seconds"]["build"] = r.get("seconds", round(time.time() - t0, 1))
+            if r.get("cause"):
+                return _fail(job, "build", r["message"], error=r.get("error"), cause=r["cause"])
             if not r.get("ok"):
                 rec = ins.current(_fsw_dirs(a)[0]) or {"steps": {}}
                 step = ins.locate_error(r.get("error"), rec, a.work)
@@ -737,6 +745,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             ov = _overall(fsw_fw)
             r = device.flash(fsw_fw, port, lambda pct, msg: (lambda o: _log(job, msg, o, f"正在写进设备：{o}%"))(ov(pct)))
             job["seconds"]["flash"] = r.get("seconds")
+            if r.get("cause") == "tool":
+                return _fail(job, "burn", r["message"], error=r.get("error"), cause="tool")
             if not r.get("ok"):
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))
             _on_device(a.project_dir, True)
@@ -1393,7 +1403,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 out["say"] = "已还原：源码放回原样，原版已经烧回设备。"
             else:
                 busy = re.search(r"busy|Errno 16", str(r.get("error") or ""), re.I)  # 设备还在重连（not configured）已经在上面等过了
-                out["say"] = ("源码已还原，原版没烧上：调试口被别的程序占着。关掉它（比如串口监视器）再点一次「还原成原版」。" if busy else
+                out["say"] = ("源码已还原，原版没烧上：" + r["message"] if r.get("cause") == "tool" else
+                              "源码已还原，原版没烧上：调试口被别的程序占着。关掉它（比如串口监视器）再点一次「还原成原版」。" if busy else
                               "源码已还原，原版没烧上：看看线插好没有，再点一次「还原成原版」。")
                 out["detail"] = _plain(r.get("error"))  # 原话放在详情里，不堆在提示里
             job.update(status="restored", restore=dict(out))

@@ -222,3 +222,17 @@ def test_restore_while_waiting_for_device_cancels_flashing(setup):
     time.sleep(0.2)
     assert not any(f.endswith("firmware/fsw") for f in dev.flashed)
     assert c.get("/api/fsw").json()["status"] == "restored"
+
+
+class ToolBrokenDevice(FakeDevice):
+    def flash(self, fw, port, on_progress):
+        return {"ok": False, "cause": "tool", "message": "乐鑫编译工具没加载起来，不是源码的问题。", "error": "export.sh 没跑通"}
+
+
+def test_burn_with_compiler_not_loading_is_not_called_unplugged(setup):
+    c, r, *_ = setup(device=ToolBrokenDevice())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    c.post("/api/fsw/run", json={"from": "build"})
+    j = wait(c, lambda j: j["status"] in ("failed", "done"))
+    assert j["err"]["kind"] == "burn" and j["err"]["cause"] == "tool" and "不是源码的问题" in j["err"]["message"]

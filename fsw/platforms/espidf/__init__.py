@@ -28,6 +28,25 @@ CONFIG_STAGES = [
 ]
 
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+# 第一次编译要从乐鑫组件库下载组件；连不上时乐鑫的原话
+NET_FAIL = re.compile(r"Cannot establish a connection to the component registry|Failed to resolve component|"
+                      r"(ConnectionError|ConnectTimeout|ReadTimeout|NameResolutionError|Max retries exceeded)", re.I)
+NET_MESSAGE = "组件没下载下来，不是源码的问题：第一次编译要从乐鑫组件库下载组件，这台电脑没连上（网络或代理）。网络好了点「重试」。"
+
+
+class ToolEnvError(RuntimeError):
+    """乐鑫编译工具的环境没加载起来（export 脚本没跑通）：是电脑上编译工具的问题，不是用户源码的问题。"""
+
+    message = "乐鑫编译工具没加载起来，不是源码的问题。到设置页重新检查或安装编译工具，然后点「重试」。"
+
+    def __init__(self, detail=""):
+        super().__init__(self.message)
+        self.detail = detail
+
+
 def version_tuple(v):
     parts = [int(x) for x in re.findall(r"\d+", str(v))[:3]]
     return tuple(parts + [0] * (3 - len(parts)))
@@ -134,8 +153,19 @@ class EspIdf:
 
     # ---- 加载乐鑫的环境（相当于在终端里先 source export.sh）----
     def export_env(self):
-        """跑 export 脚本时用的环境：码表帮装的编译工具，它自己的工具放在另一个地方（.fsw_tools_path 里记着）。"""
+        """跑 export 脚本时用的环境：码表帮装的编译工具，它自己的工具放在另一个地方（.fsw_tools_path 里记着）。
+
+        码表自己跑在 uv 建的 Python 里，这套 Python 不能传给乐鑫：export 脚本会拿 PATH 上第一个 python 去找
+        "idfX.Y_pyA.B_env"，码表的 Python 版本和乐鑫装环境时用的不一样就找不到。去掉以后和用户在终端里手动加载一样。
+        """
         env = dict(os.environ)
+        for k in ("VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "PYTHONHOME", "PYTHONPATH", "__PYVENV_LAUNCHER__"):
+            env.pop(k, None)
+        own = {os.path.normcase(str(Path(d) / ("Scripts" if os.name == "nt" else "bin")))
+               for d in (os.environ.get("VIRTUAL_ENV"), sys.prefix if sys.prefix != sys.base_prefix else None) if d}
+        if "PATH" in env:
+            env["PATH"] = os.pathsep.join(d for d in env["PATH"].split(os.pathsep)
+                                          if os.path.normcase(d.rstrip("/\\")) not in own)
         rec = self.idf_path / ".fsw_tools_path"
         if rec.exists():
             env["IDF_TOOLS_PATH"] = rec.read_text(encoding="utf-8").strip()
@@ -146,15 +176,20 @@ class EspIdf:
             if os.name == "nt":
                 cmd = ["powershell", "-NoProfile", "-Command",
                        f'. "{self.idf_path / "export.ps1"}" *> $null; Get-ChildItem env: | ForEach-Object {{ "$($_.Name)=$($_.Value)" }}']
-                out = subprocess.run(cmd, capture_output=True, text=True, env=self.export_env()).stdout.splitlines()
-                pairs = [l.split("=", 1) for l in out if "=" in l]
+                r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", env=self.export_env())
+                pairs = [l.split("=", 1) for l in r.stdout.splitlines() if "=" in l]
+                said = r.stderr
             else:
-                cmd = ["bash", "-c", f'. "{self.idf_path / "export.sh"}" >/dev/null 2>&1 && env -0']
-                out = subprocess.run(cmd, capture_output=True, env=self.export_env()).stdout.decode("utf-8", "replace")
-                pairs = [l.split("=", 1) for l in out.split("\0") if "=" in l]
-            self._env = dict(pairs)
-            if "IDF_PYTHON_ENV_PATH" not in self._env:
-                raise RuntimeError("加载乐鑫编译工具的环境失败：export 脚本没跑通。可以在设置页重新安装编译工具。")
+                # export 脚本自己说的话转到 stderr 留着：没跑通时给人看"详情"
+                cmd = ["bash", "-c", f'. "{self.idf_path / "export.sh"}" 1>&2 && env -0']
+                r = subprocess.run(cmd, capture_output=True, env=self.export_env())
+                pairs = [l.split("=", 1) for l in r.stdout.decode("utf-8", "replace").split("\0") if "=" in l]
+                said = r.stderr.decode("utf-8", "replace")
+            env = dict(pairs)
+            if "IDF_PYTHON_ENV_PATH" not in env:  # 没跑通不记下来，装好或修好后再点一次就能重新加载
+                tail = [l for l in ANSI.sub("", said).splitlines() if l.strip()][-8:]
+                raise ToolEnvError("\n".join(tail))
+            self._env = env
         return self._env
 
     def _idf_py(self):
@@ -233,11 +268,16 @@ class EspIdf:
         if code == 0:
             on_progress(100, "编译完成")
             return {"ok": True, "seconds": secs, "error": None}
-        # 先找编译器的报错行（文件:行: error:），找不到再退而求其次
+        # 先找编译器的报错行（文件:行: error:），再找 CMake 的报错段（原话常常分好几行），找不到再退而求其次
+        cm = next((i for i, l in enumerate(tail) if l.startswith("CMake Error")), None)
         errs = [l for l in tail if re.search(r":\d+(:\d+)?: (fatal )?error:", l)] \
+            or (tail[cm:cm + 8] if cm is not None else []) \
             or [l for l in tail if re.search(r"\berror\b", l, re.I) and not re.search(r"\s-W|xtensa-.*-g(cc|\+\+)\s", l)] \
             or tail[-8:]
-        return {"ok": False, "seconds": secs, "error": "\n".join(errs[:8])}
+        out = {"ok": False, "seconds": secs, "error": "\n".join(errs[:8])}
+        if NET_FAIL.search("\n".join(tail)):  # 下载组件连不上：是网络的问题，不是源码编不过
+            out.update(cause="network", message=NET_MESSAGE)
+        return out
 
     def wait_for_port(self, on_waiting=lambda: None, cancelled=lambda: False):
         """烧录前才查设备：没插就停下等，插上自动继续。"""
