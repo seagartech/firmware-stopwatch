@@ -386,3 +386,9 @@ def test_ding_when_round_is_all_in_not_when_it_is_filed():
     f = grab("colApply")
     assert "if(j.status==='running'&&need>0&&got>=need&&!col.rd){col.rd=true;ding(false)}" in f
     assert "if(!x.bad&&col.rd){col.rd=false;continue}ding(!!x.bad)" in f
+
+
+def test_resume_clears_the_ding_mark():
+    # 正好在"收齐已叮、还没记下"那 1.5 秒里点停止，接着测时清掉记号，下一轮照样叮
+    from tests.test_boss_short import grab
+    assert "if(keep){col.st=1;col.phase=0;col.rd=false}" in grab("colStart")
