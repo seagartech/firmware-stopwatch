@@ -967,7 +967,9 @@ function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>
  col.got=(j.rounds||[]).map(r=>r.ok?{n:r.n,e:r.ends,probs:C.probs.filter(p=>(r.probs||[]).includes(p.k)),att:r.att,segs:r.segs}:{bad:true,att:r.att,missing:r.missing||[]});
  col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
  const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));
- for(const x of col.got.slice(before))ding(!!x.bad);
+ // "叮"在这一轮的计时点全部收到时就响（和设备出声差不多同时）；码表还要等一会儿才收尾记下这一轮，收尾时不再重复响
+ for(const x of col.got.slice(before)){if(!x.bad&&col.rd){col.rd=false;continue}ding(!!x.bad)}
+ if(j.status==='running'&&need>0&&got>=need&&!col.rd){col.rd=true;ding(false)}
  if(j.status==='done'){colStop();col.st=2}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
  if(page==='collect')render()}
 async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,att:0,got:[],phase:0,sc:scene};ADV=null;clearInterval(advT);advT=null;fixPick=null;
