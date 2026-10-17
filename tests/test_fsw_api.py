@@ -257,3 +257,51 @@ def test_retry_try_does_not_say_device_is_rebooting(setup):
     j = wait(c, lambda j: j["status"] == "running" and j.get("phase") == "try")
     assert j["dev_seen"]  # 页面不再显示"设备刚烧完，正在重启"
     assert wait(c, lambda j: j["status"] in ("failed", "done"))["status"] == "done"
+
+
+class WakeThenSpeakDevice(FakeDevice):
+    """试一次：先只喊唤醒词（这一遍走不到"听到你停下"那一步），隔一会儿再说一句话，那一步才出现。"""
+    def read(self, port, seconds, on_line, stop=None):
+        first = ["boot ok", "FSW,RESET,1,0", "FSW,P2,20,0", "FSW,P5,30,0"]
+        second = ["FSW,RESET,100,0", "FSW,P1,110,1", "FSW,P2,120,0", "FSW,P5,130,0"]
+        out = []
+        for l in first:
+            on_line(l)
+            out.append(l)
+        time.sleep(0.6)  # 人还没开口：几秒没有新的计时点
+        if stop and stop():
+            return out
+        for l in second:
+            on_line(l)
+            out.append(l)
+        return out
+
+
+def test_try_keeps_listening_when_wake_alone_misses_a_step(setup, monkeypatch):
+    import fsw.web.app as appmod
+    monkeypatch.setattr(appmod, "TRY_SETTLE", 0.1, raising=False)  # 以前：差一个、0.1 秒没新的就判失败
+    c, r, *_ = setup(device=WakeThenSpeakDevice())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    c.post("/api/fsw/run", json={"from": "build"})
+    j = wait(c, lambda j: j.get("phase") == "try" and j.get("missing"))  # 唤醒那一遍完了：页面说这一轮还差哪一步，接着听
+    assert j["status"] == "running" and len(j["missing"]) == 1
+    j = wait(c, lambda j: j["status"] in ("done", "failed"))
+    assert j["status"] == "done", j.get("err")
+
+
+class SplitAcrossRoundsDevice(FakeDevice):
+    """每一轮都缺一个点、合起来才齐：不算试通（多轮实测每一轮都要全部收到）。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,RESET,1,0", "FSW,P1,10,1", "FSW,P2,20,0", "FSW,RESET,100,0", "FSW,P2,120,0", "FSW,P5,130,0"]
+        for l in out:
+            on_line(l)
+        return out
+
+
+def test_try_needs_one_complete_round_not_points_from_different_rounds(setup):
+    c, r, *_ = setup(device=SplitAcrossRoundsDevice())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "failed" and j["err"]["kind"] == "try"
