@@ -1306,11 +1306,42 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 job["_filled"] = filled
         return rl.apply(sc, lst) if lst else sc
 
-    def _list_job():
+    def _list_dir(project_dir=None):
+        """清单在哪个项目：给了项目文件夹就用它（只限码表结果文件夹里，设置页进来的）；没给就是这份报告对应的项目。"""
+        if project_dir:
+            d = Path(project_dir).expanduser().resolve()
+            if Path(live["data"]).resolve() not in d.parents:
+                raise HTTPException(403, "只能打开码表结果文件夹里的项目")
+            return d
         job = col["job"]
         if not job or not job.get("_project_dir") or job.get("_page") is None:
             raise HTTPException(409, "先测完一次，才有这个项目的合理范围清单")
-        return job
+        return Path(job["_project_dir"])
+
+    @app.get("/api/rangelists")
+    def rangelists():
+        """设置页"合理范围清单"：每个测过的项目一行，有没有清单、几项、上次改的时间。"""
+        out = []
+        for pj in sorted(Path(live["data"]).glob("*/project.json")):
+            d = pj.parent
+            if not any(d.glob("runs/*/raw.log")):
+                continue
+            try:
+                info = json.loads(pj.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            row = {"project_dir": str(d), "name": info.get("name", d.name) + (f"（{info['board']}）" if info.get("board") else ""),
+                   "has": False, "items": 0, "changed": None, "broken": None}
+            p = rl.path_of(d)
+            if p.exists():
+                row.update(has=True, changed=time.strftime("%m-%d %H:%M", time.localtime(p.stat().st_mtime)))
+                try:
+                    lst = rl.read(d)
+                    row["items"] = len(lst["segments"]) + len(lst["lines"])
+                except rl.ListFormatError as e:
+                    row["broken"] = str(e)
+            out.append(row)
+        return out
 
     def _list_out(d):
         try:
@@ -1322,9 +1353,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return {"path": str(rl.path_of(d)), "list": lst}
 
     @app.get("/api/rangelist")
-    def rangelist_get():
-        """合理范围清单页：这份报告对应项目的清单。"""
-        return _list_out(Path(_list_job()["_project_dir"]))
+    def rangelist_get(project_dir: str | None = None):
+        """合理范围清单页：给的项目（设置页进来）或这份报告对应项目的清单。"""
+        return _list_out(_list_dir(project_dir))
 
     class ListEditBody(BaseModel):
         kind: str                       # segment / line
@@ -1334,11 +1365,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         note: str = ""
         fair: float | None = None       # 体验标准：超过多少秒算差，不设就空着
         source: str = ""
+        project_dir: str | None = None  # 设置页进来时是哪个项目
 
     @app.post("/api/rangelist/edit")
     def rangelist_edit(body: ListEditBody):
         """改一段或一条线的数（清单页的「修改」）；改完报告自动按新的判。"""
-        d = Path(_list_job()["_project_dir"])
+        d = _list_dir(body.project_dir)
         try:
             lst = rl.read(d)
         except rl.ListFormatError as e:
