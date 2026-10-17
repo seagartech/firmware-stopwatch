@@ -20,7 +20,7 @@
 | --- | --- |
 | 被测固件 | 只实测过开源项目 [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)（小智 AI 语音对话），板子是 M5Stack CoreS3（ESP32-S3），ESP-IDF v6.1 |
 | 已跑通的流程 | 选择源码 → 大模型识别关键步骤 → 插入计时点 → 编译烧录 → 多轮实测 → 分段用时报告与修改建议 → 导出报告 → 一键还原原版固件 |
-| 自动测试 | 530 个，覆盖语音对话、门禁刷卡等模拟场景 |
+| 自动测试 | 600 个，覆盖语音对话、门禁刷卡等模拟场景 |
 | 合理范围标准 | 只内置小智这一份（`fsw/standards/`）；其他固件需要自己确认每段的合理范围 |
 | 操作系统 | 苹果芯片的 Mac 实测通过；Windows 还没有实测 |
 | 大模型 | Claude API、本机已登录的 Claude Code、DeepSeek |
@@ -39,10 +39,10 @@
    brew install uv
    ```
 
-2. 拿到代码（仓库地址正式发布时补上；也可以下载压缩包解开）：
+2. 拿到代码（也可以在 Releases 页面下载压缩包解开）：
 
    ```sh
-   git clone https://github.com/<仓库地址>/firmware-stopwatch.git
+   git clone https://github.com/seagartech/firmware-stopwatch.git
    cd firmware-stopwatch
    ```
 
@@ -71,7 +71,7 @@
 2. 拿到代码：
 
    ```powershell
-   git clone https://github.com/<仓库地址>/firmware-stopwatch.git
+   git clone https://github.com/seagartech/firmware-stopwatch.git
    cd firmware-stopwatch
    ```
 
