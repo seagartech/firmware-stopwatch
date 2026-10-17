@@ -586,11 +586,14 @@ let bgSec=0,bgDur=70,bgT=null,bgSrc='';
 const bgDone=()=>bgSec>=bgDur,bgPct=()=>Math.min(100,Math.round(bgSec/bgDur*100));
 // ===== 后台编原始代码（真的）：选了真源码时，后台真编那份一个字没改的副本，这里每秒问一次进度 =====
 let BG=null,bgPoll=null;
-const bgFailed=()=>!!(BG&&BG.state==='failed'),bgWaitTool=()=>!!(BG&&BG.state==='waiting_tool');
+const bgFailed=()=>!!(BG&&BG.state==='failed'),bgWaitTool=()=>!!(BG&&BG.state==='waiting_tool'),bgToolErr=()=>bgFailed()&&!!BG.cause;
+// 不是源码的问题（编译工具没加载起来、组件没下载下来）：标题按原因说，正文去掉和标题重复的那句
+const TOOLT=c=>c==='network'?'组件没下载下来，不是源码的问题':'编译工具没加载起来，不是源码的问题',toolSay=m=>String(m||'').replace(/^.*?不是源码的问题[。：]/,'');
 const htmlEsc=t=>String(t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const BGTIME=()=>{if(BG&&BG.seconds!=null){const t=Math.round(BG.seconds);return t>=60?`${Math.floor(t/60)} 分 ${t%60} 秒`:`${t} 秒`}return FF[scene].bg};
+const bgBody=()=>({work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min,project_dir:REAL.project_dir});  // 带上项目：源码没变就用上次编好的原版（决策 134）
 function bgStartReal(){clearInterval(bgT);bgT=null;clearInterval(bgPoll);bgSrc=hSrc;bgSec=0;bgDur=100;BG={state:'running',pct:0};
- const body={work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min,project_dir:REAL.project_dir};  // 带上项目：源码没变就用上次编好的原版（决策 134）
+ const body=bgBody();
  const show=s=>{BG=s;bgSec=s.state==='done'?100:(s.pct||0);bgPill();if(pop==='bg')morphHTML(document.getElementById('popdlg'),popHTML());if(page==='home'&&hStage===3&&stepsRead===2)document.getElementById('dlg').innerHTML=modalHTML()};
  const tick=async()=>{let s;try{s=await (await fetch('/api/bgbuild')).json();if(s.state==='waiting_tool'||s.state==='idle'||s.work!==body.work)s=await api('/api/bgbuild/start',body)}catch(e){return}
   show(s);
@@ -648,7 +651,7 @@ function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='�
 let bgShownDone=0;
 const BGTIP='原始代码：你选的那份源码，码表复制一份，一个字没改、没插计时点。<br>点「开始找关键步骤」时开始编，这时源码和要测的内容都定了。插完计时点后的「编译」要用它，只重编改过的几个文件（验证期实测：从头编 119 秒，只重编 80 秒）。<br>没编完，只有「编译」那一步会先等它，其他步骤照常做。你原来的文件夹不动。';
 function bgPill(){const el=document.getElementById('bgpill');if(!el)return;let h='';
- if(bgSrc&&hSrc){if(bgFailed())h=`<button class="bgp warn" data-bgpop="1">原始代码编译没通过</button>`;else if(!envComp()||bgWaitTool())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
+ if(bgSrc&&hSrc){if(bgFailed())h=`<button class="bgp warn" data-bgpop="1">${bgToolErr()?TOOLT(BG.cause).split('，')[0]:'原始代码编译没通过'}</button>`;else if(!envComp()||bgWaitTool())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
   else if(!bgDone())h=`<button class="bgp" data-bgpop="1" title="点开看详情"><span class="spin"></span>后台在编原始代码 ${bgPct()}%</button>`;
   else if(Date.now()-bgShownDone<5000)h=`<span class="bgp ok">✓ 原始代码已编好</span>`}
  morphHTML(el,h)}
@@ -798,6 +801,7 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
   if(page==='flash')render()},350)}
 function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
  const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code>${fullLogBtn()}</div>${fullLog()}`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
+ if(E.cause)return box(TOOLT(E.cause),htmlEsc(toolSay(E.message)),E.error,`<button class="btn pri" data-flx="${E.kind==='orig'?'origretry':E.kind==='burn'?'reburn':'rebuild'}">重试</button>${E.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}`);
  if(E.kind==='insert')return box('计时点没插上',E.message,'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
  if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过（编译工具、依赖或板子配置的问题），和插的计时点无关，烧录前要先解决。码表不替你改代码。`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
  if(E.kind==='build')return E.step?box('编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点：「${htmlEsc(E.step_name||E.step)}」那一处（${htmlEsc(E.where)}）。<br>码表自己的问题，不用你改代码。`,E.error,`<button class="btn pri" data-flx="drop">撤掉这处计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`)
@@ -1201,6 +1205,7 @@ function popHTML(){const F=FF[scene],C=CC();
  if(pop==='col'){const g=okRounds(),bad=col.got.length-g.length;const to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];
   return box(`测完了 ${g.length} 轮`,`<p>${bad?`有 ${bad} 轮没收全，没算，已自动补收。`:'每轮都收全了。'}</p><p class="note">页面下方「测的够不够」写了要不要再测；不再收就直接看结果。</p>`,
    `<button class="btn" data-pop="close" data-nudge="#enough">先看够不够</button><button class="btn pri" data-go="${to[0]}">${to[1]}</button>`)}
+ if(pop==='bg'&&bgToolErr())return box(TOOLT(BG.cause),`<p>${htmlEsc(toolSay(BG.message))}</p>${BG.error?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div>`:''}<p class="note">找关键步骤照常做；烧录前解决就行。</p>`,`${BG.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}<button class="btn pri" data-bgretry="1">重试</button>`);
  if(pop==='bg'&&bgFailed())return box('原版编译没通过，不是码表改的',`<p>${htmlEsc(String(BG.message||'').replace(/^原版编译没通过，不是码表改的：/,''))}</p><div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div><p class="note">找关键步骤照常做；烧录前要先让原版编得过。</p>`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='bg'){const d=bgDone(),no=!envComp()||bgWaitTool();return box(d?'✓ 原始代码已编好':no?'后台编原始代码：等编译工具装好':`后台在编原始代码：${bgPct()}%`,`${d||no?'':`<span class="pbar" style="display:block;margin:0 0 12px"><i style="width:${bgPct()}%"></i></span>`}<ul class="notes" style="font-size:14px;color:var(--fg)">${BGTIP.split('<br>').map(x=>`<li>${x}</li>`).join('')}</ul>${no?'<p class="note">编译工具装好后自动开始，不用点。</p>':''}`,`<button class="btn pri" data-pop="close">知道了</button>`)}
  if(pop==='colre')return box('从头重测？',`<p>会清掉已测的 ${okRounds().length} 轮，从第 1 轮重新开始。</p><p class="note">只是想补几轮，用「接着测」就行。</p>`,`<button class="btn" data-pop="close">取消</button><button class="btn pri" data-col="restart2">清掉，从头测</button>`);
@@ -1355,6 +1360,7 @@ document.addEventListener('click',e=>{
     stepsChanged();added.push({p:'U'+(added.length+1),n:addName||'你加的步骤',f,l,line:addLine,why:'你加的步骤',sure:'你加'});addSt=0;addName='';addManual=false}
    render();return}
   if(e.target.closest('[data-bgpop]')){pop='bg';render();return}
+  if(e.target.closest('[data-bgretry]')&&REAL&&REAL.work){pop=null;bgStartReal();render();return}
   const pc=e.target.closest('[data-pop]');if(pc){render();if(pc.dataset.nudge)nudge(pc.dataset.nudge);return}
   const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if((to==='home'||to==='settings')&&!g.dataset.keepflow)flow=flow&&to==='settings'?flow:null;page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
   const rt=e.target.closest('[data-retest]');if(rt){flowReset();scene=rt.dataset.retest;rtSrc=0;rtOther=false;rtReading=false;rtPath='';page='retest';rtCase=RTCASE;flow='retest';render();window.scrollTo(0,0);return}
@@ -1399,6 +1405,7 @@ document.addEventListener('click',e=>{
   const fx=e.target.closest('[data-flx]');if(fx&&realFlash()&&FSWJ){const a=fx.dataset.flx;
    if(a==='drop'){const sid=FSWJ.err.step,x=live().find(r=>fswId(r.p)===sid);stepsChanged();diffOk=true;if(x)dropped.add(x.p);flowMax=Math.max(flowMax,2);toast('已撤掉这处计时点，重新编译');fswPost('/api/fsw/drop',{step:sid})}
    else if(a==='move'){const sid=FSWJ.err.step,x=live().find(r=>fswId(r.p)===sid);editP=x?x.p:null;fl={st:0,step:0,pct:0,log:''};diffOk=false;page='steps';render();window.scrollTo(0,0);setTimeout(()=>{const el=document.getElementById('ed-f');if(el){el.scrollIntoView({block:'center'});el.focus()}},50);return}
+   else if(a==='origretry'){bgStartReal();api('/api/bgbuild/start',bgBody()).then(()=>fswPost('/api/fsw/run',{from:'build'})).catch(()=>{})}  // 先重新编原版，再接着编计时版
    else if(a==='rebuild')fswPost('/api/fsw/run',{from:'build'});else if(a==='reburn')fswPost('/api/fsw/run',{from:'flash'});else if(a==='retry'||a==='trygo')fswPost('/api/fsw/run',{from:'try'});
    render();return}
   if(fx){const a=fx.dataset.flx;demoErr='';

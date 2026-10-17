@@ -1,10 +1,11 @@
+import os
 import json
 from pathlib import Path
 
 import pytest
 
 from fsw.platforms import get_platform
-from fsw.platforms.espidf import (EspIdf, find_idf, find_ports, flash_progress, ninja_progress,
+from fsw.platforms.espidf import (EspIdf, ToolEnvError, find_idf, find_ports, flash_progress, ninja_progress,
                                   pick_idf, read_lines, version_tuple)
 from tests.test_inspect import CMAKE, write
 
@@ -237,3 +238,43 @@ def test_read_for_a_while():
     got = []
     lines = EspIdf.read_for(s, 0.5, on_line=got.append)
     assert lines == ["I (1) x", "FSW,P2,10,0", "FSW,P5,20,0"] and got == lines
+
+
+# ---- 加载乐鑫环境：码表自己的 Python 不传给乐鑫；没加载起来要说清是编译工具的问题、修好能重试 ----
+def test_own_python_is_not_passed_to_espressif(tmp_path, monkeypatch):
+    venv = tmp_path / "fsw" / ".venv"
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    monkeypatch.setenv("PYTHONHOME", "/x")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(venv / ("Scripts" if os.name == "nt" else "bin")), "/usr/local/bin", "/usr/bin"]))
+    env = EspIdf(idf_install(tmp_path / "idf", 6, 1)).export_env()
+    assert "VIRTUAL_ENV" not in env and "PYTHONHOME" not in env
+    assert env["PATH"].split(os.pathsep) == ["/usr/local/bin", "/usr/bin"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="用 bash 跑假的 export.sh")
+def test_failed_load_says_tool_problem_and_can_retry(tmp_path, monkeypatch):
+    idf = idf_install(tmp_path / "idf", 6, 1)
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "venv"))
+    (idf / "export.sh").write_text(
+        'echo "venv=$VIRTUAL_ENV" > "$(dirname "${BASH_SOURCE[0]}")/seen"\n'
+        'if [ -f "$(dirname "${BASH_SOURCE[0]}")/fixed" ]; then export IDF_PYTHON_ENV_PATH=/p; return 0; fi\n'
+        'echo "ERROR: ESP-IDF Python virtual environment not found."; return 1\n')
+    e = EspIdf(idf)
+    with pytest.raises(ToolEnvError) as err:
+        e.env()
+    assert "不是源码的问题" in str(err.value) and "virtual environment not found" in err.value.detail
+    assert (idf / "seen").read_text().strip() == "venv="  # export 脚本看不到码表自己的 Python 环境
+    (idf / "fixed").write_text("")
+    assert e.env()["IDF_PYTHON_ENV_PATH"] == "/p"  # 失败没被记住：修好后同一个对象再加载就成功
+
+
+def test_component_download_failure_is_not_blamed_on_the_source(tmp_path):
+    src = tmp_path / "proj"
+    src.mkdir()
+    out = ["Processing 41 dependencies:",
+           "CMake Error at /idf/tools/cmake/build.cmake:707 (message):",
+           "  ERROR: Cannot establish a connection to the component registry.  Are you",
+           "  connected to the internet?", "-- Configuring incomplete, errors occurred!"]
+    r = EspIdf(tmp_path / "idf", runner=fake_runner(out, code=2), env={}).build(src, target="esp32s3")
+    assert not r["ok"] and r["cause"] == "network" and "不是源码的问题" in r["message"]
+    assert "connected to the internet?" in r["error"]  # 乐鑫的原话整段留着，不只剩半句

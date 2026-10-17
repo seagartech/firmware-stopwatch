@@ -3,6 +3,7 @@ import time
 
 from fastapi.testclient import TestClient
 
+from fsw.platforms.espidf import ToolEnvError
 from fsw.web.app import create_app
 
 
@@ -77,3 +78,22 @@ def test_chip_name_becomes_build_target(tmp_path):
     c.post("/api/bgbuild/start", json={"work": str(tmp_path), "chip": "ESP32-C3"})
     wait_for(c, "done")
     assert got == ["esp32c3"]
+
+
+def test_compiler_that_does_not_load_is_not_blamed_on_the_source(tmp_path):
+    calls = []
+
+    def builder(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ToolEnvError("ERROR: ESP-IDF Python virtual environment not found.")
+        return {"ok": True, "seconds": 1.0, "error": None}
+
+    c = make(tmp_path, builder)
+    body = {"work": str(tmp_path), "chip": "ESP32-S3"}
+    c.post("/api/bgbuild/start", json=body)
+    s = wait_for(c, "failed")
+    assert s["cause"] == "tool" and "不是源码的问题" in s["message"] and "不是码表改的" not in s["message"]
+    assert "virtual environment not found" in s["error"]  # 乐鑫的原话放在详情里
+    c.post("/api/bgbuild/start", json=body)  # 修好编译工具后点"重试"
+    assert wait_for(c, "done")["state"] == "done" and len(calls) == 2
