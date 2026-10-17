@@ -579,7 +579,7 @@ function reportPage(D){
 
 let page='home',mode='boss',scene='',homeVar='m',hStage=0,hSay='';
 // 网址 #页面名 记着在哪一页（D 组）：打开时先不画，等按后台状态接上进度（uiRestore）再画，免得先闪一下空白首页
-let booting=true;const HASH0=(()=>{try{const h=decodeURIComponent(location.hash.slice(1));return PAGES.some(p=>p.id===h)?h:''}catch(e){return ''}})();
+let booting=true,LASTP='';const HASH0=(()=>{try{const h=decodeURIComponent(location.hash.slice(1));return PAGES.some(p=>p.id===h)?h:''}catch(e){return ''}})();
 const save=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 // ===== 找关键步骤 =====
 
@@ -1300,7 +1300,8 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
   const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;morphHTML(document.getElementById('crumb'),isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'');
   let body;
-  if(isHome)body=HOME[homeVar].html();
+  if(!isHome)LASTP='';
+  if(isHome)body=(LASTP?`<section class="panel" style="margin-bottom:16px"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span>上次停在「${htmlEsc(PNAME(LASTP))}」</span><button class="btn pri" data-go="${LASTP}" data-keepflow="1">接着看</button></div></section>`:'')+HOME[homeVar].html();
   else if(isReport)body=reportPage(D);
   else if(page==='settings')body=settingsPage();
   else if(page==='steps')body=stepsPage();
@@ -1353,7 +1354,7 @@ function canViewNear(p){const L=flow==='retest'?['retest','steps','flash','colle
 window.addEventListener('popstate',()=>{if(booting)return;let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}if(!PAGES.some(p=>p.id===h)||h===page)return;
  navPop=true;pop=null;if(hStage>=2)hStage=1;page=canView(h)?h:canViewNear(h);render();window.scrollTo(0,0)});
 function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(STEPS||[]),...added].find(r=>r.p===p);if(x)ed[p]=[x.f,x.l]}
- return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colN,colVar,adv:ADV&&ADV.started||null,rtCase}}
+ return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colN,colVar,adv:ADV&&ADV.started||null,rtCase,last:page==='home'?LASTP:''}}
 let uiLast='',uiT=null;
 const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
 function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;clearTimeout(uiT);uiT=setTimeout(()=>{uiT=null;uiSend(s)},250)}
@@ -1382,7 +1383,10 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  const want=HASH0&&HASH0!==u.page&&canView(HASH0)?HASH0:u.page||'home';
  page=canView(want)?want:canViewNear(want);
  if(page!==want){const L=flow==='retest'?['retest','steps','flash','collect','compare']:FLOW1.map(x=>x[0]),i=L.indexOf(page);if(flow&&i>=0)flowMax=Math.min(flowMax,i)}  // 接不上的那几步不再标成做完
- if(page!==want)setTimeout(()=>toast(`上次在「${PNAME(want)}」，这一步的进度没能接上，先回到「${PNAME(page)}」，从这里接着做。`),300)}
+ if(page!==want&&HASH0)setTimeout(()=>toast(`上次在「${PNAME(want)}」，这一步的进度没能接上，先回到「${PNAME(page)}」，从这里接着做。`),300);
+ // 新打开（网址后面没带 #页面名）进首页，首页顶上一条「接着看」回到上次那页；刷新（带 #页面名）还停在原页
+ if(!HASH0&&page!=='home'&&page!=='settings'){LASTP=page;page='home';hStage=Math.min(hStage,1)}
+ else if(page==='home'&&u.last&&u.last!=='home'&&canView(u.last))LASTP=u.last}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{

@@ -66,3 +66,13 @@ def test_home_button_keeps_the_step_bar_in_first_run():
     # 点首页只是回看：第一次测的步骤条不清；真换了固件或板子才作废
     assert "if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;" in JS
     assert "function newRun(){" in JS and "换了固件或板子：后面的步骤要重新做" in JS
+
+
+def test_fresh_open_goes_home_with_a_way_back():
+    # 新打开（网址没带 #页面名）进首页，首页顶上「接着看」回上次那页；刷新带着 #页面名，还停在原页
+    body = JS[JS.index("async function uiRestore("):JS.index("async function uiRestore(") + 6000]
+    assert "if(!HASH0&&page!=='home'&&page!=='settings'){LASTP=page;page='home'" in body
+    assert "上次停在「${htmlEsc(PNAME(LASTP))}」" in JS and 'data-go="${LASTP}" data-keepflow="1">接着看' in JS
+    assert "if(!isHome)LASTP='';" in JS
+    # 在首页刷新，「接着看」还在
+    assert "last:page==='home'?LASTP:''" in JS
