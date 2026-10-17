@@ -294,6 +294,8 @@ def test_try_reopens_the_port_when_it_hears_nothing(tmp_path, monkeypatch):
     fwait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
     assert j["status"] == "done" and Silent.opens == 2
+    assert j["boot_quiet"] is True                      # 重连过：页面改成"可能已经开机了，现在做一次"，不一直转圈
+    assert "if(!up&&J.boot_quiet)" in JS
 
 
 def test_unlock_plays_a_real_sound_for_safari():
