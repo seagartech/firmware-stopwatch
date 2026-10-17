@@ -245,6 +245,7 @@ def test_own_python_is_not_passed_to_espressif(tmp_path, monkeypatch):
     venv = tmp_path / "fsw" / ".venv"
     monkeypatch.setenv("VIRTUAL_ENV", str(venv))
     monkeypatch.setenv("PYTHONHOME", "/x")
+    monkeypatch.setenv("IDF_TOOLS_PATH", str(tmp_path / "tools"))  # 和这台电脑上真装的乐鑫环境隔开
     monkeypatch.setenv("PATH", os.pathsep.join([str(venv / ("Scripts" if os.name == "nt" else "bin")), "/usr/local/bin", "/usr/bin"]))
     env = EspIdf(idf_install(tmp_path / "idf", 6, 1)).export_env()
     assert "VIRTUAL_ENV" not in env and "PYTHONHOME" not in env
