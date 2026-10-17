@@ -103,6 +103,7 @@ def test_collector_records_the_three_device_times():
     lines = ["FSW,RESET,1000000,0"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10)]
     for l in lines:
         out += c.feed(l)
+    out += c.flush()  # 收全了、下一轮没开始：收尾
     assert out[0]["ok"] and out[0]["t"] == [1.0, 3.1, 3.9]
 
 
