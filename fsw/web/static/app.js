@@ -1146,7 +1146,7 @@ function rlClick(e){
  const lo=v('rl-lo'),hi=v('rl-hi'),body={kind,key:k,range:lo==null&&hi==null?null:[lo,hi],slow:v('rl-slow'),project_dir:RLP};
  if(kind==='line'){body.fair=v('rl-fair');const sr=document.getElementById('rl-src');body.source=sr?sr.value:''}else{const n=document.getElementById('rl-note');body.note=n?n.value:''}
  if(lo==null&&hi!=null){rlMsg='合理范围要写最少（最多可以空着 = 不限）';render();return true}
- fetch('/api/rangelist/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{const j=await r.json();if(!r.ok){rlMsg=j.detail||'没保存上';render();return}RL=j;rlEd=null;rlMsg='';toast('✓ 已保存，报告按新的判');render()}).catch(()=>toast('✕ 码表后台没有回应'));
+ fetch('/api/rangelist/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{const j=await r.json();if(!r.ok){rlMsg=j.detail||'没保存上';render();return}RL=j;RLS=null;rlEd=null;rlMsg='';toast('✓ 已保存，报告按新的判');render()}).catch(()=>toast('✕ 码表后台没有回应'));
  return true}
 
 
@@ -1451,7 +1451,8 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-bgpop]')){pop='bg';render();return}
   if(e.target.closest('[data-bgretry]')&&REAL&&REAL.work){pop=null;bgStartReal();render();return}
   const pc=e.target.closest('[data-pop]');if(pc){render();if(pc.dataset.nudge)nudge(pc.dataset.nudge);return}
-  const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
+  const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;if(to==='settings')RLS=null;  // 进设置页：合理范围清单那栏重新读（可能刚在别处改过）
+if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;/* 第一次测时点首页只是回看，步骤条留着（D 组） */page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
   const rt=e.target.closest('[data-retest]');if(rt){flowReset();scene=rt.dataset.retest;rtSrc=0;rtOther=false;rtReading=false;rtPath='';page='retest';rtCase=RTCASE;flow='retest';render();window.scrollTo(0,0);return}
   const rv2=e.target.closest('[data-rtvar]');if(rv2){rtCase=rv2.dataset.rtvar;rtSrc=0;rtOther=false;render();return}
