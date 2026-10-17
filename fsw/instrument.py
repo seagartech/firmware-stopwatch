@@ -2,7 +2,8 @@
 
 - AI 给的每一行只能是：中文注释、#include 计时点工具、计时点语句（FSW_ 开头）。夹带别的代码就整份不用。
 - 码表插完逐个文件核对：原来的每一行都在、顺序不变，只多不少（只加不删）。
-- 插之前把要改的文件原样存一份；"还原"就是放回去、删掉计时点工具，再和原来的源码逐字节比对。
+- 插之前把要改的文件原样存一份，先写"进行中"的插入记录再改文件，中途出错就撤回（要么全插上，要么一个文件都不改）。
+  "还原"就是核对记录和副本对得上、放回去、删掉计时点工具，再和原来的源码逐字节比对。
 - 编译出错时，按报错的"文件:行号"对回是哪一处计时点，可以只撤掉这一处重编。
 - 附加值：问题规则要看的计时点（比如"第一包声音到达时设备的状态"）让 AI 顺带记上；附加值只能读已有的变量或
   不带参数的函数返回值（转成整数），不能赋值、自增、调用带参数的函数。记上了写进插入记录，判问题时才用。
@@ -10,6 +11,7 @@
 """
 
 import difflib
+import hashlib
 import html
 import json
 import re
@@ -330,20 +332,34 @@ def _record_path(backup):
     return Path(backup) / "record.json"
 
 
+def _sha(p):
+    p = Path(p)
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+
+
+def _write_record(backup, rec, plan):
+    _record_path(backup).write_text(json.dumps({**rec, "plan": plan}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _why(e):
+    return getattr(e, "strerror", None) or str(e) or type(e).__name__
+
+
 def apply(root, plan, backup):
-    """把计时点插进复制的源码。要改的文件先原样存一份；插完核对只加不删。"""
+    """把计时点插进复制的源码。插入要么全成，要么一个文件都不改：
+    先在内存里算好每个文件插完的样子、核对只加不删；要改的文件原样存一份，先写"进行中"的插入记录（列出要改哪些文件、
+    改前改后的内容摘要），再逐个写文件；中途出错就把已改的撤回。码表被强行关掉，留下的"进行中"记录照样能还原。"""
     root, backup = Path(root), Path(backup)
     if _record_path(backup).exists():
-        restore(root, backup)  # 上一次插的先还原，保证总是在原版上插
+        r = restore(root, backup)  # 上一次插的先还原，保证总是在原版上插
+        if not r["ok"]:
+            return r
     files = sorted({x["file"] for x in plan["inserts"]})
-    for f in files:
-        dst = backup / "files" / f
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(root / f, dst)
     header = root / plan["header"]
     created = not header.exists()
     rec = {"header": plan["header"], "created_header": created, "files": files, "steps": {}, "places": [],
            "added": 0, "deleted": 0, "values": plan.get("values") or {}}
+    news = {}
     for f in files:
         old = _read_lines(root / f)
         nl = "\r\n" if old and old[0].endswith("\r\n") else "\n"
@@ -365,37 +381,100 @@ def apply(root, plan, backup):
                 s = rec["steps"].setdefault(x["step"], {"file": f, "lines": [], "at": x["after_line"]})
                 s["lines"] += lines_at
         new += old[i:]
-        (root / f).write_bytes("".join(new).encode("utf-8", errors="surrogateescape"))
+        news[f] = "".join(new).encode("utf-8", errors="surrogateescape")
         a = [l.rstrip("\r\n") for l in old]
         b = [l.rstrip("\r\n") for l in new]
         ops = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
         rec["added"] += sum(j2 - j1 for t, _, _, j1, j2 in ops if t == "insert")
         rec["deleted"] += sum(i2 - i1 for t, i1, i2, _, _ in ops if t in ("delete", "replace"))
-    if created:
-        header.parent.mkdir(parents=True, exist_ok=True)
-        header.write_text(HEADER, encoding="utf-8")
-        rec["added"] += len(HEADER.splitlines())
-    _record_path(backup).write_text(json.dumps({**rec, "plan": plan}, ensure_ascii=False, indent=1), encoding="utf-8")
-    if rec["deleted"]:
-        restore(root, backup)
+    if rec["deleted"]:  # 还没动任何文件
         return _fail("deleted", f"码表核对时发现会删掉或改掉 {rec['deleted']} 行原有代码，已经撤回，一个文件都没改。")
+    if created:
+        rec["added"] += len(HEADER.splitlines())
+    rec.update(state="applying", before={f: _sha(root / f) for f in files},
+               after={f: hashlib.sha256(news[f]).hexdigest() for f in files})
+    try:
+        shutil.rmtree(backup / "files", ignore_errors=True)
+        for f in files:
+            dst = backup / "files" / f
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / f, dst)
+        _write_record(backup, rec, plan)
+    except OSError as e:
+        shutil.rmtree(backup / "files", ignore_errors=True)
+        _record_path(backup).unlink(missing_ok=True)
+        return _fail("write", f"插计时点前存原样备份时出错（{_why(e)}），一个文件都没改。看看磁盘是不是满了，再点\"重新插入\"。")
+    try:
+        for f in files:
+            (root / f).write_bytes(news[f])
+        if created:
+            header.parent.mkdir(parents=True, exist_ok=True)
+            header.write_text(HEADER, encoding="utf-8")
+        rec["state"] = "done"
+        _write_record(backup, rec, plan)
+    except BaseException as e:  # 只读文件、磁盘满、杀毒软件锁住文件、被强行中断：已改的撤回
+        _undo(root, backup)
+        if not isinstance(e, Exception):
+            raise
+        return _fail("write", f"插计时点时写文件出错（{_why(e)}），已经撤回，一个文件都没改。"
+                              "看看工作副本所在的磁盘是不是满了、文件是不是只读，再点\"重新插入\"。")
     return {"ok": True, **rec}
 
 
+def _undo(root, backup):
+    """插到一半出错：按"进行中"的记录把已改的文件放回去。"""
+    try:
+        restore(root, backup)
+    except Exception:
+        pass  # 撤回也没做成：记录留着，下次还原或插入前照样能放回去
+
+
+def _mismatch(root, backup, rec):
+    """插入记录和副本对不上的文件：副本里这个文件既不是插完的样子、也不是插之前的原样（副本换过、被改过），
+    或者备份丢了、变了。旧版码表的记录没有内容摘要，核对不了，也算对不上。"""
+    before, after = rec.get("before"), rec.get("after")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return rec.get("files") or ["插入记录"]
+    bad = []
+    for f in rec.get("files") or []:
+        cur = _sha(Path(root) / f)
+        if cur is None or cur not in (before.get(f), after.get(f)) or _sha(Path(backup) / "files" / f) != before.get(f):
+            bad.append(f)
+    return bad
+
+
 def restore(root, backup):
-    """还原：把改过的文件原样放回去，删掉码表加的计时点工具。"""
+    """还原：把改过的文件原样放回去，删掉码表加的计时点工具。
+    先核对插入记录和副本对得上才放回去；对不上（比如源码改过、副本重新复制过）就一个文件都不动，
+    交给调用的地方重新复制副本，免得把旧备份盖到新副本上。"""
     root, backup = Path(root), Path(backup)
     rp = _record_path(backup)
     if not rp.exists():
         return {"ok": True, "restored": 0}
-    rec = json.loads(rp.read_text(encoding="utf-8"))
-    for f in rec["files"]:
-        shutil.copy2(backup / "files" / f, root / f)
-    if rec.get("created_header"):
-        (root / rec["header"]).unlink(missing_ok=True)
-    shutil.rmtree(backup / "files", ignore_errors=True)
-    rp.unlink()
+    try:
+        rec = json.loads(rp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        rec = {}
+    bad = _mismatch(root, backup, rec)
+    if bad:
+        return _fail("stale", f"工作副本里的 {bad[0]} 和上次的插入记录对不上，没有拿旧备份去盖。", files=bad)
+    try:
+        for f in rec["files"]:
+            if _sha(root / f) != rec["before"][f]:
+                shutil.copy2(backup / "files" / f, root / f)
+        if rec.get("created_header"):
+            (root / rec["header"]).unlink(missing_ok=True)
+    except OSError as e:  # 记录留着，下次还原接着放
+        return _fail("write", f"还原时写文件出错（{_why(e)}），看看磁盘是不是满了、文件是不是只读，再还原一次。")
+    discard(backup)
     return {"ok": True, "restored": len(rec["files"])}
+
+
+def discard(backup):
+    """作废插入备份和记录（工作副本已经重新复制过，不再需要）。"""
+    backup = Path(backup)
+    shutil.rmtree(backup / "files", ignore_errors=True)
+    _record_path(backup).unlink(missing_ok=True)
 
 
 def current(backup):

@@ -22,7 +22,8 @@ def test_fingerprint_ignores_build_output_and_git(tmp_path):
     for d in ["build", ".git", "managed_components"]:
         (root / d).mkdir()
         (root / d / "x.o").write_text("junk")
-    (root / "sdkconfig").write_text("CONFIG_X=y")
+    (root / "sdkconfig.old").write_text("CONFIG_X=y")  # sdkconfig 本身算进指纹（只改配置也算改了源码）
+    (root / "dependencies.lock").write_text("x")
 
     assert fingerprint(root) == before
 
