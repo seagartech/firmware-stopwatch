@@ -43,7 +43,10 @@ def test_code_above_points_changed_lines_move_and_no_llm(setup, tmp_path):  # no
     lines = {s["id"]: s["line"] for s in c["result"]["steps"]}
     assert lines == {"P1": 90, "P2": 133, "P5": 55}                       # 上面加了 2 行：rfid 的两处往下挪 2 行，门锁那处不动
     assert cy.sig(c["plan_steps"]) == [("P1", "main/rfid_task.c", 90), ("P2", "main/rfid_task.c", 133), ("P5", "main/lock_ctrl.c", 55)]
-    assert all(x["after_line"] >= 0 for x in json.loads(c["plan"])["inserts"])
+    from fsw import instrument as ins
+    assert all(x["after_line"] >= 0 for x in ins._json_block(c["plan"])["inserts"])
+    plan = ins.parse_plan(c["plan"], new, c["plan_steps"])                 # 插入时照常核对：格式对、每处都找得到
+    assert plan["ok"], plan.get("message")
 
 
 def test_code_at_a_point_changed_redo_and_say_which(setup, tmp_path):  # noqa: F811

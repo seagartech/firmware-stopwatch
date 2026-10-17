@@ -92,7 +92,7 @@ def carry(project_dir, work, what, provider):
         d = next((v for (st, f), v in shift.items() if st == k and f == s.get("path")), 0)
         new_plan_steps.append({**s, "l": s["l"] + d})
     moved = sum(1 for v in shift.values() if v)
-    return {"ok": True, "result": {**r, "steps": steps}, "plan": json.dumps(data, ensure_ascii=False, indent=1),
+    return {"ok": True, "result": {**r, "steps": steps}, "plan": "```json\n" + json.dumps(data, ensure_ascii=False, indent=1) + "\n```\n",  # 和大模型原话同样的写法，插入时照常核对
             "plan_steps": new_plan_steps, "moved": moved}
 
 
