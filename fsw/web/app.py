@@ -126,6 +126,7 @@ class CollectBody(BaseModel):
     rounds: int = 20
     demo: str | None = None          # 演示数据（没真源码时）：按它的场景算；没设备时回放它的设备输出
     page: dict | None = None         # 真找完的步骤（结果页数据）：按它的段算
+    steps: list[dict] | None = None  # 插计时点时用的步骤（核对后的，含你自己加的）：后台有插入时的那份就用后台的
     source: str | None = None        # "device"：读真设备调试口；不写：演示数据回放
     project_dir: str | None = None
     resume: bool = False             # 接着测 / 再测几轮
@@ -246,6 +247,8 @@ class FswInsertBody(BaseModel):
 
 
 NO_DATA_SECS = 20  # 多轮实测：调试口开着，这么久没收到计时点就说人话提示（不停下，做了就接着收）
+ROUND_SETTLE = 1.5  # 多轮实测：一轮收全后，下一轮一直没开始，再等这么久就收尾（最后一轮、或设备不再开始下一轮）
+MISS_RUN = 3       # 多轮实测：同一个计时点连着这么多轮没收到，就在提示里点名
 
 
 class RestoreBody(BaseModel):
@@ -254,7 +257,7 @@ class RestoreBody(BaseModel):
 
 TRY_SECONDS = 180  # 试一次最多等多久（决策 107）：烧完就开始听，设备重启、连网、人做一次要测的事都在这里面；不用人判断"准备好了"
 REOPEN_SECS = 8   # 试一次：打开调试口后这么久没有任何输出就重开（设备烧完重启，调试口会断开再回来）
-TRY_SETTLE = 4     # 收到一些计时点后，几秒没有新的就算试通
+TRY_SETTLE = 4     # 差不多收齐后，几秒没有新的就停下，说清楚差哪几个（和多轮实测一样要全部收到才算试通）
 
 
 class FswRunBody(BaseModel):
@@ -741,6 +744,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 rec = {"ok": False, "message": f"插计时点时码表出错了（{e}），一个文件都没改，点\"重新插入\"再试一次。"}
             if not rec["ok"]:
                 return _fail(job, "insert", rec["message"])
+            _save_inserted(body.project_dir, steps, rec["steps"])
             fsw["plan"] = plan
             job.update(status="inserted", view=ins.diff_view(rec, steps), notes=plan["notes"], log="插好了，先看改动",
                        total=len(rec["steps"]))
@@ -787,7 +791,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if not r.get("ok"):
                 rec = ins.current(_fsw_dirs(a)[0]) or {"steps": {}}
                 step = ins.locate_error(r.get("error"), rec, a.work)
-                s = next((x for x in a.steps if f"P{ins.number(x['p'], a.steps)}" == step), None)
+                s = next((x for x in a.steps if ins.point_id(x, a.steps) == step), None)
                 where = f"{rec['steps'][step]['file']} 第 {rec['steps'][step]['at']} 行" if step else ""
                 short = (r.get("error") or "").replace(str(Path(a.work).resolve()) + "/", "").replace(str(a.work) + "/", "")
                 return _fail(job, "build", "编译没通过：是码表插的计时点引起的" if step else "编译没通过",
@@ -838,7 +842,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机", try_secs=TRY_SECONDS,
                        try_started=time.time(), dev_seen=None)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
-            need_n = max(1, len(want) - min(2, len(want) // 4))  # 差不多齐了才算试通：9 个至少 7 个，3 个要全到
+            # 和多轮实测同一个标准：插上的计时点全部收到才算试通。差不多齐了（最多差 2 个）、几秒再没有新的，就停下说差哪几个
+            need_n = max(1, len(want) - min(2, len(want) // 4))
             seen, last = set(), {"t": None}
 
             def on_line(line):
@@ -851,7 +856,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 job["got"] = sorted(seen)
                 _log(job, line[:300])
 
-            def enough():  # 都收到了；或者差不多齐了（最多差 2 个，有的点只在某些情况下才走到）、之后几秒再没有新的，就算试通
+            def enough():  # 都收到了；或者差不多齐了、之后几秒再没有新的（再等也不会来了）
                 return seen == want or (len(seen) >= need_n and last["t"] and time.time() - last["t"] > TRY_SETTLE)
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end:  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
@@ -880,6 +885,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                              error=f"打不开调试口：{err}" if err else "没看到设备")
             got = ins.count_marks(lines) & want
             job["got"] = sorted(got)
+            if got and got != want and len(got) >= need_n:  # 差几个：不算试通，否则正式实测每一轮都会"没收全"
+                job["try_fails"] = job.get("try_fails", 0) + 1
+                names = {ins.point_id(x, a.steps): x.get("n") for x in a.steps}
+                miss = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)]
+                return _fail(job, "try", f"收到 {len(got)} / {len(want)} 个计时点，还差「{'」「'.join(miss)}」。"
+                             "多轮实测每一轮都要全部收到才算，这样直接开始会一直没收全。",
+                             why="可能这一次没走到这几步（比如只在某些情况下才走的分支），也可能计时点插的位置走不到。"
+                                 "点「再试一次」完整做一次要测的事；还是收不到，回到「插计时点」那一步换个位置，或者删掉这一步。",
+                             error=f"（收到 {len(got)} / {len(want)} 个）", missing=miss, offer_restore=job["try_fails"] >= 2)
             if got and len(got) < need_n:  # 只收到零星几个：不算试通（决策 124）
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 return _fail(job, "try", f"只收到 {len(got)} / {len(want)} 个计时点，这一次没走完。点「再试一次」，然后完整做一次要测的事。",
@@ -938,7 +952,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             _fail(job, "insert", rec["message"])
             return job
         fsw["plan"] = {**fsw["plan"], "inserts": [x for x in fsw["plan"]["inserts"] if x["step"] != body.step]}
-        a.steps = [x for x in a.steps if f"P{ins.number(x['p'], a.steps)}" != body.step]
+        # 后面的计时点不重新编号（设备上打印的还是插入时的编号）：编号记在步骤里，多轮实测按它对上
+        a.steps = [{**x, "fsw": ins.point_id(x, a.steps)} for x in a.steps if ins.point_id(x, a.steps) != body.step]
+        (Path(a.project_dir) / "fsw-args.json").write_text(json.dumps(a.model_dump(), ensure_ascii=False), encoding="utf-8")
+        if rec.get("ok"):
+            _save_inserted(a.project_dir, a.steps, rec["steps"])
         job.update(view=ins.diff_view(rec, a.steps), total=len(rec["steps"]), dropped=(job.get("dropped") or []) + [body.step])
         return _run_from("build")
 
@@ -947,6 +965,52 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     def _col_view(job):
         return {k: v for k, v in job.items() if not k.startswith("_")}
+
+    def _save_inserted(project_dir, steps, points):
+        """这次实际插进去的步骤和计时点编号存一份（fsw-inserted.json）：工作副本还原时插入记录会删掉，
+        多轮实测、码表重开后接着测都按这份收点。"""
+        try:
+            (Path(project_dir) / "fsw-inserted.json").write_text(
+                json.dumps({"steps": steps, "points": sorted(points, key=lambda k: int(k[1:]))}, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _inserted_page(body):
+        """多轮实测按这次实际插进去的计时点算，不按 AI 最初找到的步骤（stds.inserted_page）。
+        依次用：插入记录（record.json，真插上了哪几个点）、插好时存的 fsw-inserted.json、后台插入时的步骤、
+        项目文件夹里的 fsw-args.json、网页传来的步骤；都没有就按网页传来的结果页算（不改）。"""
+        steps, inserted = body.steps, None
+        if body.project_dir:
+            proj = Path(body.project_dir)
+            saved = {}
+            try:
+                saved = json.loads((proj / "fsw-inserted.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+            a = fsw.get("args")
+            if a and Path(a.project_dir).resolve() == proj.resolve():
+                steps = a.steps
+            elif saved.get("steps"):
+                steps = saved["steps"]
+            else:
+                try:
+                    steps = json.loads((proj / "fsw-args.json").read_text(encoding="utf-8"))["steps"]
+                except (OSError, ValueError, KeyError):
+                    pass
+            rec = ins.current(proj / "fsw-backup")
+            if rec and rec.get("steps"):  # 插入记录里没写插了哪些点（比如只记了附加值）：不核对
+                inserted = set(rec["steps"])
+            elif saved.get("points"):  # 插入记录已经随还原删掉：用插好时存的那份
+                inserted = set(saved["points"])
+        if steps is None and inserted is None:
+            return body.page
+        try:
+            page = stds.inserted_page(body.page, steps, inserted)
+        except (KeyError, TypeError, ValueError):  # 存的步骤和结果页对不上（比如老版本留下的）：按网页传来的算
+            return body.page
+        if not page["segs"]:
+            raise HTTPException(409, "这次插进去的计时点连不成一段，量不出用时：回到「找关键步骤」那一步，至少留下起点和终点再插一次。")
+        return page
 
     @app.post("/api/collect/start")
     def collect_start(body: CollectBody):
@@ -958,30 +1022,34 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             time.sleep(0.05)
         std_hash = None
         values = None
-        if body.page:  # 真找完的步骤：按代码位置对上码表自带的合理范围标准
-            standard = stds.find(body.page.get("steps") or [])
+        page = _inserted_page(body) if body.page else None
+        if page:  # 真找完的步骤：按代码位置对上码表自带的合理范围标准
+            standard = stds.find(page.get("steps") or [])
             if body.project_dir:  # 插计时点时顺带记了附加值的计时点（插入记录里），看附加值的问题规则才用
                 values = (ins.current(Path(body.project_dir) / "fsw-backup") or {}).get("values") or None
-            scenario = stds.real_scenario(body.page, standard, values)
+            scenario = stds.real_scenario(page, standard, values)
             std_hash = stds.digest(standard)
         elif body.demo in demos:
             scenario = demos[body.demo]["scenario"]
         else:
             raise HTTPException(400, "不知道要测什么：先找关键步骤")
         spec = meas.Spec.from_scenario(scenario)
+        pending = []
         if body.resume and old:
             job, coll = old, old["_coll"]
-            coll.finish()  # 停下时没收齐的那一轮不算
+            with old["_lock"]:
+                pending = coll.finish()  # 停下时已经收全的那一轮照算；没收全的那一轮不算
         else:
             base = Path(body.project_dir) if body.project_dir else live["data"] / "demo-runs"
             run = base / "runs" / time.strftime("%Y%m%d-%H%M%S") if body.project_dir else base / f"{body.demo}-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}"
             run.mkdir(parents=True, exist_ok=True)
-            if body.page:  # 这次测的是什么，留一份：首页"以前测过的"按它重算
-                (run / "run.json").write_text(json.dumps({"page": body.page, "values": values, "what": body.what or body.page.get("mapWhat"),
+            if page:  # 这次测的是什么（实际插进去的计时点），留一份：首页"以前测过的"按它重算
+                (run / "run.json").write_text(json.dumps({"page": page, "values": values, "what": body.what or page.get("mapWhat"),
                                                           "measured_at": time.strftime("%Y-%m-%d %H:%M")}, ensure_ascii=False), encoding="utf-8")
             coll = meas.Collector(spec)
             job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll, "_scenario": scenario,
-                   "demo": None if body.page else body.demo, "_page": body.page, "_std": std_hash, "_values": values,
+                   "_lock": threading.Lock(),  # 读调试口的线程和"收全后等一会儿收尾"的线程都会动这一轮
+                   "demo": None if page else body.demo, "_page": page, "_std": std_hash, "_values": values,
                    "measured_at": time.strftime("%Y-%m-%d %H:%M"),
                    # 这次真的场景：网页多轮实测页按它画线、标问题，不借演示数据
                    "lines": [{"name": l["name"], "range": l.get("range"), "slow": l.get("slow")} for l in scenario["lines"]],
@@ -1011,7 +1079,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             else:
                 quiet["lines"] += 1
                 quiet["odd"] += _garbled(line)
-            for r in coll.feed(line):
+            with job["_lock"]:
+                take(coll.feed(line))
+
+        def take(results):
+            """收尾的轮记下来；进度、提示跟着更新。"""
+            for r in results:
                 if r.get("half"):  # 开始读时这一次已经过了起点：不算，提示再做一次（决策 101）
                     job["half"] = job.get("half", 0) + 1
                     job["half_hint"] = ("这一次开头没收到（码表开始听的时候它已经开始了），不算。"
@@ -1023,6 +1096,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if r["ok"]:
                     job["half_hint"] = ""
                     job["stale_run"] = {}
+                    job["miss_run"] = {}
+                elif not r.get("stale"):  # 没收全：同一个点连着几轮都没收到，点名（多半是这一步没走到，或者插的位置走不到）
+                    run = {m: job.get("miss_run", {}).get(m, 0) + 1 for m in r.get("missing") or []}
+                    job["miss_run"] = run
+                    worst = max(run.items(), key=lambda kv: kv[1], default=None)
+                    if worst and worst[1] >= MISS_RUN:
+                        job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都没收到：多半是这一步没走到，或者计时点插的位置走不到，"
+                                            "再测也一样，先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 elif r.get("stale"):
                     run = job.setdefault("stale_run", {})
                     for m in r["missing"]:
@@ -1038,6 +1119,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 job["_stop"] = True
 
         stop = lambda: job["_stop"]
+        take(pending)
+
+        def watch_ready():
+            """一轮收全后（进度已经显示收全了），下一轮一直没开始：等 ROUND_SETTLE 秒收尾，最后一轮也能算上。"""
+            while not stop() and job is col["job"]:
+                with job["_lock"]:
+                    take(coll.flush(ROUND_SETTLE))
+                time.sleep(min(0.2, ROUND_SETTLE / 4))
 
         def run_demo():
             d = demos[body.demo]
@@ -1053,7 +1142,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def watch_quiet():
             """调试口开着却一直没有计时点：不停下，说人话提示是哪种情况（做了 / 插好就接着收）。"""
             while not stop() and job is col["job"]:
-                mid = coll.started and coll.cur and not coll.done  # 一轮做到一半
+                mid = coll.started and coll.cur and not coll.done and not coll.ready  # 一轮做到一半
                 waiting = quiet["any"] and not mid  # 收齐一轮、等你做下一次：两次之间正常停顿，不算出错
                 if job["status"] == "running" and not waiting and time.time() - quiet["since"] > NO_DATA_SECS:
                     secs = int(time.time() - quiet["since"])
@@ -1073,6 +1162,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
         def run_device():
             threading.Thread(target=watch_quiet, daemon=True).start()
+            threading.Thread(target=watch_ready, daemon=True).start()
             while not stop():
                 ports = port_finder()
                 if not ports:
@@ -1087,8 +1177,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 got0 = quiet["lines"] + len(job["rounds"])
                 try:
                     device.stream(ports[0], on_line, stop)
-                except Exception as e:  # 拔线了：已测的留着，插回后接着测
-                    coll.finish()
+                except Exception as e:  # 拔线了：已测的留着（已经收全的那一轮照算），插回后接着测
+                    with job["_lock"]:
+                        take(coll.finish())
                     job["pauses"] = job.get("pauses", 0) + 1
                     opened = quiet["lines"] + len(job["rounds"]) > got0 or job.get("progress", [0])[0]
                     job.update(status="paused", error=str(e), hint="",
@@ -1102,7 +1193,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 (run_device if body.source == "device" else run_demo)()
             finally:
                 raw.close()
-                coll.finish()
+                with job["_lock"]:
+                    take(coll.finish())
                 if job is col["job"]:
                     job["status"] = "done" if ok_count() >= job["target"] else "stopped"
                     if body.source == "device":
@@ -1164,7 +1256,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         else:
             raise HTTPException(404, "还没有测完的轮")
         out = jdg.judge(sc, ok)
-        keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names")
+        keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names", "points")
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
@@ -1192,7 +1284,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job = col["job"]
         if not job or job.get("_page") is None:
             raise HTTPException(409, "这份报告不用更新")
-        standard = stds.find(job["_page"].get("steps") or [])
+        standard = stds.find(job["_page"].get("steps") or [])  # _page 已经是实际插进去的那份（_inserted_page）
         job["_scenario"] = stds.real_scenario(job["_page"], standard, job.get("_values"))
         job["_std"] = stds.digest(standard)
         return report()

@@ -7,6 +7,7 @@
 - 对不上的段：没有范围，只记用时、不判快慢。
 问题规则里看线先后的照用；看附加值的（比如"第一包声音到达时设备的状态"）要这个计时点真记了附加值才用：
 插计时点时码表按 needed_values 让 AI 顺带记上（只读已有的变量），插入记录里有了才判，没记上的不判。
+多轮实测和报告按"这次实际插进去的计时点"算（inserted_page）：删掉的、不测的顺带线、编译出错撤掉的不要，你自己加的要。
 """
 
 import json
@@ -166,7 +167,8 @@ def real_scenario(page, standard, values=None):
             prefix.append((a, b, g))
         side = prefix + side
     segments = {}
-    for a, b, g in main + side:
+    extra = [(g["a"], g["b"], g) for g in page.get("xsegs") or []]  # 不在哪条线上的段（你自己加的步骤）：只记用时
+    for a, b, g in main + side + extra:
         k = f"{a}-{b}"
         rng, slow, basis = None, None, "measured"
         if standard and a in mp and b in mp:
@@ -210,8 +212,81 @@ def real_scenario(page, standard, values=None):
         elif t := _translate(r, back, values or {}):
             problems.append({**p, "rule": t})
     start = main[0][0] if main else None
-    return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": start, "name": (steps[0]["n"] if steps else "起点")},
+    sname = next((x["n"] for x in steps if x["p"] == start), steps[0]["n"] if steps else "起点")
+    return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": start, "name": sname},
             "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
             "experience": exp, "problems": problems, "standard": (standard or {}).get("name"),
             "point_names": {x["p"]: x["n"] for x in steps},
+            "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
             "matched": mp}
+
+
+def _merge(parts):
+    """几段接成一段（中间的计时点没插）：名字连起来，都是外部的才算外部。"""
+    if len(parts) == 1:
+        return dict(parts[0])
+    who = []
+    for g in parts:
+        if g.get("who") and g["who"] not in who:
+            who.append(g["who"])
+    out = {"a": parts[0]["a"], "b": parts[-1]["b"], "t": "＋".join(g.get("t") or f"{g['a']}-{g['b']}" for g in parts),
+           "who": "、".join(who)}
+    if all(g.get("out") for g in parts):
+        out["out"] = True
+    return out
+
+
+def _contract(segs, keep):
+    """一条线上的段，去掉没插的计时点：经过它的前后两段接成一段；线头、线尾没插的那段不要。"""
+    out, acc = [], []
+    for g in segs:
+        if acc and g["a"] != acc[-1]["b"]:  # 接不上（不连续）：前面没收住的不要
+            acc = []
+        if not acc and g["a"] not in keep:
+            continue
+        acc.append(g)
+        if g["b"] in keep:
+            out.append(_merge(acc))
+            acc = []
+    return out
+
+
+def inserted_page(page, steps=None, inserted=None):
+    """按这次实际插进去的计时点改写结果页数据，多轮实测、报告、"以前测过的"重算都用它（不用 AI 最初找到的那份）。
+    steps：插计时点时用的步骤（核对后的，含你自己加的 U1、U2……）；不给就用结果页的步骤。
+    inserted：插入记录里真插上的计时点编号（P3、P21……）；不给就当 steps 全插上了。
+    - 编号统一换成计时点编号（你加的 U1 → P21），和设备打印的一致；
+    - 没插的计时点（删掉的、不测的顺带线、编译出错撤掉的）：经过它的前后两段接成一段，线头线尾的那段不要；
+    - 结果页的段里没有的计时点（你自己加的）：记一段"从起点到这一步"，不放进哪条线。"""
+    from fsw.instrument import point_id
+    steps = list(steps if steps is not None else page.get("steps") or [])
+    orig = {s["p"]: s for s in page.get("steps") or []}
+
+    ren, kept = {}, []
+    for s in steps:
+        k = point_id(s, steps)
+        if inserted is not None and k not in inserted:
+            continue
+        ren[s["p"]] = k
+        o = {**orig.get(s["p"], {}), **{f: s[f] for f in ("n", "path", "l", "line") if s.get(f) is not None}}
+        kept.append({**o, "p": k, "f": o.get("f") or Path(o.get("path") or "").name})
+    keep = set(ren)
+    main = _contract(page.get("segs") or [], keep)
+    side = list(page.get("fsegs") or [])
+    while side and side[0]["a"] not in keep:  # 顺带的线从一个没插的点分出去：往前接到要测的这条线上插了的那个点
+        prev = next((g for g in page.get("segs") or [] if g["b"] == side[0]["a"]), None)
+        if not prev:
+            break
+        side.insert(0, prev)
+    side = _contract(side, keep)
+    if side and side[-1]["b"] in {x for g in main for x in (g["a"], g["b"])}:
+        side = []  # 顺带那条线自己的点一个都没插（不测这条线）：只剩和要测的这条重合的那段，不算一条线
+
+    def re_id(g):
+        return {**g, "a": ren[g["a"]], "b": ren[g["b"]]}
+    main, side = [re_id(g) for g in main], [re_id(g) for g in side]
+    used = {x for g in main + side for x in (g["a"], g["b"])}
+    start = main[0]["a"] if main else None
+    xsegs = [{"a": start, "b": s["p"], "t": s["n"], "who": ""} for s in kept if start and s["p"] not in used]
+    return {**page, "steps": kept, "segs": main, "fsegs": side, "xsegs": xsegs,
+            "main": [s["p"] for s in kept if s.get("line") != "face"]}
