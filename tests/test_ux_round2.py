@@ -378,3 +378,11 @@ def test_project_name_follows_the_chosen_source_not_demo():
     line = next(l for l in JS.splitlines() if "REAL={...r.info" in l)
     code = line.split("//")[0]
     assert "pName=REAL.name+(REAL.board?" in code
+
+
+def test_ding_when_round_is_all_in_not_when_it_is_filed():
+    """10-17 走查：收尾改成"收全后再等 1.5 秒"以后，"叮"比设备出声晚。改成计时点全部收到就响，收尾时不再重复响；没收全的轮照样响提示音。"""
+    from tests.test_boss_short import grab
+    f = grab("colApply")
+    assert "if(j.status==='running'&&need>0&&got>=need&&!col.rd){col.rd=true;ding(false)}" in f
+    assert "if(!x.bad&&col.rd){col.rd=false;continue}ding(!!x.bad)" in f
