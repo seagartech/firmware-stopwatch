@@ -224,10 +224,27 @@ def _rounds_said(text):
     return out
 
 
+def signature(j, scenario):
+    """要写卡片的问题：哪几个（哪条线、哪一段、哪种问题）、什么级别。和上次写建议时一样，就沿用上次的，不再调用大模型。
+    不看具体是哪几轮、几秒：改完再测时这些每次都不一样，问题本身没变（10-17 用户定）。"""
+    return json.dumps([[p["key"], p.get("seg"), p["level"]] for p in problems(j, scenario)], ensure_ascii=False)
+
+
+def saved_for(save_to, j, scenario):
+    """上次存下的建议，且是按同样的问题写的：直接用（比如改了合理范围清单，但要改的问题没变）。"""
+    try:
+        out = json.loads((Path(save_to) / "advice.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return out if out.get("ok") and out.get("for") == signature(j, scenario) else None
+
+
 def advise(llm, root, j, scenario, steps=None, what="", save_to=None, on_progress=None):
-    """调用一次大模型（只读）写卡片。没有要改的问题就不调用。"""
+    """调用一次大模型（只读）写卡片。没有要改的问题就不调用；要改的问题和上次存下的一样，用上次的。"""
     if not problems(j, scenario):
         return {"ok": True, "fixes": [], "fine": "", "seconds": 0, "called": False}
+    if save_to and (old := saved_for(save_to, j, scenario)):
+        return {**old, "seconds": 0, "called": False}
     t0 = time.time()
     save = Path(save_to) if save_to else None
     if save:
@@ -244,7 +261,8 @@ def advise(llm, root, j, scenario, steps=None, what="", save_to=None, on_progres
     secs = round(time.time() - t0, 1)
     if bad:
         return _fail("bad_reply", "AI 写的建议格式不对，码表没有用：" + "；".join(bad[:4]) + "。点\"重试\"再写一次。", seconds=secs)
-    out = {"ok": True, "fixes": fixes, "fine": str(data.get("fine") or ""), "seconds": secs, "called": True}
+    out = {"ok": True, "fixes": fixes, "fine": str(data.get("fine") or ""), "seconds": secs, "called": True,
+           "for": signature(j, scenario), "at": time.strftime("%Y-%m-%d %H:%M")}
     if save:
         (save / "advice.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     return out

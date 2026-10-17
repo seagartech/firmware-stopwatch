@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from fsw.config import load_config, save_config
-from fsw.scenario import to_page
+from fsw.scenario import main_experience, to_page
 from fsw import identify as idf
 from fsw import instrument as ins
 from fsw import measure as meas
@@ -27,6 +27,8 @@ from fsw import judge as jdg
 from fsw import advise as advs
 from fsw import timeline as tln
 from fsw import standards as stds
+from fsw import rangelist as rl
+from fsw import carry as cy
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, ToolEnvError, find_idf, find_ports, pick_idf
@@ -615,7 +617,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         try:
             last = json.loads((proj / "fsw-plan.json").read_text(encoding="utf-8"))
             cached = last["reply"] if (fp and cfg().reuse_last and last.get("fingerprint") == fp
-                                       and last.get("steps") == body.steps and last.get("ver") == ins.PLAN_VER) else None
+                                       and cy.sig(last.get("steps")) == cy.sig(body.steps) and last.get("ver") == ins.PLAN_VER) else None
         except (OSError, ValueError, KeyError):
             cached = None
         return fp, cached
@@ -700,7 +702,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             needs = stds.needed_values(steps, stds.find(steps))  # 问题规则要看附加值的计时点：让 AI 顺带记上
             if cached:
                 text = cached
-                job.update(reused=True, log="源码和步骤都没变，用上次的插入方案，没调用大模型")
+                job.update(reused=True, log="计时点那几处和上次一样，用上次的插入方案，没调用大模型")
             elif use_prep:
                 while prep["status"] == "running":
                     job["log"] = f"你核对步骤时 AI 已经在后台按这些步骤准备插法，还差一点（已准备 {int(time.time() - prep['started'])} 秒）"
@@ -760,7 +762,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def _run_from(start):
         job, a = fsw["job"], fsw["args"]
         _, orig_fw, fsw_fw = _fsw_dirs(a)
-        job.update(status="running", err=None, cancel=False)
+        job.update(status="running", err=None, cancel=False, gen=job.get("gen", 0) + 1)  # 第几趟：上一趟还没停的"试一次"见到就停，让出调试口
 
         def build():
             T().end("confirm")
@@ -840,6 +842,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             T().count("try_said")
             T().count("clicks")
             fresh = job.pop("_just_flashed", False)
+            my_gen = job.get("gen")
+            superseded = lambda: fsw["job"] is not job or job.get("gen") != my_gen  # 又插了一次 / 又点了编译烧录 / 再试一次：这一趟作废，让出调试口、不改页面状态
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机" if fresh else "设备开着，等计时点",
                        try_started=time.time(), dev_seen=None if fresh else time.time(), boot_quiet=False)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
@@ -860,6 +864,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     rounds["best"] = set(rounds["cur"])
 
             def on_line(line):
+                if superseded():
+                    return
                 if not job.get("dev_seen") and _plain(line):
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 feed(line)
@@ -871,7 +877,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             def enough():  # 有一轮全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
                 return rounds["best"] == want
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
-            while lines is None and time.time() < t_end:  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
+            while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
                 if not ports:
                     time.sleep(wait_step / 4)
@@ -881,7 +887,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 def stop_or_reopen():  # 决策 127：打开调试口 8 秒还一行输出都没有，多半打开的是设备重启前那个（它断开又回来了）：关掉重开
                     if not job.get("dev_seen") and time.time() - opened > REOPEN_SECS:
                         reopen["hit"] = True
-                    return enough() or reopen["hit"]
+                    return superseded() or enough() or reopen["hit"]
                 try:
                     got_lines = device.read(ports[0], max(1, t_end - time.time()), on_line, stop=stop_or_reopen)
                     if not reopen["hit"] or time.time() >= t_end:
@@ -893,6 +899,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 except Exception as e:
                     err = e
                     time.sleep(wait_step)
+            if superseded():
+                return
             if lines is None:
                 return _fail(job, "try", "设备的调试口一直打不开。看看线插好没有，或者有没有别的软件（比如串口监视器）占着它。",
                              error=f"打不开调试口：{err}" if err else "没看到设备")
@@ -1040,6 +1048,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if body.project_dir:  # 插计时点时顺带记了附加值的计时点（插入记录里），看附加值的问题规则才用
                 values = (ins.current(Path(body.project_dir) / "fsw-backup") or {}).get("values") or None
             scenario = stds.real_scenario(page, standard, values)
+            if body.project_dir:  # 项目有合理范围清单：测的时候也按它画范围
+                try:
+                    lst = rl.read(body.project_dir)
+                except rl.ListFormatError:
+                    lst = None
+                if lst:
+                    scenario = rl.apply(scenario, lst)
             std_hash = stds.digest(standard)
         elif body.demo in demos:
             scenario = demos[body.demo]["scenario"]
@@ -1061,13 +1076,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             coll = meas.Collector(spec)
             job = {"rounds": [], "raw_log": str(run / "raw.log"), "need": spec.need, "_coll": coll, "_scenario": scenario,
                    "_lock": threading.Lock(),  # 读调试口的线程和"收全后等一会儿收尾"的线程都会动这一轮
-                   "demo": None if page else body.demo, "_page": page, "_std": std_hash, "_values": values,
+                   "demo": None if page else body.demo, "_page": page, "_std": std_hash, "_values": values, "_project_dir": body.project_dir,
                    "measured_at": time.strftime("%Y-%m-%d %H:%M"),
                    # 这次真的场景：网页多轮实测页按它画线、标问题，不借演示数据
                    "lines": [{"name": l["name"], "range": l.get("range"), "slow": l.get("slow")} for l in scenario["lines"]],
                    "problems": [{"key": p["key"], "name": p.get("name", p["key"]), "level": p.get("level", "warn")}
                                 for p in scenario.get("problems") or []],
-                   "experience": scenario.get("experience")}
+                   "experience": main_experience(scenario)}
             col["job"] = job
         job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
         raw = open(job["raw_log"], "a", encoding="utf-8")
@@ -1259,27 +1274,186 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job = col["job"]
         ok = [r for r in (job or {}).get("rounds", []) if r["ok"]]
         same = job and (demo is None or job.get("demo") == demo)
-        stale = None
         if ok and same:
             sc, raw = job["_scenario"], job["raw_log"]
-            if job.get("_page") is not None:  # 合理范围改过（标准文件变了）：提示用新范围更新，刚测完的不提示
-                now = stds.find(job["_page"].get("steps") or [])
-                if stds.digest(now) != job.get("_std"):
-                    stale = stds.changed_at(now)
+            if job.get("_page") is not None and job.get("_project_dir"):  # 真测：每次都按项目现在的合理范围清单判
+                sc = job["_scenario"] = _judge_scenario(job, ok)
+                if job.get("status") in ("done", "stopped") and "_prev" not in job:
+                    job["_prev"] = _prev_run(job, sc, ok)
         elif demo in demos:
             sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
         else:
             raise HTTPException(404, "还没有测完的轮")
         out = jdg.judge(sc, ok)
-        keep = ("name", "start", "segments", "lines", "experience", "problems", "standard", "matched", "point_names", "points")
+        keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points", "range_list")
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
                    "nostart": (job or {}).get("nostart", 0) if raw else 0,
                    "startName": (sc.get("start") or {}).get("name", "")}
-        return {**out, "rounds": ok, "raw_log": raw, "scenario": {k: sc.get(k) for k in keep}, "timing": _timing() if raw else None,
-                "quality": quality, "start_lag": _start_lag(raw, sc),
-                "stale": bool(stale), "stale_since": stale, "measured_at": (job or {}).get("measured_at") if ok and same else None}
+        return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
+                "timing": _timing() if raw else None, "quality": quality, "start_lag": _start_lag(raw, sc),
+                "list_filled": (job or {}).get("_filled") if ok and same else None,
+                "prev": (job or {}).get("_prev") if ok and same else None,
+                "measured_at": (job or {}).get("measured_at") if ok and same else None}
+
+    def _prev_run(job, sc, ok):
+        """改完再测（任务 22）：和上次比。上次 = 同一个项目、计时点一样、收齐 10 轮以上的最近一次。
+        返回 {"run", "measured_at", "n", "segs": {段: 中位数}, "lines": {线: 中位数}}；比不了返回 {"why": 一句话}。"""
+        if len(ok) < rl.MIN_ROUNDS:
+            return {"why": f"这次只测了 {len(ok)} 轮，不到 {rl.MIN_ROUNDS} 轮，不和上次比"}
+        proj, cur = Path(job["_project_dir"]), Path(job["raw_log"]).parent.name
+        pts = {(g.get("from"), g.get("to")): k for k, g in sc["segments"].items()}
+        names = [l["name"] for l in sc["lines"]]
+        other = None
+        for log in sorted(proj.glob("runs/*/raw.log"), reverse=True):
+            run = log.parent
+            if run.name >= cur:
+                continue
+            meta = _run_meta(proj, run)
+            if not meta or not meta.get("page"):
+                continue
+            try:
+                psc = stds.real_scenario(meta["page"], stds.find(meta["page"].get("steps") or []), meta.get("values"))
+                rounds = [r for r in meas.collect(log.read_text(encoding="utf-8", errors="replace").splitlines(),
+                                                  meas.Spec.from_scenario(psc)) if r["ok"]]
+            except Exception:  # 老数据格式对不上：这一次不拿来比
+                continue
+            if len(rounds) < rl.MIN_ROUNDS:
+                continue
+            if {(g.get("from"), g.get("to")) for g in psc["segments"].values()} != set(pts) or [l["name"] for l in psc["lines"]] != names:
+                other = other or meta.get("measured_at") or run.name
+                continue
+            def iqr(v):  # 一次测量的正常波动：中间一半轮次的跨度（第 75 百分位减第 25 百分位）
+                v = sorted(v)
+                q = lambda p: v[0] if len(v) == 1 else v[int(p * (len(v) - 1))] + (v[min(int(p * (len(v) - 1)) + 1, len(v) - 1)] - v[int(p * (len(v) - 1))]) * (p * (len(v) - 1) % 1)
+                return q(.75) - q(.25)
+
+            def seg_vals(rs, k):
+                return [r["segs"][k] for r in rs if r["segs"].get(k) is not None]
+
+            def line_vals(rs, i):
+                return [r["ends"][i] for r in rs if i < len(r["ends"]) and r["ends"][i] is not None]
+            segs, noise = {}, {}
+            for k, g in psc["segments"].items():
+                v, ck = seg_vals(rounds, k), pts[(g.get("from"), g.get("to"))]
+                if v:
+                    segs[ck] = round(jdg.med(v), 6)
+                    c = seg_vals(ok, ck)
+                    noise[ck] = round(max(iqr(v), iqr(c) if c else 0), 6)  # 两次各自的正常波动，取大的
+            lines, noise_l = {}, {}
+            for i, l in enumerate(psc["lines"]):
+                v = line_vals(rounds, i)
+                if v:
+                    lines[l["name"]] = round(jdg.med(v), 6)
+                    c = line_vals(ok, names.index(l["name"]))
+                    noise_l[l["name"]] = round(max(iqr(v), iqr(c) if c else 0), 6)
+            return {"run": run.name, "measured_at": meta.get("measured_at") or run.name, "n": len(rounds), "segs": segs, "lines": lines,
+                    "noise": noise, "noise_lines": noise_l}
+        return {"why": f"计时点和上次（{other}）不一样，不和上次比"} if other else None
+
+    def _judge_scenario(job, ok):
+        """这份报告按什么判：项目有合理范围清单就按清单；测满 10 轮、清单还没有或有空着的，按这次实测自动填上（只填空的）。"""
+        page, d = job["_page"], Path(job["_project_dir"])
+        sc = stds.real_scenario(page, stds.find(page.get("steps") or []), job.get("_values"))
+        try:
+            lst = rl.read(d)
+        except rl.ListFormatError as e:
+            return {**sc, "range_list": {"file": rl.FILENAME, "broken": str(e), "text": "合理范围清单格式不对，这次按码表自带的范围判"}}
+        if job.get("status") in ("done", "stopped"):
+            try:
+                name = json.loads((d / "project.json").read_text(encoding="utf-8")).get("name")
+            except (OSError, ValueError):
+                name = None
+            lst, filled = rl.fill(lst, sc, ok, project=name or d.name)
+            if filled:
+                rl.save(d, lst)
+                job["_filled"] = filled
+        return rl.apply(sc, lst) if lst else sc
+
+    def _list_dir(project_dir=None):
+        """清单在哪个项目：给了项目文件夹就用它（只限码表结果文件夹里，设置页进来的）；没给就是这份报告对应的项目。"""
+        if project_dir:
+            d = Path(project_dir).expanduser().resolve()
+            if Path(live["data"]).resolve() not in d.parents:
+                raise HTTPException(403, "只能打开码表结果文件夹里的项目")
+            return d
+        job = col["job"]
+        if not job or not job.get("_project_dir") or job.get("_page") is None:
+            raise HTTPException(409, "先测完一次，才有这个项目的合理范围清单")
+        return Path(job["_project_dir"])
+
+    @app.get("/api/rangelists")
+    def rangelists():
+        """设置页"合理范围清单"：每个测过的项目一行，有没有清单、几项、上次改的时间。"""
+        out = []
+        for pj in sorted(Path(live["data"]).glob("*/project.json")):
+            d = pj.parent
+            if not any(d.glob("runs/*/raw.log")):
+                continue
+            try:
+                info = json.loads(pj.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            row = {"project_dir": str(d), "name": info.get("name", d.name) + (f"（{info['board']}）" if info.get("board") else ""),
+                   "has": False, "items": 0, "changed": None, "broken": None}
+            p = rl.path_of(d)
+            if p.exists():
+                row.update(has=True, changed=time.strftime("%m-%d %H:%M", time.localtime(p.stat().st_mtime)))
+                try:
+                    lst = rl.read(d)
+                    row["items"] = len(lst["segments"]) + len(lst["lines"])
+                except rl.ListFormatError as e:
+                    row["broken"] = str(e)
+            out.append(row)
+        return out
+
+    def _list_out(d):
+        try:
+            lst = rl.read(d)
+        except rl.ListFormatError as e:
+            return {"path": str(rl.path_of(d)), "broken": str(e), "errors": [{"line": n, "msg": m} for n, m in e.errors]}
+        if lst is None:
+            raise HTTPException(404, f"这个项目还没有合理范围清单：测满 {rl.MIN_ROUNDS} 轮后码表按实测自动建")
+        return {"path": str(rl.path_of(d)), "list": lst}
+
+    @app.get("/api/rangelist")
+    def rangelist_get(project_dir: str | None = None):
+        """合理范围清单页：给的项目（设置页进来）或这份报告对应项目的清单。"""
+        return _list_out(_list_dir(project_dir))
+
+    class ListEditBody(BaseModel):
+        kind: str                       # segment / line
+        key: str                        # 分段编号 / 测量线名字
+        range: list[float | None] | None = None
+        slow: float | None = None
+        note: str = ""
+        fair: float | None = None       # 体验标准：超过多少秒算差，不设就空着
+        source: str = ""
+        project_dir: str | None = None  # 设置页进来时是哪个项目
+
+    @app.post("/api/rangelist/edit")
+    def rangelist_edit(body: ListEditBody):
+        """改一段或一条线的数（清单页的「修改」）；改完报告自动按新的判。"""
+        d = _list_dir(body.project_dir)
+        try:
+            lst = rl.read(d)
+        except rl.ListFormatError as e:
+            raise HTTPException(409, str(e))
+        if lst is None:
+            raise HTTPException(404, "这个项目还没有合理范围清单")
+        rng = None if not body.range or body.range[0] is None else [body.range[0], body.range[1] if len(body.range) > 1 else None]
+        try:
+            if body.kind == "segment":
+                rl.edit_segment(lst, body.key, rng, body.slow, body.note)
+            elif body.kind == "line":
+                rl.edit_line(lst, body.key, rng, body.slow, body.fair, body.source)
+            else:
+                raise HTTPException(400, f"不认识的修改：{body.kind}")
+        except rl.ListRuleError as e:
+            raise HTTPException(400, str(e))
+        rl.save(d, lst)
+        return _list_out(d)
 
     def _timing():
         job = col["job"]
@@ -1292,17 +1466,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def timing():
         """这次测试本身用了多久（四笔账、每段用时、对照 14 号文档的标准）。"""
         return _timing()
-
-    @app.post("/api/report/refresh")
-    def report_refresh():
-        """用新范围更新这份报告：不用重测，用时不变，按现在的合理范围重新判。"""
-        job = col["job"]
-        if not job or job.get("_page") is None:
-            raise HTTPException(409, "这份报告不用更新")
-        standard = stds.find(job["_page"].get("steps") or [])  # _page 已经是实际插进去的那份（_inserted_page）
-        job["_scenario"] = stds.real_scenario(job["_page"], standard, job.get("_values"))
-        job["_std"] = stds.digest(standard)
-        return report()
 
     KEYLIKE = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
     OUTSIDE = re.compile(r"""<(?:script|link|img|iframe|source|video|audio)\b[^>]*\b(?:src|href)\s*=\s*["']?(?:https?:)?//|url\(\s*["']?(?:https?:)?//""", re.I)
@@ -1487,9 +1650,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         ok = [r for r in (job0 or {}).get("rounds", []) if r["ok"]]
         if not ok:
             raise HTTPException(409, "还没测完：先做多轮实测")
-        _, model = _model()
         sc = job0["_scenario"]
         j = jdg.judge(sc, ok)
+        if body.project_dir and (old := advs.saved_for(Path(body.project_dir) / "advice", j, sc)):
+            adv["job"] = {**old, "status": "done", "seconds": 0, "called": False}  # 要改的问题和上次一样（比如只改了清单）：不再调用大模型
+            return adv["job"]
+        _, model = _model()
         root = body.work  # 读你原来的源码（只读）：码表那份插过计时点，行号会变
         try:
             src = json.loads((Path(body.project_dir) / "project.json").read_text(encoding="utf-8"))["source"]
@@ -1728,7 +1894,26 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def progress(p):
             job.update(found=p["found"], at=p["at"], read=p["read"], last=p["last"], seconds=p["seconds"])
 
+        def carry_over():
+            """改完再测（任务 22）：源码变了、但计时点那几处代码没动：把上次的步骤和插法挪到新行号上存好，下面直接用，不调用大模型。"""
+            if not (body.reuse and not known and body.project_dir and body.fingerprint and cfg().reuse_last):
+                return
+            f = idf._cache_file(body.project_dir, body.fingerprint, body.what, provider)
+            if f.exists():
+                return
+            c = cy.carry(body.project_dir, body.work, body.what, provider)
+            if not c["ok"]:
+                if c["changed"]:
+                    job["carry_changed"] = c["changed"]
+                return
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps({**c["result"], "what": body.what, "provider": provider}, ensure_ascii=False, indent=1), encoding="utf-8")
+            (Path(body.project_dir) / "fsw-plan.json").write_text(json.dumps(
+                {"fingerprint": body.fingerprint, "steps": c["plan_steps"], "reply": c["plan"], "ver": ins.PLAN_VER}, ensure_ascii=False), encoding="utf-8")
+            job["carried"] = {"moved": c["moved"]}
+
         def run():
+            carry_over()
             try:
                 r = idf.identify_cached(model, body.work, body.what, body.project_dir, body.fingerprint, provider,
                                         reuse=body.reuse and not known, chip=body.chip or "", known=known,

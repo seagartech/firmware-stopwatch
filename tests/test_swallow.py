@@ -79,9 +79,9 @@ def test_without_recorded_state_no_swallow_judged(app):
     assert not any(x["k"] == "problem:sw" for x in r["labels"])  # 没记附加值：不判，也不会误报
 
 
-def test_refresh_keeps_the_value_rules(app):
+def test_report_keeps_the_value_rules(app):
     c = app(real_log_with_values(), VALUES)
-    r = c.post("/api/report/refresh").json()
+    r = c.get("/api/report").json()
     assert next(x for x in r["labels"] if x["k"] == "problem:sw")["rounds"] == [4, 11, 17]
 
 
