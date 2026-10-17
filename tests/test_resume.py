@@ -76,3 +76,5 @@ def test_fresh_open_goes_home_with_a_way_back():
     assert "if(!isHome)LASTP='';" in JS
     # 在首页刷新，「接着看」还在
     assert "last:page==='home'?LASTP:''" in JS
+    # 点首页就收起那条提示
+    assert "if(to==='home')LASTP='';" in JS
