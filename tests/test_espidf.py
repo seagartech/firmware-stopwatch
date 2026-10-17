@@ -278,3 +278,18 @@ def test_component_download_failure_is_not_blamed_on_the_source(tmp_path):
     r = EspIdf(tmp_path / "idf", runner=fake_runner(out, code=2), env={}).build(src, target="esp32s3")
     assert not r["ok"] and r["cause"] == "network" and "不是源码的问题" in r["message"]
     assert "connected to the internet?" in r["error"]  # 乐鑫的原话整段留着，不只剩半句
+
+
+def test_installed_python_env_comes_first_even_with_other_pythons(tmp_path, monkeypatch):
+    """Mac 上常见：自带 python3 是 3.9、另装了 3.10，乐鑫环境却是用 3.12 装的。要让乐鑫用装好的那套。"""
+    idf = idf_install(tmp_path / "idf", 6, 1)
+    sub, exe = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python3")
+    for py in ("3.10", "3.12"):
+        d = tmp_path / "tools" / "python_env" / f"idf6.1_py{py}_env" / sub
+        d.mkdir(parents=True)
+        (d / exe).write_text("")
+    (tmp_path / "tools" / "python_env" / "idf5.4_py3.13_env" / sub).mkdir(parents=True)  # 别的版本的环境不算
+    monkeypatch.setenv("IDF_TOOLS_PATH", str(tmp_path / "tools"))
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/opt/homebrew/bin"]))
+    first = EspIdf(idf).export_env()["PATH"].split(os.pathsep)[0]
+    assert first == str(tmp_path / "tools" / "python_env" / "idf6.1_py3.12_env" / sub)
