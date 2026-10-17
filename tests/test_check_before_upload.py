@@ -144,4 +144,68 @@ def test_command_line_exit_code_and_plain_message(tmp_path):
 
 
 def test_this_repo_itself_passes():
-    assert scan(REPO) == []
+    # 历史提交的作者邮箱取决于谁在用这份代码，这里只查当前文件；历史另有下面的测试
+    assert scan(REPO, history=False) == []
+
+
+ANON = "101267340+someone@users.noreply.github.com"
+
+
+def commit(root, email, files, message="x"):
+    make_repo(root, files)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=someone", "-c", f"user.email={email}", "commit", "-qm", message],
+        cwd=root, check=True,
+    )
+
+
+def git_repo(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def test_history_with_anonymous_email_passes(tmp_path):
+    if not shutil.which("git"):
+        return
+    commit(git_repo(tmp_path), ANON, {"a.py": "x = 1\n"})
+
+    assert scan(tmp_path) == []
+
+
+def test_real_email_in_history_is_blocked_and_masked(tmp_path):
+    if not shutil.which("git"):
+        return
+    commit(git_repo(tmp_path), "someone@example.com", {"a.py": "x = 1\n"})
+
+    findings = scan(tmp_path)
+
+    assert kinds(findings) == ["私人信息"]
+    assert "someone@example.com" not in str(findings[0])
+
+
+def test_key_removed_later_is_still_found_in_history(tmp_path):
+    if not shutil.which("git"):
+        return
+    git_repo(tmp_path)
+    commit(tmp_path, ANON, {"a.py": f'KEY = "{FAKE_KEY}"\n'})
+    commit(tmp_path, ANON, {"a.py": "KEY = ''\n"})
+
+    findings = scan(tmp_path)
+
+    assert kinds(findings) == ["密钥"]
+    assert "a.py" in findings[0].file
+    assert FAKE_KEY not in str(findings[0])
+    assert scan(tmp_path, history=False) == []
+
+
+def test_local_path_and_private_word_in_history(tmp_path):
+    if not shutil.which("git"):
+        return
+    git_repo(tmp_path)
+    commit(tmp_path, ANON, {"a.md": f"放在 {FAKE_PATH}\n作者：某某科技\n"})
+    commit(tmp_path, ANON, {"a.md": "干净了\n"})
+    words = tmp_path.parent / "words.txt"
+    words.write_text("某某科技\n", encoding="utf-8")
+
+    assert kinds(scan(tmp_path, private_words_file=words)) == ["本机路径", "私人信息"]
