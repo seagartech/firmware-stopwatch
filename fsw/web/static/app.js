@@ -579,6 +579,8 @@ function reportPage(D){
 
 let page='home',mode='boss',scene='',homeVar='m',hStage=0,hSay='';
 // 网址 #页面名 记着在哪一页（D 组）：打开时先不画，等按后台状态接上进度（uiRestore）再画，免得先闪一下空白首页
+// 这个标签页开着时刷新，sessionStorage 里的记号还在；关了浏览器或标签页再打开，记号没了，算新的一轮
+const FRESH=(()=>{try{const f=!sessionStorage.getItem('fsw-open');sessionStorage.setItem('fsw-open','1');return f}catch(e){return !location.hash}})();
 let booting=true,LASTP='';const HASH0=(()=>{try{const h=decodeURIComponent(location.hash.slice(1));return PAGES.some(p=>p.id===h)?h:''}catch(e){return ''}})();
 const save=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 // ===== 找关键步骤 =====
@@ -1362,6 +1364,8 @@ window.addEventListener('pagehide',()=>{if(!uiT)return;clearTimeout(uiT);uiT=nul
 async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return r.ok?await r.json():null}catch(e){return null}};
  const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),u=U&&U.ui,J=(U&&U.jobs)||{};
  if(!u||u.v!==1||!SCENES[u.scene]){page=HASH0==='settings'?'settings':'home';return}
+ // 关了浏览器或标签页再打开：算新的一轮，从空白首页开始；只有实测、烧录还在后台跑着时才接上，首页顶上给「接着看」
+ if(FRESH){const cj=await get('/api/collect'),fj=await get('/api/fsw'),run=x=>!!x&&['running','waiting_device'].includes(x.status);if(!run(cj)&&!run(fj)){page='home';return}}
  scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
  REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colN=u.colN||colN;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;
  const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;
@@ -1383,9 +1387,9 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  const want=HASH0&&HASH0!==u.page&&canView(HASH0)?HASH0:u.page||'home';
  page=canView(want)?want:canViewNear(want);
  if(page!==want){const L=flow==='retest'?['retest','steps','flash','collect','compare']:FLOW1.map(x=>x[0]),i=L.indexOf(page);if(flow&&i>=0)flowMax=Math.min(flowMax,i)}  // 接不上的那几步不再标成做完
- if(page!==want&&HASH0)setTimeout(()=>toast(`上次在「${PNAME(want)}」，这一步的进度没能接上，先回到「${PNAME(page)}」，从这里接着做。`),300);
- // 新打开（网址后面没带 #页面名）进首页，首页顶上一条「接着看」回到上次那页；刷新（带 #页面名）还停在原页
- if(!HASH0&&page!=='home'&&page!=='settings'){LASTP=page;page='home';hStage=Math.min(hStage,1)}
+ if(page!==want&&!FRESH)setTimeout(()=>toast(`上次在「${PNAME(want)}」，这一步的进度没能接上，先回到「${PNAME(page)}」，从这里接着做。`),300);
+ // 后台还在跑的那种新打开：进首页，顶上一条「接着看」回到上次那页；刷新还停在原页
+ if(FRESH&&page!=='home'&&page!=='settings'){LASTP=page;page='home';hStage=Math.min(hStage,1)}
  else if(page==='home'&&u.last&&u.last!=='home'&&canView(u.last))LASTP=u.last}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
