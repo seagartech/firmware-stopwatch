@@ -62,3 +62,9 @@ def test_settings_lists_each_firmware_and_edits_without_a_report(app):  # noqa: 
     r = c.post("/api/rangelist/edit", json={"kind": "segment", "key": seg, "range": [0.1, 0.2], "slow": 0.3, "project_dir": str(proj)})
     assert r.json()["list"]["segments"][seg]["range"] == [0.1, 0.2]
     assert c.get("/api/rangelist", params={"project_dir": "/etc"}).status_code == 403
+
+
+def test_settings_list_rereads_after_save_and_on_entering_settings():
+    """10-17 走查：改完清单，从顶上「设置」回去，"上次改"还是旧的，要刷新网页才变。存好后、每次进设置页都重新读。"""
+    from tests.test_boss_short import JS
+    assert "RL=j;RLS=null;" in JS and "if(to==='settings')RLS=null;" in JS
