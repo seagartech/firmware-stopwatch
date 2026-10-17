@@ -193,6 +193,11 @@ def number(step_id, steps):
     return 20 + users.index(step_id) + 1
 
 
+def point_id(step, steps):
+    """步骤插成的计时点编号（P3、P21）。撤掉过一处的，按插入时的编号记在步骤的 fsw 里（后面的不重新编号）。"""
+    return step.get("fsw") or f"P{number(step['p'], steps)}"
+
+
 def default_header(root):
     return "main/fw_stopwatch.h" if (Path(root) / "main").is_dir() else "fw_stopwatch.h"
 

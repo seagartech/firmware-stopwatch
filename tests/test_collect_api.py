@@ -67,7 +67,8 @@ def test_demo_rounds_are_parsed_from_replayed_output(make):
     door = json.loads((DEMO / "door.json").read_text(encoding="utf-8"))
     assert len(rs) == 20 and [r["n"] for r in rs if "to" in r["probs"]] == door["result"]["problems"]["to"]
     assert rs[0]["ends"][1] == pytest.approx(sum(door["result"]["segments"][k][0] for k in ("read", "check", "lock")), abs=1e-4)
-    assert Path(j["raw_log"]).read_text(encoding="utf-8").count("FSW,RESET") == 20  # 设备输出原样存了一份
+    # 设备输出原样存了一份：第 20 轮收全后要等下一轮开始（第 21 个 RESET）才收尾
+    assert Path(j["raw_log"]).read_text(encoding="utf-8").count("FSW,RESET") == 21
 
 
 def test_incomplete_round_is_resampled_until_target(make):

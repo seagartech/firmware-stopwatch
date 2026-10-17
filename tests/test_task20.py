@@ -209,7 +209,8 @@ def test_normal_pause_between_rounds_is_not_an_error(col):
     """一轮收齐以后等你说下一句：不算"没有计时点"，不弹提示。"""
     from tests.test_advise_api import real_log
     c = col(Pauses(real_log(1)))
-    time.sleep(1.0)
+    j = wait(c, lambda j: [r for r in j["rounds"] if r["ok"]], timeout=5)  # 收全后下一轮一直没开始：等一会儿收尾
+    time.sleep(0.5)
     j = c.get("/api/collect").json()
     assert len([r for r in j["rounds"] if r["ok"]]) == 1 and not j.get("hint")
     c.post("/api/collect/stop")
