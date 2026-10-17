@@ -231,3 +231,5 @@ table.num td.r,table.num th.r{white-space:nowrap}
 svg text.halo{paint-order:stroke;stroke:var(--panel);stroke-width:5px;stroke-linejoin:round}
 /* 一排按钮里有一个带"还差"小字：同排的按钮按顶部对齐，不被拉高（决策 143） */
 :has(> .needwrap){align-items:flex-start}
+/* 技术细节表"谁负责"列留够宽度，不被挤成一个字一行 */
+th.own,td.own{min-width:5.5em}
