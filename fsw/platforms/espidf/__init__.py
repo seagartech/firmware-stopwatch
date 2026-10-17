@@ -258,7 +258,7 @@ class EspIdf:
         best = [0]
         on_progress(0, "准备编译：读项目配置、下载要用的组件")
 
-        stage = {"compiling": False}
+        stage = {"compiling": False, "total": 0}
 
         def line_cb(line):
             s = line.strip()
@@ -273,6 +273,13 @@ class EspIdf:
             p = ninja_progress(s)
             if p and not DEP_LINE.match(s):  # "[1/41] 组件名 (版本)" 是下载组件清单，不是编译进度
                 stage["compiling"] = True
+                # 引导程序是单独编的一小组，自己也数"第几个 / 共几个"（比如 [1/1]）。只按总数最多的那一组算，否则一下跳到 99%
+                if p[1] < stage["total"]:
+                    return
+                if p[1] > stage["total"]:
+                    if stage["total"]:
+                        best[0] = 5  # 先看到的是小的那组：换成大的那组重新算
+                    stage["total"] = p[1]
                 pct = min(99, 5 + int(94 * p[0] / max(1, p[1])))
                 if pct > best[0]:
                     best[0] = pct

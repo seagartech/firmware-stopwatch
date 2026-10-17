@@ -294,3 +294,22 @@ def test_installed_python_env_comes_first_even_with_other_pythons(tmp_path, monk
     monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/opt/homebrew/bin"]))
     first = EspIdf(idf).export_env()["PATH"].split(os.pathsep)[0]
     assert first == str(tmp_path / "tools" / "python_env" / "idf6.1_py3.12_env" / sub)
+
+
+def test_bootloader_group_does_not_jump_progress_to_the_end(tmp_path):
+    """乐鑫先单独处理引导程序，它自己打 [1/1]（从头编时是 [1/158]…）。进度只按总数最多的那一组算。"""
+    src = board_project(tmp_path)
+    inc = ["[1/9] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/main.c.obj",
+           "[2/9] Performing build step for 'bootloader'",
+           "[1/1] cd /x/build/bootloader && python check_sizes.py bootloader.bin",
+           "[3/9] No install step for 'bootloader'", "[9/9] cd /x/build && python check_sizes.py app.bin"]
+    full = [f"[{i}/548] Building C object a{i}.obj" for i in range(1, 336)] + \
+           [f"[{i}/158] Building C object boot{i}.obj" for i in range(1, 159)] + \
+           [f"[{i}/548] Building C object a{i}.obj" for i in range(336, 549)]
+    for out, top in ((inc, 9), (full, 548)):
+        seen = []
+        EspIdf(tmp_path / "idf", runner=fake_runner(out), env={}).build(src, target="esp32s3",
+                                                                         on_progress=lambda p, m: seen.append((p, m)))
+        bar = [p for p, m in seen if m.startswith("[")]
+        assert all(m.split("]")[0].endswith(f"/{top}") for p, m in seen if m.startswith("["))  # 引导程序那组不算进度
+        assert bar == sorted(bar) and bar[0] < 50
