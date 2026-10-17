@@ -972,7 +972,7 @@ function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>
  if(j.status==='running'&&need>0&&got>=need&&!col.rd){col.rd=true;ding(false)}
  if(j.status==='done'){colStop();col.st=2}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
  if(page==='collect')render()}
-async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0}else col={st:1,att:0,got:[],phase:0,sc:scene};ADV=null;clearInterval(advT);advT=null;fixPick=null;
+async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0;col.rd=false}else col={st:1,att:0,got:[],phase:0,sc:scene};ADV=null;clearInterval(advT);advT=null;fixPick=null;
  const real=realFlash()&&FSWJ&&FSWJ.status==='done';
  const body=real?{page:IDENT.page,steps:fswSteps(),source:'device',project_dir:REAL.project_dir,rounds:colN,resume:!!keep,what:hSay||IDENT.page.mapWhat||''}  // 按实际插进去的步骤收（后台再按插入记录核对）
   :{demo:scene,rounds:colN,resume:!!keep,interval:.12,drop_at:keep?0:9};
