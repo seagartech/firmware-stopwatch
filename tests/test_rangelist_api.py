@@ -68,3 +68,12 @@ def test_settings_list_rereads_after_save_and_on_entering_settings():
     """10-17 走查：改完清单，从顶上「设置」回去，"上次改"还是旧的，要刷新网页才变。存好后、每次进设置页都重新读。"""
     from tests.test_boss_short import JS
     assert "RL=j;RLS=null;" in JS and "if(to==='settings')RLS=null;" in JS
+
+
+def test_report_table_owner_column_and_reversal_note_do_not_squeeze():
+    """10-17 走查截图："谁负责"被挤成一个字一行；"第 19 轮先后反了"写在同一行把"最小～最大"撑宽、看着像错位。"""
+    from tests.test_boss_short import JS, grab
+    assert '<th class="own">谁负责</th>' in JS and '<td class="own"' in next(x for x in JS.splitlines() if "const segRows=" in x)
+    assert '<br><span class="note"' in grab("rangeTxt") and "轮先后反了</span>" in grab("rangeTxt")
+    css = (__import__("pathlib").Path(__file__).parent.parent / "fsw/web/static/style.css").read_text(encoding="utf-8")
+    assert "th.own,td.own{min-width:5.5em}" in css
