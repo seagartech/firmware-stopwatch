@@ -76,4 +76,4 @@ def test_report_table_owner_column_and_reversal_note_do_not_squeeze():
     assert '<th class="own">谁负责</th>' in JS and '<td class="own"' in next(x for x in JS.splitlines() if "const segRows=" in x)
     assert '<br><span class="note"' in grab("rangeTxt") and "轮先后反了</span>" in grab("rangeTxt")
     css = (__import__("pathlib").Path(__file__).parent.parent / "fsw/web/static/style.css").read_text(encoding="utf-8")
-    assert "th.own,td.own{min-width:5.5em}" in css
+    assert "th.own,td.own{min-width:6.5em}" in css
