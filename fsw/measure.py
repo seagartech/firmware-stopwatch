@@ -4,12 +4,15 @@
 - 行格式 FSW,P<编号>,<开机后微秒>,<附加值>；FSW,RESET,<微秒>,0 是一轮开始。
 - 有的计时点只在内存里记"最后一次"、到后面才打印，所以日志里的先后不等于发生的先后：一律按时间戳算。
 - 同一轮同一个计时点只认第一次。开始收的时候已经在一轮中间的那半轮不算。
-- 一轮要的计时点都收到了就算这一轮（不用等下一轮开始）；下一轮开始了还没收齐，就是"没收全"，不算、自动补测。
+- 一轮在下一轮开始（RESET）或收全之后等一会儿（settle）才收尾：每次都记的点（FSW_MARK）在起点之前可能已经记过一次，
+  这一轮真正那一次可能比别的点都晚到，不能"每个点到过一次"就收尾。收尾时每个点取起点之后的第一次（按时间戳）。
+  起点之后每个点都到了，进度就显示"收全了"（ready），不用等收尾。下一轮开始了还没收全，就是"没收全"，不算、自动补测。
 - 连起点都没有的一轮不算一轮（比如对话类喊唤醒词那一下），不报没收全。
 设备输出原样存一份（码表不改日志去向），这里只读。纯计算，不用大模型。
 """
 
 import re
+import time
 from dataclasses import dataclass, field
 
 POINT = re.compile(r"FSW,(P\d+|RESET),(-?\d+),(-?\d+)")
@@ -95,7 +98,7 @@ STALE_US = 500_000  # 比起点早半秒以上，算这一轮开始之前的
 
 
 class Collector:
-    """一行行喂进来，一轮收齐就交出这一轮。"""
+    """一行行喂进来，一轮收尾时交出这一轮：下一轮开始（RESET）时，或收全之后调用 flush 时。"""
 
     def __init__(self, spec, att=0, n=0):
         self.spec, self.att, self.n = spec, att, n
@@ -108,6 +111,7 @@ class Collector:
         self.cur, self.done, self.started, self.first = {}, False, True, True
         self.occ = {}
         self.reset_us = None
+        self.ready, self.ready_at = False, None
 
     def feed(self, line):
         p = parse_line(line)
@@ -117,46 +121,75 @@ class Collector:
         name, us, val = p
         out = []
         if name == "RESET":
+            if self.ready and not self.done:  # 上一轮已经收全：下一轮开始了，收尾
+                out.append(self._close())
             # 没有起点的一轮不算一轮（比如对话类喊唤醒词那一下：设备进聆听就清零，但没有"你说完"），不报没收全
-            if self.first and self.cur and not self.done:
+            elif self.first and self.cur and not self.done:
                 # 开始读（或接着测重新打开调试口）时这一轮已经开始了：缺了的点可能是断开那一下丢的，算"开头没收到"，不算没收全（决策 112）
                 out.append({"half": True})
             elif self.started and self.cur and not self.done and self.spec.start in self.cur:
-                out.append(self._bad())
+                # 点都记到了、但有的只有起点之前的那一次：是上一轮剩下的，写清楚是哪个点（见 _ok_or_stale）
+                out.append(self._ok_or_stale() if all(x in self.cur for x in self.spec.need) else self._bad())
             elif self.started and not self.done and len([x for x in self.spec.need if x in self.cur]) * 2 >= len(self.spec.need):
                 # 大部分点都到了、就是没有起点：是一次真的对话，只是设备没记到起点。不算一轮，但要报出来（决策 133）
                 out.append({"nostart": True})
             self.started, self.cur, self.done, self.first = True, {}, False, False
             self.occ = {}
             self.reset_us = us
+            self.ready, self.ready_at = False, None
             return out
-        if not self.started or self.done:  # 半轮、或这一轮已经收齐：后面的不管
+        if not self.started or self.done:  # 半轮、或这一轮已经收尾：后面的不管
             return out
         self.cur.setdefault(name, (us, val))
-        self.occ.setdefault(name, []).append((us, val))  # 同一个点一轮里记了几次（"每次都记"的点）：算的时候挑起点之后的第一次
-        if all(x in self.cur for x in self.spec.need):
-            self.done = True
-            out.append(self._ok_or_stale())
+        self.occ.setdefault(name, []).append((us, val))  # 同一个点一轮里记了几次（"每次都记"的点）：收尾时挑起点之后的第一次
+        if not self.ready and self._complete():
+            self.ready, self.ready_at = True, time.monotonic()  # 收全了：进度马上显示，收尾等下一轮开始或 flush
         return out
 
+    def _after(self, x):
+        """这一轮里计时点 x 记在起点之后（容差 STALE_US）的那几次，按时间先后。"""
+        t0 = self.cur[self.spec.start][0]
+        return sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - STALE_US)
+
+    def _complete(self):
+        """起点到了，而且要的每个点在起点之后都记到了。"""
+        return self.spec.start in self.cur and all(x == self.spec.start or self._after(x) for x in self.spec.need)
+
     def progress(self):
-        got = len([x for x in self.spec.need if x in (self.cur or {})]) if not self.done else 0
-        return got, len(self.spec.need)
+        """正在收的这一轮：收到几个 / 共要几个。已经收全、等收尾时算全到；刚收尾、下一轮还没开始时是 0。"""
+        if self.done:
+            return 0, len(self.spec.need)
+        if self.ready:
+            return len(self.spec.need), len(self.spec.need)
+        if self.spec.start in self.cur:  # 起点之前记的那次不算（每次都记的点）：不然还差着就显示收全了
+            return len([x for x in self.spec.need if x == self.spec.start or self._after(x)]), len(self.spec.need)
+        return len([x for x in self.spec.need if x in (self.cur or {})]), len(self.spec.need)
+
+    def flush(self, settle=0.0):
+        """收全了、已经等了 settle 秒（设备可能不再开始下一轮，比如最后一轮）：收尾，交出这一轮。"""
+        if self.ready and not self.done and time.monotonic() - self.ready_at >= settle:
+            return [self._close()]
+        return []
+
+    def _close(self):
+        self.done = True
+        return self._ok_or_stale()
 
     def finish(self):
-        """停下时：正在收、还没收齐的这一轮不算（也不算"没收全"）。接着收时，从那一刻起当作新一轮的开头。"""
+        """停下时：已经收全的这一轮照算；正在收、还没收全的这一轮不算（也不算"没收全"）。
+        接着收时，从那一刻起当作新一轮的开头。"""
+        out = self.flush()
         self._open()
-        return []
+        return out
 
     def _ok_or_stale(self):
         """比起点还早的点不是这一轮的（决策 111）：比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它，
         这一轮真正的那一次没记到。这样的轮不能算（也不能拿它判问题），写清楚是哪个点，自动补一轮。"""
-        t0 = self.cur[self.spec.start][0]
         stale = []
         for x in self.spec.need:
             if x == self.spec.start:
                 continue
-            after = [o for o in self.occ.get(x, [self.cur[x]]) if o[0] >= t0 - STALE_US]
+            after = self._after(x)
             if after:
                 self.cur[x] = after[0]  # 决策 123：起点之后的第一次才是这一轮的（比如进聆听时先换一次表情，回答来了再换）
             else:

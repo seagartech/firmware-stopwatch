@@ -91,7 +91,7 @@ def test_live_collector_counts_rounds_as_they_finish():
     events = []
     for l in ["FSW,RESET,0,0", "FSW,P1,1,0", "FSW,P2,2,0", "FSW,RESET,10,0", "FSW,P1,11,0"]:
         events += c.feed(l)
-    assert [e["n"] for e in events if e["ok"]] == [1]  # 一轮收齐就算，不用等下一轮开始
+    assert [e["n"] for e in events if e["ok"]] == [1]  # 下一轮开始时，上一轮收尾
     assert c.progress() == (1, 2)  # 正在收的这轮：收到 1 个 / 共要 2 个
     assert c.finish() == []  # 停下时没收齐的这一轮不算，也不算"没收全"
 
