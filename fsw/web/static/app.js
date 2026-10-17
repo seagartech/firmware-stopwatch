@@ -58,7 +58,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
   firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],fine:ADV&&ADV.status==='done'&&ADV.fine?htmlEsc(ADV.fine):(()=>{const ok=J.segments.filter(g=>!g.outside&&g.verdict==='正常'&&!g.spiky);return ok.length?`设备自己的几段（${ok.map(g=>`${htmlEsc(g.name)} ${f(g.med)} 秒`).join('、')}）都正常，不用改。`:'设备自己的几段还没有能判的。'})(),
   tech:{cond:[['项目',`${htmlEsc(REAL.name)}，${CHIP()}`],['合理范围',sc.standard?`码表自带的标准：${htmlEsc(sc.standard)}（按代码位置对上 ${Object.keys(sc.matched||{}).length} 个计时点）`:'还没有这个设备的合理范围']],pts:sc.points?Object.keys(sc.points).length:(IDENT.page.steps||[]).length,
-   loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} 第 ${st[g.to].l} 行`:''])),log:J.raw_log||S0.tech.log},J}}
+   loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
 const VCLS={'慢':'c-bad','偏慢':'c-warn','正常':'c-ok','推算':'c-gray','没有范围':'c-gray'};
 function withJudge(D,J){const L=n=>J.lines.find(x=>x.name===n)||{};
@@ -592,6 +592,7 @@ let BG=null,bgPoll=null;
 const bgFailed=()=>!!(BG&&BG.state==='failed'),bgWaitTool=()=>!!(BG&&BG.state==='waiting_tool'),bgToolErr=()=>bgFailed()&&!!BG.cause;
 // 不是源码的问题（编译工具没加载起来、组件没下载下来）：标题按原因说，正文去掉和标题重复的那句
 const TOOLT=c=>c==='network'?'组件没下载下来，不是源码的问题':'编译工具没加载起来，不是源码的问题',toolSay=m=>String(m||'').replace(/^.*?不是源码的问题[。：]/,'');
+const lnTxt=l=>+l>0?`第 ${l} 行`:'行号待核对';  // 大模型没给出行号时记成 0（识别时已标需核对）
 const htmlEsc=t=>String(t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const BGTIME=()=>{if(BG&&BG.seconds!=null){const t=Math.round(BG.seconds);return t>=60?`${Math.floor(t/60)} 分 ${t%60} 秒`:`${t} 秒`}return FF[scene].bg};
 const bgBody=()=>({work:REAL.work,chip:REAL.chip,board:REAL.board,idf_min:REAL.idf_min,project_dir:REAL.project_dir});  // 带上项目：源码没变就用上次编好的原版（决策 134）
@@ -632,7 +633,7 @@ function readBox(){const llm=usedLLM();
   ${row(0,'挑出要读的代码','码表自己做，不用大模型：'+FF[scene].scope)}
   ${row(1,`交给 ${llm}，等它读完`,`已等 ${readSec} 秒。大模型要整段读完才开始回答，这一步没有百分比，一般 1～3 分钟（估算；验证期 DeepSeek 实测 53 秒）`)}
   ${row(2,'AI 读完后，在这里列出找到的步骤',`${stepsRead===2?'找完了，共':'已找到'} ${readFound} 个`)}</ol>
-  ${stepsRead===2?foundList():`${readFound?`<div class="list">${STEPS.slice(0,readFound).map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} 第 ${x.l} 行</span></div>`).join('')}</div>`:''}
+  ${stepsRead===2?foundList():`${readFound?`<div class="list">${STEPS.slice(0,readFound).map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} ${lnTxt(x.l)}</span></div>`).join('')}</div>`:''}
   <p class="note">只发了代码，没发任何"标准答案"；结果先存在本机，源码没变下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}`}
 // 没法知道真实进度的等待（大模型读代码）：按一般用时估一个进度，最多到 95%，等完了才满（决策 105）
 const estPct=(sec,typ)=>Math.min(95,Math.round(100*(1-Math.exp(-sec/typ))));
@@ -649,7 +650,7 @@ function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,fo
   <p class="note">只给它读代码，没给任何"标准答案"；结果存在本机，源码和要测的都没变，下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}
 function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
  return `${REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad);margin-top:12px">${htmlEsc(IDENT.page.warn)}</div>`:''}<p style="margin:12px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
-   <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
+   <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} ${lnTxt(x.l)}${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
    ${F.sideAsk?`<p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>`:''}`}
 let bgShownDone=0;
 const BGTIP='原始代码：你选的那份源码，码表复制一份，一个字没改、没插计时点。<br>点「开始找关键步骤」时开始编，这时源码和要测的内容都定了。插完计时点后的「编译」要用它，只重编改过的几个文件（验证期实测：从头编 119 秒，只重编 80 秒）。<br>没编完，只有「编译」那一步会先等它，其他步骤照常做。你原来的文件夹不动。';
@@ -686,7 +687,7 @@ function addBox(){const F=FF[scene],A=F.sideAsk||{addEx:'收到服务器回复',
  const lines=[['talk',F.ln.talk]].concat(useFace()?[['face',F.ln.face]]:[]);
  const head=`<b>添加一个漏掉的步骤</b>`;
  if(addSt===2)return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 0"><span class="spin"></span> AI 正在读代码，找"${addName}"在哪一行……（调用一次大模型，一般几秒到十几秒）</p></div>`;
- if(addSt===3){const g=REAL&&addGuess?addGuess:A.addGuess;return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 4px">AI 找到的位置：<span class="code">${g.f}</span> 第 ${g.l} 行</p><p class="note" style="margin:0 0 6px">${g.why}。AI 推测的，请核对。</p>
+ if(addSt===3){const g=REAL&&addGuess?addGuess:A.addGuess;return `<div class="edit" style="margin-left:0">${head}<p style="margin:8px 0 4px">AI 找到的位置：<span class="code">${g.f}</span> ${lnTxt(g.l)}</p><p class="note" style="margin:0 0 6px">${g.why}。AI 推测的，请核对。</p>
   <div class="acts" style="justify-content:flex-start;margin:4px 0 0"><button class="btn" data-add="ok">加上这一步</button><button class="btn" data-add="open">不对，重新描述</button><button class="btn" data-add="cancel">取消</button></div></div>`}
  return `<div class="edit" style="margin-left:0">${head}
   <div class="inrow"><input type="text" id="add-n" value="${addName}" placeholder="用一句话说这一步是什么，比如：${A.addEx||'收到服务器回复'}"></div>${addErr?`<p class="note" style="color:var(--bad);margin:4px 0">✕ ${addErr}</p>`:''}
@@ -701,7 +702,7 @@ function stepsA(){const rows=allRows(),all=[...STEPS.filter(x=>x.line==='face'&&
   if(off)return `<div class="srow2 off"><span class="num">${i+1}</span><div><s>${x.n}</s> <span class="note">已删除，这里不插计时点</span></div><button class="pill" data-undel="${x.p}">恢复</button></div>`;
   return `<div class="srow2"><span class="num">${i+1}</span>
   <div><b>${x.n}</b> <span class="chip ${x.line==='face'?'c-face':x.line==='start'?'c-gray':'c-speak'}">${lineName[x.line]}</span> ${sureChip(x)}${edits[x.p]?' <span class="chip c-gray">你改过位置</span>':''}
-   <div class="note"><span class="code">${x.f}</span> 第 ${x.l} 行 · ${x.why}${x.note?`<br><span style="color:var(--warn)">要留意：${x.note}</span>`:''}</div></div>
+   <div class="note"><span class="code">${x.f}</span> ${lnTxt(x.l)} · ${x.why}${x.note?`<br><span style="color:var(--warn)">要留意：${x.note}</span>`:''}</div></div>
   <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" data-editp="${x.p}">修改位置</button><button class="pill" data-del="${x.p}">删除</button></span></div>${editP===x.p?editBox(x):''}`};
  return `<section class="panel"><h2>找到 ${STEPS.length} 个关键步骤${fc.length?`<span class="note" style="font-weight:400">　你要测的这条 ${STEPS.length-fc.length} 个，顺带发现的 ${fc.length} 个</span>`:''}</h2><p class="note" style="margin-top:0">每个关键步骤插一个计时点，量出每一段用了多久。序号是发生的先后顺序。</p>
  <ul class="notes" style="margin:0 0 8px"><li>位置不对：点「修改位置」，改文件和行号。</li><li>不需要：点「删除」，这里就不插计时点，删了能恢复。</li><li>漏了：点最下面的「添加步骤」。</li></ul>
@@ -730,13 +731,13 @@ function stepsB(){const F=FF[scene],W=760,H=250,main=F.main,n=main.length;
  ${useFace()&&F.branch.nodes.length?`<text x="${pos[F.branch.from][0]-14}" y="195" text-anchor="end" font-size="12" fill="var(--face)">${F.sideLbl}</text>`:''}
  </svg></div>
  <div class="pills" style="margin:4px 0 10px">${Object.entries(fileCol).map(([f,c])=>`<span class="note"><i class="dot" style="background:${c}"></i>${f}</span>`).join('')}</div>
- <div class="detail"><b>${sel.n}</b> ${sureChip(sel)}<div class="note"><span class="code">${sel.f}</span> 第 ${sel.l} 行 · ${sel.why}${sel.note?`<br><span style="color:var(--warn)">要留意：${sel.note}</span>`:''}</div>
+ <div class="detail"><b>${sel.n}</b> ${sureChip(sel)}<div class="note"><span class="code">${sel.f}</span> ${lnTxt(sel.l)} · ${sel.why}${sel.note?`<br><span style="color:var(--warn)">要留意：${sel.note}</span>`:''}</div>
   <div class="pills" style="margin-top:6px">${dropped.has(sel.p)?`<span class="note">已删除</span><button class="pill" data-undel="${sel.p}">恢复</button>`:`<button class="pill" data-editp="${sel.p}">修改位置</button><button class="pill" data-del="${sel.p}">删除</button>`}</div></div></details>`}
 function stepsC(){const segRow=(sg,c)=>{const off=dropped.has(sg.a)||dropped.has(sg.b);return `<div class="cseg ${off?'off':''}"><span class="cbar" style="background:${sg.out?'var(--est)':c}"></span><div><b>${sg.t}</b> <span class="note">${sg.who}${sg.out?' · 设备外':''}</span><div class="note">从"${S_N[sg.a].n}"到"${S_N[sg.b].n}"</div></div></div>`};
  return `<section class="panel"><h2>按这些步骤，用时会切成这几段</h2><p class="note" style="margin-top:0">报告里就按这几段算用时、判快慢。段切得不对，说明步骤找得不对。灰色是设备以外的段，码表只能量、改不了。</p>
   <h3 class="h3"><i class="dot" style="background:var(--speak)"></i>${FF[scene].mainTitle}</h3>${SEGS.map(x=>segRow(x,'var(--speak)')).join('')}
   ${useFace()?`<h3 class="h3"><i class="dot" style="background:var(--face)"></i>${FF[scene].sideTitle}</h3>${FSEGS.map(x=>segRow(x,'var(--face)')).join('')}`:''}
-  <details style="margin-top:10px"><summary class="note" >代码位置（${live().length} 个）</summary>${STEPS.filter(x=>useFace()||x.line!=='face').map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} 第 ${x.l} 行 ${x.sure!=='高'?'· <span style="color:var(--warn)">需核对</span>':''}</span></div>`).join('')}</details></section>`}
+  <details style="margin-top:10px"><summary class="note" >代码位置（${live().length} 个）</summary>${STEPS.filter(x=>useFace()||x.line!=='face').map(x=>`<div class="srow"><b>${x.n}</b><span class="note">${x.f} ${lnTxt(x.l)} ${x.sure!=='高'?'· <span style="color:var(--warn)">需核对</span>':''}</span></div>`).join('')}</details></section>`}
 const STEPVAR={a:{label:'A 清单',idea:'A 清单：按发生顺序一条条列，每条有代码位置、为什么在这、可信度高低，研发逐条打勾。最直接，适合研发核对。'},
  b:{label:'B 流程地图',idea:'B 流程地图：画出一次对话在代码里怎么走、经过哪些文件，点圆点看详情。顺带满足需求 17（关键流程地图），也最适合录视频展示。'},
  c:{label:'C 切成几段',idea:'C 切成几段：不看点，看点之间切出来的段（报告里就按这些段算用时）。不写代码的人也能判断"这样切对不对"。'}};
@@ -805,14 +806,15 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
 function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
  const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code>${fullLogBtn()}</div>${fullLog()}`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
  if(E.cause)return box(TOOLT(E.cause),htmlEsc(toolSay(E.message)),E.error,`<button class="btn pri" data-flx="${E.kind==='orig'?'origretry':E.kind==='burn'?'reburn':'rebuild'}">重试</button>${E.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}`);
- if(E.kind==='insert')return box('计时点没插上',E.message,'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
+ if(E.kind==='insert')return box('计时点没插上',E.message,E.error||'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
  if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过（编译工具、依赖或板子配置的问题），和插的计时点无关，烧录前要先解决。码表不替你改代码。`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
  if(E.kind==='build')return E.step?box('编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点：「${htmlEsc(E.step_name||E.step)}」那一处（${htmlEsc(E.where)}）。<br>码表自己的问题，不用你改代码。`,E.error,`<button class="btn pri" data-flx="drop">撤掉这处计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`)
   :box('编译没通过',`${htmlEsc(E.message)}${E.error?'。报错里没对上是哪一处计时点，看下面的报错，或者重新插入。':''}`,E.error,`<button class="btn pri" data-flx="rebuild">重新编译</button><button class="btn" data-fl="redo">重新插入</button>`);
+ if(E.kind==='burn'&&E.message&&E.message!=='烧录中断')return box('烧录没做成',htmlEsc(E.message),E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`);
  if(E.kind==='burn')return box('烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。',E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`);
  return box('试一次没收到计时点',`${htmlEsc(E.message)}${E.why?`<details class="lvwhy" style="margin-top:6px"><summary>可能的原因</summary><p class="note" style="margin:6px 0 0">${htmlEsc(E.why)}</p></details>`:''}${E.offer_restore?'<br>试了几次都不行：可以先还原成原版，设备回到原来的样子，不会坏。':''}`,E.error,`<button class="btn pri" data-flx="retry">再试一次</button>${E.offer_restore?'<button class="btn" data-hrestore="'+htmlEsc(REAL.project_dir)+'">还原成原版</button>':''}`)}
 function flErr(){if(realFlash()&&FSWJ&&FSWJ.err)return flErrReal();const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
- const E={orig:['原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(BG&&BG.message)}`,htmlEsc(BG&&BG.error),`<button class="btn" data-bgpop="1">看详情</button>`],build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} 第 ${p.l} 行）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
+ const E={orig:['原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(BG&&BG.message)}`,htmlEsc(BG&&BG.error),`<button class="btn" data-bgpop="1">看详情</button>`],build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} ${lnTxt(p.l)}）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
   burn:['烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。','A fatal error occurred: The chip stopped responding.',`<button class="btn pri" data-flx="reburn">重新烧录</button>`],
   try:['试一次没收到计时点',`烧录成功，设备也重启了，但${F.trig}后 15 秒内没收到计时点。常见原因：<br>1. 没触发到：再${C.act}一次试试。<br>2. 串口被别的软件占着（比如别的串口监视器）：关掉它。<br>3. 设备在反复重启：点「完整日志」看。`,'（15 秒内没有新输出）',`<button class="btn pri" data-flx="retry">再试一次</button>`]}[fl.err];
  return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code>${fullLogBtn()}</div>${fullLog()}<div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
@@ -854,7 +856,7 @@ function diffView(){if(realFlash()&&FSWJ&&FSWJ.view)return diffViewReal();const 
  return `<div class="status" style="margin-bottom:8px"><span><i class="dot" style="background:var(--ok)"></i>只加不删：${F.diffSum}，删除 0 行（码表逐行核对）</span><span><i class="dot" style="background:var(--ok)"></i>${rows.length} 个计时点都插上了，和你确认的一一对应</span></div>
  <p class="note" style="margin:0 0 4px">每处只加两行：一行说明、一行记时间。"+"开头的是新加的。</p>
  <div class="dlist">${one('hdr','＋','新文件 fw_stopwatch.h','计时点工具，+120 行；总开关也在这里',DIFF[0].lines)}
- ${rows.map((x,i)=>one(x.p,i+1,x.n,`${x.f} 第 ${x.l} 行 · +2 行`,[[' ',`    …（第 ${x.l} 行原有代码，不动）`],['+',`    // 计时点 ${x.p}：${x.n}`],['+',`    FSW_MARK(${num(x.p)}, 0);`]])).join('')}</div>
+ ${rows.map((x,i)=>one(x.p,i+1,x.n,`${x.f} ${lnTxt(x.l)} · +2 行`,[[' ',`    …（${lnTxt(x.l)}原有代码，不动）`],['+',`    // 计时点 ${x.p}：${x.n}`],['+',`    FSW_MARK(${num(x.p)}, 0);`]])).join('')}</div>
  <p class="note">总开关在 <span class="code">fw_stopwatch.h</span>：关掉后固件和原版大小相同、逻辑相同。要完全回到原版，用"还原"，会逐字节比对。</p>`}
 function flashA(){return `<section class="panel"><h2>一键插计时点、编译、烧录</h2><p class="note" style="margin-top:0">点一下从头走到尾，中间不停。改动内容装好后可以在"看改动"里查。</p>
  <div id="flbox">${flList()}</div>
@@ -1187,7 +1189,7 @@ function modalHTML(){const F=FF[scene],llm=usedLLM();
  const rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;
  return `<h2 id="dlg-t">找完了</h2><div class="status"><span><i class="dot" style="background:var(--ok)"></i>${tookTxt(llm)}</span>${bgFoundSpan()}</div>
    <p style="margin:10px 0 4px">找到 <b>${rows.length}</b> 个关键步骤：${mid} 个需要你核对，${rows.length-mid} 个可信度高。</p>
-   <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} 第 ${x.l} 行${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
+   <ol class="found">${rows.map(x=>`<li>${x.n} <span class="note">${x.f} ${lnTxt(x.l)}${x.line==='face'?' · '+F.ln.face:''}${x.sure!=='高'?' · <span style="color:var(--warn)">需核对</span>':''}</span></li>`).join('')}</ol>
    ${F.sideAsk?`<p class="note">另外发现：${F.sideAsk.found}。标「${F.ln.face}」的 ${STEPS.filter(x=>x.line==='face').length} 个是顺带发现的，默认也测，下一页可以去掉。</p>`:''}
    <div class="acts" style="justify-content:flex-end"><button class="btn pri" data-mnext="1">下一步</button></div>`}
 function popHTML(){const F=FF[scene],C=CC();
