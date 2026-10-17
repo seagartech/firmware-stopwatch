@@ -306,8 +306,8 @@ def test_real_range_page_shows_this_runs_standard_not_demo():
     """报告里"合理范围依据"：真流程看这次对上的标准和实测基线（只读），不再显示演示数据的标准文件。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "function rangeReal(" in js
-    page = js.split("function rangePage(")[1][:600]
-    assert "if(!(realFlash()&&JREP&&!JREP._none))return rangeDemo()" in page and "if(RL.none)return rangeReal()" in page
+    page = js.split("function rangePage(")[1][:900]
+    assert "if(!RLP&&!(realFlash()&&JREP&&!JREP._none))return rangeDemo()" in page and "if(RL.none)return RLP?" in page and ":rangeReal();" in page
 
 
 def test_task20_plain_hints_and_restore_entries():
