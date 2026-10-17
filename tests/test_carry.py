@@ -170,3 +170,48 @@ def test_report_retest_button_and_wording_for_real_runs():
     assert "e.target.closest('[data-rtreal]')){retestFrom(" in JS
     assert "split('→').pop().trim()" in grab("prevLine")
     assert "报告顶上会提示用新范围更新" not in JS
+
+
+def test_user_asks_1017_noise_retest_label_advice_reuse_short_totals(run_ok=None):
+    """10-17 用户：①差值没超出两次各自正常波动写"在正常波动内"；②再测时步骤条不写"第一次测"；③问题没变沿用上次的"为什么、怎么改"；④两行合计名字改短、各段放悬停。"""
+    from tests.test_boss_short import JS, grab
+    c = grab("cmpTxt")
+    assert "Math.abs(d)<=noise" in c and "在正常波动内" in c
+    assert "flow==='retest'||remeasure?'改完再测':'第一次测'" in JS and "if(!REAL)return;remeasure=true;" in JS
+    assert "沿用 ${htmlEsc(ADV.at)} 写的" in JS
+    rows = next(x for x in JS.splitlines() if "const lineRows=" in x)
+    assert 'class="tipname" title=' in rows and "合计</b>：" not in rows
+
+
+def test_advice_signature_ignores_which_rounds_and_seconds():
+    """问题没变就沿用：签名只看是哪几个问题、什么级别，不看哪几轮、几秒。"""
+    from fsw import advise as advs
+    a = {"key": "spiky:P1-P2", "seg": "P1-P2", "level": "建议改", "rounds": [5], "what": "偶尔特别慢（第 5 轮）"}
+    b = {**a, "rounds": [3, 8], "what": "偶尔特别慢（第 3、8 轮）"}
+    import unittest.mock as m
+    with m.patch.object(advs, "problems", side_effect=[[a], [b]]):
+        assert advs.signature({}, {}) == advs.signature({}, {})
+
+
+def test_compare_noise_is_in_prev_payload(tmp_path):
+    """和上次比带上"正常波动"：两次各自中间一半轮次的跨度，取大的。"""
+    from fastapi.testclient import TestClient
+    from fsw.web.app import create_app
+    from tests.test_advise_api import real_log
+    from tests.test_collect_api import FakeSerialDevice, wait as cwait
+    from tests.test_standards import PAGE
+    proj = tmp_path / "data" / "p"
+
+    def measure():
+        c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", idf_finder=lambda: [],
+                                  cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.x"],
+                                  device=FakeSerialDevice(real_log(20)), wait_step=0.01))
+        c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 20, "project_dir": str(proj)})
+        cwait(c, lambda j: j["status"] == "done")
+        return c.get("/api/report").json()
+    measure()
+    for i, run in enumerate(sorted((proj / "runs").iterdir())):
+        run.rename(proj / "runs" / f"2000010{i}-000000")
+    p = measure()["prev"]
+    assert set(p["noise"]) == set(p["segs"]) and set(p["noise_lines"]) == set(p["lines"])
+    assert all(v >= 0 for v in p["noise"].values())

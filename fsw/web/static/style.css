@@ -235,3 +235,4 @@ svg text.halo{paint-order:stroke;stroke:var(--panel);stroke-width:5px;stroke-lin
 th.own,td.own{min-width:6.5em}
 /* 分段用时：多了"上次"一栏后段名别被挤成两三个字一行 */
 th.segn{min-width:9em}
+.tipname{text-decoration:underline dotted;text-underline-offset:3px;cursor:help}  /* 悬停看包含哪几段 */

@@ -225,8 +225,9 @@ def _rounds_said(text):
 
 
 def signature(j, scenario):
-    """要写卡片的问题（哪些、什么级别、哪几轮）。和上次写建议时一样，就不用再调用大模型。"""
-    return json.dumps(problems(j, scenario), ensure_ascii=False, sort_keys=True)
+    """要写卡片的问题：哪几个（哪条线、哪一段、哪种问题）、什么级别。和上次写建议时一样，就沿用上次的，不再调用大模型。
+    不看具体是哪几轮、几秒：改完再测时这些每次都不一样，问题本身没变（10-17 用户定）。"""
+    return json.dumps([[p["key"], p.get("seg"), p["level"]] for p in problems(j, scenario)], ensure_ascii=False)
 
 
 def saved_for(save_to, j, scenario):
@@ -261,7 +262,7 @@ def advise(llm, root, j, scenario, steps=None, what="", save_to=None, on_progres
     if bad:
         return _fail("bad_reply", "AI 写的建议格式不对，码表没有用：" + "；".join(bad[:4]) + "。点\"重试\"再写一次。", seconds=secs)
     out = {"ok": True, "fixes": fixes, "fine": str(data.get("fine") or ""), "seconds": secs, "called": True,
-           "for": signature(j, scenario)}
+           "for": signature(j, scenario), "at": time.strftime("%Y-%m-%d %H:%M")}
     if save:
         (save / "advice.json").write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     return out
