@@ -115,6 +115,26 @@ def test_drive_speaks_wake_word_then_sentence_only_when_idle_and_waits_for_react
     assert r == "stopped" and said == ["你好", "第1句", "你好", "第2句", "你好", "第3句"]
 
 
+def test_drive_waits_for_device_to_finish_answering_wake_word():
+    # 设备听到唤醒词先回应约 4 秒（调试口一直有输出），回应完才播句子
+    clk, said = Clock(), []
+    last = {"at": -100.0}
+
+    def speak(t):
+        said.append((t, clk.t))
+        if t == "你好":
+            last["at"] = clk.t + 4.0
+
+    def quiet():
+        if last["at"] - 4.0 <= clk.t <= last["at"]:
+            return 0.0
+        return clk.t - last["at"]
+    voice.drive(speak, lambda: "一加一等于几", lambda: True, lambda: 0, lambda: len(said) >= 2, lambda t: None,
+                wake="你好", sleep=clk.sleep, clock=clk, quiet=quiet)
+    assert said[0][0] == "你好" and said[1][0] == "一加一等于几"
+    assert said[1][1] - said[0][1] >= 4.0 + 2.0 - 0.01
+
+
 def test_drive_gives_up_after_three_silent_tries_with_volume_hint():
     clk, hints = Clock(), []
     r = voice.drive(lambda t: None, lambda: "一加一等于几", lambda: True, lambda: 0, lambda: False, hints.append,

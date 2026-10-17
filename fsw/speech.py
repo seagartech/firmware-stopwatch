@@ -11,7 +11,9 @@ import time
 
 VOICE = "Tingting"  # 中文普通话女声，验证 25 用的就是它
 IDLE_SECS = 3.0      # 设备安静这么久才算空闲
-WAKE_GAP = 1.5       # 唤醒词播完等设备进入聆听
+WAKE_GAP = 2.5       # 唤醒词播完至少等这么久
+WAKE_QUIET = 2.0     # 设备对唤醒词有反应（调试口出声）后，再安静这么久才算回应说完、进入聆听
+WAKE_MAX = 10.0      # 最多等这么久，设备一直没输出也照常播句子
 ANSWER_SECS = 20.0   # 播完等这么久没收到计时点，算设备没反应
 MAX_MISSES = 3
 
@@ -25,8 +27,9 @@ def say(text, voice=VOICE):
 
 
 def drive(speak, next_item, idle, marks, stop, on_hint, wake="", sleep=time.sleep, clock=time.monotonic,
-          wake_gap=WAKE_GAP, answer_secs=ANSWER_SECS, max_misses=MAX_MISSES):
-    """一直播到 stop()：idle() 设备空闲；marks() 到现在收到几行计时点（看设备有没有反应）。
+          wake_gap=WAKE_GAP, answer_secs=ANSWER_SECS, max_misses=MAX_MISSES, quiet=None, wake_quiet=WAKE_QUIET, wake_max=WAKE_MAX):
+    """一直播到 stop()：idle() 设备空闲；marks() 到现在收到几行计时点（看设备有没有反应）；
+    quiet() 调试口距上一行输出几秒：唤醒词后设备常会先回应一句，等它说完（有输出、又安静下来）再播句子，否则句子被它自己的声音盖住。
     返回 "stopped"（外面叫停）或 "gave_up"（连着没反应，已提示改由人说）。"""
     misses = 0
     while not stop():
@@ -36,7 +39,16 @@ def drive(speak, next_item, idle, marks, stop, on_hint, wake="", sleep=time.slee
         before = marks()
         if wake:
             speak(wake)
+            t_wake = clock()
             sleep(wake_gap)
+            if quiet:
+                reacted = False
+                while not stop() and clock() - t_wake < wake_max:
+                    q = quiet()
+                    reacted = reacted or q < clock() - t_wake
+                    if reacted and q >= wake_quiet:
+                        break
+                    sleep(0.1)
         speak(next_item())
         t0 = clock()
         while not stop() and marks() == before and clock() - t0 < answer_secs:
