@@ -233,3 +233,6 @@ svg text.halo{paint-order:stroke;stroke:var(--panel);stroke-width:5px;stroke-lin
 :has(> .needwrap){align-items:flex-start}
 /* 技术细节表"谁负责"列留够宽度（"服务器大模型"六个字一行放下），不被挤成一个字一行 */
 th.own,td.own{min-width:6.5em}
+/* 分段用时：多了"上次"一栏后段名别被挤成两三个字一行 */
+th.segn{min-width:9em}
+.tipname{text-decoration:underline dotted;text-underline-offset:3px;cursor:help}  /* 悬停看包含哪几段 */

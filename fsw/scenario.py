@@ -33,6 +33,37 @@ class ScenarioError(ValueError):
     pass
 
 
+def experiences(s):
+    """体验标准：每条线一条（决策 149，写在 experiences 里；fair 为 null = 待用户设定）。
+    旧数据只有一条 experience（挂在某一条线上），照样能读：当成那条线的体验标准。"""
+    if s.get("experiences") is not None:
+        return list(s["experiences"])
+    exp = s.get("experience")
+    return [exp] if exp else []
+
+
+def experience_of(s, line):
+    """某条线已设定的体验标准；没有或待用户设定返回 None。"""
+    return next((e for e in experiences(s) if e.get("line") == line and e.get("fair") is not None), None)
+
+
+def main_experience(s):
+    """网页图上画的那一条：要测的这条线（最后一条）的体验标准；它没有就用第一条设定了的。"""
+    lines = s.get("lines") or []
+    return (experience_of(s, lines[-1]["name"]) if lines else None) or next(
+        (e for e in experiences(s) if e.get("fair") is not None), None)
+
+
+def normalize(s):
+    """旧写法（一条 experience）→ 新写法（每条线一条 experiences，没有的待用户设定）。"""
+    import copy
+    out = copy.deepcopy(s)
+    have = {e["line"]: e for e in experiences(out)}
+    out.pop("experience", None)
+    out["experiences"] = [have.get(l["name"]) or {"line": l["name"], "fair": None, "source": ""} for l in out.get("lines") or []]
+    return out
+
+
 def _num(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
@@ -123,9 +154,20 @@ def check(s):
             if segs[a]["to"] != segs[b]["from"]:
                 errs.append(f"{ln}里「{segs[a]['name']}」和「{segs[b]['name']}」接不上（{segs[a]['to']} → {segs[b]['from']}）")
         _check_range(ln, l.get("range"), errs)
-    exp = s.get("experience")
-    if exp is not None and (exp.get("line") not in names or not _num(exp.get("fair"))):
-        errs.append("体验标准要挂在一条存在的线上，并写多少秒算差（fair）")
+    if s.get("experience") is not None and s.get("experiences") is not None:
+        errs.append("体验标准只写一种：每条线一条（experiences），或旧写法一条（experience）")
+    seen = set()
+    for exp in experiences(s):
+        if not isinstance(exp, dict) or exp.get("line") not in names:
+            errs.append("体验标准要挂在一条存在的线上")
+            continue
+        if exp["line"] in seen:
+            errs.append(f"「{exp['line']}」的体验标准写了两条")
+        seen.add(exp["line"])
+        if exp.get("fair") is not None and not _num(exp.get("fair")):
+            errs.append(f"「{exp['line']}」的体验标准要写多少秒算差（fair），待用户设定写 null")
+        if s.get("experiences") is None and exp.get("fair") is None:
+            errs.append("体验标准要写多少秒算差（fair）")
     order = s.get("expect_order")
     if order is not None and (len(order) != 2 or any(o not in names for o in order)):
         errs.append("expect_order 要写两条存在的线：先到的在前")
@@ -164,7 +206,7 @@ def to_page(demo):
     s = check(demo["scenario"])
     res, extra = demo["result"], demo["page"]
     start, unseen = s["start"], s["start"].get("unseen") or {}
-    exp = s.get("experience")
+    exp = main_experience(s)
     S = {
         "crumb": extra["crumb"],
         "startShort": start["short"],

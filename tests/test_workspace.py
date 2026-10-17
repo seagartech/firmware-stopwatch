@@ -133,3 +133,16 @@ def test_retest_uses_the_board_chosen_last_time(tmp_path):
     assert again["info"]["board"] == "acme/c3-mini" and again["info"]["chip"] == "ESP32-C3"
     assert again["info"]["board_from"] == "last"
     assert again["info"]["boards"]  # 列表还在，想换能换
+
+
+def test_changed_source_keeps_last_build_config(tmp_path):
+    """10-17 升级小智：源码改了重新复制，副本里上次编译用的 sdkconfig 要留着；新版默认改成英文、关了唤醒词，按默认重来就和上次不一样了。"""
+    src = idf_project(tmp_path / "door")
+    work = Path(prepare(src, data_dir=tmp_path / "data")["work"])
+    (work / "sdkconfig").write_text("CONFIG_LANGUAGE_ZH_CN=y\n")
+    (src / "main/main.c").write_text("void app_main(void) { int x; }\n")
+    r = prepare(src, data_dir=tmp_path / "data")
+    assert r["status"] == "changed" and (work / "sdkconfig").read_text() == "CONFIG_LANGUAGE_ZH_CN=y\n"
+    (src / "sdkconfig").write_text("CONFIG_LANGUAGE_EN_US=y\n")                  # 源码自己带配置：用源码的
+    prepare(src, data_dir=tmp_path / "data")
+    assert (work / "sdkconfig").read_text() == "CONFIG_LANGUAGE_EN_US=y\n"

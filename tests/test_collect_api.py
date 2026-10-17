@@ -189,15 +189,16 @@ def test_report_judges_this_run_with_fixed_rules(make):
 def test_report_for_real_steps_reads_the_xiaozhi_standard(make, tmp_path):
     from tests.test_standards import PAGE
     log = []
-    for r in range(12):
+    for r in range(9):
         b = 10_000_000 * (r + 1)
         t = {"P1": 0, "P2": 0.75, "P3": 1.15, "P4": 1.162, "P5": 2.1, "P6": 2.11, "P7": 2.16, "P8": 2.17, "P9": 2.175}
         log += [f"FSW,RESET,{b},0"] + [f"FSW,{p},{b + 100_000 + int(v * 1e6)},0" for p, v in t.items()]
     c, _ = make(device=FakeSerialDevice(log))
-    c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 12, "project_dir": str(tmp_path / "p")})
+    c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 9, "project_dir": str(tmp_path / "p")})
     wait(c, lambda j: j["status"] == "done")
     r = c.get("/api/report").json()
-    assert r["few"] and r["scenario"]["standard"].startswith("小智")
+    assert r["few"] and r["scenario"]["standard"].startswith("小智")  # 不到 10 轮：不建清单，按码表自带的标准判
+    assert not (tmp_path / "p" / "合理范围清单.md").exists()
     seg = {g["k"]: g for g in r["segments"]}
     assert seg["P2-P5"]["verdict"] == "正常" and seg["P2-P5"]["med"] == pytest.approx(1.35)  # 大模型想回答 0.4～1.5 秒
     talk = r["lines"][-1]

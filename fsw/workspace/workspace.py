@@ -100,14 +100,38 @@ def _stray_header(root, work):
                for f in _source_files(work, ()) if f.name == HEADER_NAME)
 
 
-def _copy(root, work):
+def _copy(root, work, keep_config=True):
+    """重新复制源码。源码里没有 sdkconfig 时，副本里上次编译用的那份留着（同一块板子才留）：
+    改完再测要和上次同样的配置编，不能因为源码改了就按新的默认值重来（10-17 升级小智：新版默认改成英文、关了唤醒词）。"""
     work = Path(work)
+    old = None
+    if keep_config and not (Path(root) / "sdkconfig").exists() and (work / "sdkconfig").is_file():
+        old = (work / "sdkconfig").read_bytes()
     if work.exists():
         shutil.rmtree(work)
     shutil.copytree(root, work, ignore=shutil.ignore_patterns(*SKIP_DIRS))
+    if old is not None:
+        (work / "sdkconfig").write_bytes(old)
+
+
+LAST = "fsw-last"  # 改完再测（任务 22）：作废前把上次的插入方案和原版文件留一份，看计时点那几处改没改
+
+
+def _keep_last(proj):
+    """作废前留一份上次的插入方案和插计时点前的原版文件（两样都有才留），供"计时点那几处没动就沿用"比对。"""
+    proj = Path(proj)
+    plan, files = proj / "fsw-plan.json", proj / "fsw-backup" / "files"
+    if not (plan.is_file() and files.is_dir()):
+        return
+    last = proj / LAST
+    shutil.rmtree(last, ignore_errors=True)
+    last.mkdir(parents=True)
+    shutil.copy2(plan, last / "fsw-plan.json")
+    shutil.copytree(files, last / "files")
 
 
 def _drop_stale(proj):
+    _keep_last(proj)
     for name in STALE:
         p = Path(proj) / name
         if p.is_dir():
@@ -195,7 +219,7 @@ def prepare(src, data_dir, board=None, unpack_to=None):
     with _lock:
         if status != "unchanged" or not work.exists():
             # 新的或改过的源码：重新复制，按旧源码插的备份、插入方案、计时版固件都作废（不然下次插入前的还原会把旧文件盖上来）
-            _copy(root, work)
+            _copy(root, work, keep_config=old is not None and old.get("board") == info["board"])
             if status == "unchanged":  # 源码没变、只是副本没了：插入方案还能用，只作废插入备份
                 from fsw import instrument as ins
                 ins.discard(backup)

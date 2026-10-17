@@ -36,7 +36,7 @@ def test_dialogue_mock_log_matches_sample_report():
     assert line["verdict"] == "偏慢"                   # 超出合理范围 0.7～2.75；验证 03 没给总等待的"算慢"线
     assert line["combo"] == "先查哪段做坏了"            # 体验差 + 超出合理范围
     seg = {g["k"]: g for g in j["segments"]}
-    assert seg["think"]["verdict"] == "慢" and seg["think"]["med"] == pytest.approx(2.68, abs=0.01)
+    assert seg["think"]["verdict"] == "超过慢阈值" and seg["think"]["med"] == pytest.approx(2.68, abs=0.01)
     assert seg["asr"]["verdict"] == "正常" and seg["net"]["verdict"] == "正常"
     assert seg["queue"]["verdict"] == "推算"            # 推算的段只标推算，不判快慢
     assert all(seg[k]["verdict"] == "正常" for k in ("decode", "speak", "state", "clear", "face"))
@@ -105,9 +105,9 @@ def test_no_experience_standard_only_uses_ranges(b, combo):
 
 
 @pytest.mark.parametrize("a,b,why,level", [
-    (0.6, 2.6, "一般用时超过算慢线", "必须改"),
-    ([0.6] * 17 + [0.6] * 3, [1.0] * 17 + [2.6] * 3, "10 次里最慢超过算慢线", "必须改"),
-    (0.6, 1.6, "超出合理范围但不算慢", "建议改"),
+    (0.6, 2.6, "中位数超过慢阈值", "必须改"),
+    ([0.6] * 17 + [0.6] * 3, [1.0] * 17 + [2.6] * 3, "10 次里最慢超过慢阈值", "必须改"),
+    (0.6, 1.6, "超出合理范围但未超过慢阈值", "建议改"),
     (0.6, 1.0, "在合理范围内", "可以不改"),
 ])
 def test_line_labels(a, b, why, level):
@@ -143,7 +143,7 @@ def test_segment_verdicts_and_estimated():
     j = J.judge(sc(seg_basis="estimated"), rounds(0.9, 1.5))
     seg = {g["k"]: g for g in j["segments"]}
     assert seg["a"]["verdict"] == "推算" and seg["b"]["verdict"] == "偏慢"
-    assert J.judge(sc(), rounds(1.5, 1.0))["segments"][0]["verdict"] == "慢"
+    assert J.judge(sc(), rounds(1.5, 1.0))["segments"][0]["verdict"] == "超过慢阈值"
 
 
 def test_tiers_and_first_reaction():
