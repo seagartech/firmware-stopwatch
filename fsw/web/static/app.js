@@ -446,6 +446,7 @@ function settingsPage(){
    <div class="inrow"><input type="text" id="set-data" value="${htmlEsc(tilde(dataDraft||SAVED.data_dir||'~/firmware-stopwatch-data'))}" readonly><button class="btn" data-datadir="1">更换位置</button></div>
    <p class="note">每个项目一个文件夹：识别结果、合理范围、每次的原始日志和报告。都在你电脑上。</p>
   </section>
+  ${first?'':rlSettings()}
   <section class="panel"><h2>提示音</h2><p class="note" style="margin:0 0 8px">多轮实测时，收好一轮"叮"一声，没收全低一声。点"试听"听听这台电脑上能不能听到。<br>听不到：先看电脑音量；音量正常还听不到，把浏览器整个退出（Mac 上按 Command + Q）再打开。</p><div class="acts" style="margin:0;align-items:center"><button class="btn" data-beeptest="1">试听</button>${beepMsg?`<span class="note">${beepMsg==='running'?'浏览器的声音是开着的：要是没听到，看看电脑音量、有没有静音、有没有接了别的耳机。':`浏览器没让网页出声（${htmlEsc(beepMsg)}）：再点一次「试听」；还不行的话看看浏览器对这个网页是不是设了"不允许自动播放"。`}</span>`:''}</div></section>
   <div class="acts" style="justify-content:center;margin:4px 0 8px"><button class="btn pri" data-save="1" style="min-width:10em">保存</button></div>
 </div>`;
@@ -1102,8 +1103,15 @@ function rangeReal(){const J=JREP,sc=J.scenario||{},segs=sc.segments||{},med=Obj
  <p class="note">实测基线是这次 ${J.n} 轮的一般用时（中位数）。合理范围来自码表自带的标准文件；对不上标准的段没有范围，只记用时。</p></section>
  <section class="panel"><p class="note" style="margin:0">这个项目还没有合理范围清单：测满 10 轮后，码表按实测自动建，之后就在这里改。现在先按码表自带的标准判（没有标准的段只记用时）。</p><div class="acts"><button class="btn" data-go="report" data-keepflow="1">回到报告</button></div></section></div>`}
 // 合理范围清单页（减重版）：两张表，看、改两个数；改完回报告自动按新的判。演示数据只读
-let RL=null,rlEd=null,rlMsg='';
-async function rlLoad(){RL={loading:true};try{const r=await fetch('/api/rangelist'),j=await r.json();RL=r.ok?j:{none:j.detail||'读不到合理范围清单'}}catch(e){RL={none:'码表后台没有回应'}}if(page==='range')render()}
+let RL=null,rlEd=null,rlMsg='',RLP=null,RLS=null;  // RLP：从设置页打开的是哪个项目（null = 这份报告的项目）
+async function rlsLoad(){RLS={loading:true};try{RLS=await (await fetch('/api/rangelists')).json()}catch(e){RLS=[]}if(page==='settings')render()}
+// 设置页"合理范围清单"：每个测过的固件一份，点开就能改；还没有的灰着，正下方写还差什么
+function rlSettings(){if(!RLS)rlsLoad();const L=Array.isArray(RLS)?RLS:[];
+ const rows=L.map(x=>`<div class="devrow"><span><b>${htmlEsc(x.name)}</b>　<span class="note">${!x.has?'还没有':x.broken?'<span style="color:var(--bad)">文件格式不对，点开看哪一行</span>':`${x.items} 项 · 上次改 ${htmlEsc(x.changed||'')}`}</span></span>${x.has?`<button class="btn small" data-rlopen="${htmlEsc(x.project_dir)}">查看、修改</button>`
+  :`<span style="text-align:right"><button class="btn small"${blk('','还没有：一次测量收齐 10 轮以上后自动建')}>查看、修改</button><span class="note" style="display:block;font-size:12px">还差：一次测量收齐 10 轮以上</span></span>`}</div>`).join('');
+ return `<section class="panel" id="set-rl"><h2>合理范围清单</h2><p class="note" style="margin-top:0">每个固件一份，码表按它判快慢（正常 / 偏慢 / 超过慢阈值）。一次测量收齐 10 轮以上时自动按实测建好，之后在这里改。</p>
+  ${RLS&&RLS.loading?'<p class="note"><span class="spin"></span> 正在读……</p>':rows?`<div>${rows}</div>`:'<p class="note" style="margin:0">还没有测过的固件。</p>'}</section>`}
+async function rlLoad(){RL={loading:true};try{const r=await fetch('/api/rangelist'+(RLP?'?project_dir='+encodeURIComponent(RLP):'')),j=await r.json();RL=r.ok?j:{none:j.detail||'读不到合理范围清单'}}catch(e){RL={none:'码表后台没有回应'}}if(page==='range')render()}
 const rlR=r=>r?`${r[0]}～${r[1]??'不限'}`:'—',rlN=x=>x==null?'—':x;
 const rlMed=x=>x==null?'—':+(+x).toPrecision(3);
 function rlEditCells(k,g,isLine){return `<td class="r"><div class="rl-cap"><span>最少</span><span></span><span>最多</span></div><input class="rl-in num" id="rl-lo" type="number" step="any" value="${g.range?g.range[0]:''}" aria-label="合理范围最少"> ～ <input class="rl-in num" id="rl-hi" type="number" step="any" value="${g.range&&g.range[1]!=null?g.range[1]:''}" placeholder="不限" aria-label="合理范围最多"></td>
@@ -1111,30 +1119,31 @@ function rlEditCells(k,g,isLine){return `<td class="r"><div class="rl-cap"><span
  <td>${isLine?`<div class="rl-cap"><span>体验标准：超过多少秒算差（可以空着）</span></div><input class="rl-in num" id="rl-fair" type="number" step="any" value="${g.fair??''}" aria-label="体验标准"> 秒<div class="rl-cap" style="margin-top:4px"><span>出处</span></div><input class="rl-in wide" id="rl-src" value="${htmlEsc(g.source||'')}" placeholder="用户设定">`
   :`<div class="rl-cap"><span>备注（可以空着）</span></div><input class="rl-in wide" id="rl-note" value="${htmlEsc(g.note||'')}">`}
   <div style="margin-top:6px"><button class="btn pri small" data-rlsave="${htmlEsc(k)}">保存</button> <button class="btn small" data-rled="">取消</button></div>${rlMsg?`<div class="note" style="color:var(--bad);margin-top:4px;white-space:normal">${htmlEsc(rlMsg)}</div>`:''}</td>`}
-function rangePage(){if(!(realFlash()&&JREP&&!JREP._none))return rangeDemo();
+function rangePage(){if(!RLP&&!(realFlash()&&JREP&&!JREP._none))return rangeDemo();
  if(!RL)rlLoad();if(!RL||RL.loading)return '<div class="stack"><section class="panel"><p class="note"><span class="spin"></span> 正在读合理范围清单……</p></section></div>';
- const back='<div class="acts"><button class="btn" data-rlback="1">回到报告</button></div>';
- if(RL.none)return rangeReal();
- if(RL.broken)return `<div class="stack"><section class="panel"><h1>合理范围清单：格式不对</h1><p class="note">文件：<span class="code">${htmlEsc(RL.path)}</span></p><ul class="notes">${RL.errors.map(e=>`<li>${e.line?`<b>第 ${e.line} 行</b>：`:''}${htmlEsc(e.msg)}</li>`).join('')}</ul><p class="note">改好后点「重新读取」。改好之前，报告按码表自带的范围判。</p><div class="acts"><button class="btn pri" data-rlreload="1">重新读取</button><button class="btn" data-rlback="1">回到报告</button></div></section></div>`;
- const L=RL.list,J=JREP,sc=J.scenario||{},medBy={};
+ const back=`<div class="acts"><button class="btn" data-rlback="1">${RLP?'回到设置':'回到报告'}</button></div>`;
+ if(RL.none)return RLP?`<div class="stack"><section class="panel"><p>${htmlEsc(RL.none)}</p>${back}</section></div>`:rangeReal();
+ if(RL.broken)return `<div class="stack"><section class="panel"><h1>合理范围清单：格式不对</h1><p class="note">文件：<span class="code">${htmlEsc(RL.path)}</span></p><ul class="notes">${RL.errors.map(e=>`<li>${e.line?`<b>第 ${e.line} 行</b>：`:''}${htmlEsc(e.msg)}</li>`).join('')}</ul><p class="note">改好后点「重新读取」。改好之前，报告按码表自带的范围判。</p><div class="acts"><button class="btn pri" data-rlreload="1">重新读取</button><button class="btn" data-rlback="1">${RLP?'回到设置':'回到报告'}</button></div></section></div>`;
+ const L=RL.list,J=RLP?{}:JREP,sc=J.scenario||{},medBy={};  // 从设置页打开：没有这次的实测，不列中位数
  Object.entries(sc.segments||{}).forEach(([k,g])=>{const lk=L.segments[k]?k:Object.keys(L.segments).find(x=>L.segments[x].from===g.from&&L.segments[x].to===g.to);const m=(J.segments||[]).find(x=>x.k===k);if(lk&&m)medBy[lk]=m.med});
- const seg=Object.entries(L.segments).map(([k,g])=>{const key='segment:'+k;return rlEd===key?`<tr class="rl-on"><td style="font-family:var(--sans)">${htmlEsc(g.name)}<br><span class="note">${htmlEsc(g.from)}→${htmlEsc(g.to)}</span></td>${rlEditCells(key,g,false)}<td class="r">${rlMed(medBy[k])}</td><td></td></tr>`
-  :`<tr><td style="font-family:var(--sans)">${htmlEsc(g.name)}<br><span class="note">${htmlEsc(g.from)}→${htmlEsc(g.to)}</span></td><td class="r">${rlR(g.range)}</td><td class="r">${rlN(g.slow)}</td><td style="font-family:var(--sans)">${htmlEsc(g.note||'')}</td><td class="r">${rlMed(medBy[k])}</td><td><button class="btn small" data-rled="${htmlEsc(key)}">修改</button></td></tr>`}).join('');
- const ln=L.lines.map(l=>{const key='line:'+l.name,m=(J.lines||[]).find(x=>x.name===l.name);return rlEd===key?`<tr class="rl-on"><td style="font-family:var(--sans)">${htmlEsc(l.name)}</td>${rlEditCells(key,l,true)}<td class="r">${rlMed(m&&m.med)}</td><td></td></tr>`
-  :`<tr><td style="font-family:var(--sans)">${htmlEsc(l.name)}</td><td class="r">${rlR(l.range)}</td><td class="r">${rlN(l.slow)}</td><td style="font-family:var(--sans)">${l.fair!=null?`超过 ${l.fair} 秒算差<br><span class="note">${htmlEsc(l.source||'')}</span>`:'<span class="note">没设</span>'}</td><td class="r">${rlMed(m&&m.med)}</td><td><button class="btn small" data-rled="${htmlEsc(key)}">修改</button></td></tr>`}).join('');
- return `<div class="stack"><section class="panel"><h1 style="margin-top:0">合理范围清单${L.project?'：'+htmlEsc(L.project):''}</h1><p class="note" style="margin:0">文件：<span class="code">${htmlEsc(RL.path)}</span>（可以直接用文本编辑器改）。第一次测满 10 轮时码表按实测自动填（范围 = 最快×0.9～最慢×1.1，慢阈值 = 最慢×1.4）；改了以后，报告自动按新的判。</p></section>
- <section class="panel scroll"><h2>分段</h2><table class="num rl-tab"><thead><tr><th>分段</th><th class="r">合理范围（秒）</th><th class="r">慢阈值（秒）</th><th>备注</th><th class="r">这次中位数</th><th></th></tr></thead><tbody>${seg}</tbody></table></section>
- <section class="panel scroll"><h2>测量线</h2><table class="num rl-tab"><thead><tr><th>测量线</th><th class="r">合理范围（秒）</th><th class="r">慢阈值（秒）</th><th>体验标准</th><th class="r">这次中位数</th><th></th></tr></thead><tbody>${ln}</tbody></table></section>
+ const seg=Object.entries(L.segments).map(([k,g])=>{const key='segment:'+k;return rlEd===key?`<tr class="rl-on"><td style="font-family:var(--sans)">${htmlEsc(g.name)}<br><span class="note">${htmlEsc(g.from)}→${htmlEsc(g.to)}</span></td>${rlEditCells(key,g,false)}<td class="r">${RLP?'':rlMed(medBy[k])}</td><td></td></tr>`
+  :`<tr><td style="font-family:var(--sans)">${htmlEsc(g.name)}<br><span class="note">${htmlEsc(g.from)}→${htmlEsc(g.to)}</span></td><td class="r">${rlR(g.range)}</td><td class="r">${rlN(g.slow)}</td><td style="font-family:var(--sans)">${htmlEsc(g.note||'')}</td><td class="r">${RLP?'':rlMed(medBy[k])}</td><td><button class="btn small" data-rled="${htmlEsc(key)}">修改</button></td></tr>`}).join('');
+ const ln=L.lines.map(l=>{const key='line:'+l.name,m=(J.lines||[]).find(x=>x.name===l.name);return rlEd===key?`<tr class="rl-on"><td style="font-family:var(--sans)">${htmlEsc(l.name)}</td>${rlEditCells(key,l,true)}<td class="r">${RLP?'':rlMed(m&&m.med)}</td><td></td></tr>`
+  :`<tr><td style="font-family:var(--sans)">${htmlEsc(l.name)}</td><td class="r">${rlR(l.range)}</td><td class="r">${rlN(l.slow)}</td><td style="font-family:var(--sans)">${l.fair!=null?`超过 ${l.fair} 秒算差<br><span class="note">${htmlEsc(l.source||'')}</span>`:'<span class="note">没设</span>'}</td><td class="r">${RLP?'':rlMed(m&&m.med)}</td><td><button class="btn small" data-rled="${htmlEsc(key)}">修改</button></td></tr>`}).join('');
+ return `<div class="stack"><section class="panel"><h1 style="margin-top:0">合理范围清单${L.project?'：'+htmlEsc(L.project):''}</h1><p class="note" style="margin:0">文件：<span class="code">${htmlEsc(RL.path)}</span>（可以直接用文本编辑器改）。一次测量收齐 10 轮以上时码表按实测自动填空着的格子（范围 = 最快×0.9～最慢×1.1，慢阈值 = 最慢×1.4）；改了以后，报告自动按新的判。</p></section>
+ <section class="panel scroll"><h2>分段</h2><table class="num rl-tab"><thead><tr><th>分段</th><th class="r">合理范围（秒）</th><th class="r">慢阈值（秒）</th><th>备注</th><th class="r">${RLP?'':'这次中位数'}</th><th></th></tr></thead><tbody>${seg}</tbody></table></section>
+ <section class="panel scroll"><h2>测量线</h2><table class="num rl-tab"><thead><tr><th>测量线</th><th class="r">合理范围（秒）</th><th class="r">慢阈值（秒）</th><th>体验标准</th><th class="r">${RLP?'':'这次中位数'}</th><th></th></tr></thead><tbody>${ln}</tbody></table></section>
  ${back}</div>`}
 function rangeDemo(){const D=build(SCENES[scene]);const rows=D.allSegs.map(g=>`<tr><td style="font-family:var(--sans)">${htmlEsc(g.name)}</td><td class="r">${htmlEsc(g.ok||'—')}</td><td class="r">${g.slow!=null&&g.slow!==Infinity?g.slow:'—'}</td><td class="r">${f(g.med)}</td></tr>`).join('');
  return `<div class="stack"><section class="panel scroll"><h1 style="margin-top:0">合理范围清单</h1><p class="note">演示数据，只读。真测时第一次测满 10 轮，码表按实测自动填这张表，之后可以改。</p><table class="num rl-tab"><thead><tr><th>分段</th><th class="r">合理范围（秒）</th><th class="r">慢阈值（秒）</th><th class="r">中位数</th></tr></thead><tbody>${rows}</tbody></table><div class="acts"><button class="btn" data-go="report">回到报告</button></div></section></div>`}
 function rlClick(e){
  const ed=e.target.closest('[data-rled]');if(ed){rlEd=ed.dataset.rled||null;rlMsg='';render();return true}
- if(e.target.closest('[data-rlback]')){RL=null;rlEd=null;rlMsg='';JREP=null;page='report';render();window.scrollTo(0,0);return true}
+ const op=e.target.closest('[data-rlopen]');if(op){RLP=op.dataset.rlopen;RL=null;rlEd=null;rlMsg='';page='range';render();window.scrollTo(0,0);return true}
+ if(e.target.closest('[data-rlback]')){const fromSet=!!RLP;RL=null;rlEd=null;rlMsg='';RLP=null;RLS=null;if(fromSet)page='settings';else{JREP=null;page='report'}render();window.scrollTo(0,0);return true}
  if(e.target.closest('[data-rlreload]')){RL=null;render();return true}
  const sv=e.target.closest('[data-rlsave]');if(!sv)return false;
  const v=id=>{const x=document.getElementById(id);return x&&x.value.trim()!==''?+x.value:null},key=sv.dataset.rlsave,[kind,...rest]=key.split(':'),k=rest.join(':');
- const lo=v('rl-lo'),hi=v('rl-hi'),body={kind,key:k,range:lo==null&&hi==null?null:[lo,hi],slow:v('rl-slow')};
+ const lo=v('rl-lo'),hi=v('rl-hi'),body={kind,key:k,range:lo==null&&hi==null?null:[lo,hi],slow:v('rl-slow'),project_dir:RLP};
  if(kind==='line'){body.fair=v('rl-fair');const sr=document.getElementById('rl-src');body.source=sr?sr.value:''}else{const n=document.getElementById('rl-note');body.note=n?n.value:''}
  if(lo==null&&hi!=null){rlMsg='合理范围要写最少（最多可以空着 = 不限）';render();return true}
  fetch('/api/rangelist/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{const j=await r.json();if(!r.ok){rlMsg=j.detail||'没保存上';render();return}RL=j;rlEd=null;rlMsg='';toast('✓ 已保存，报告按新的判');render()}).catch(()=>toast('✕ 码表后台没有回应'));
@@ -1311,7 +1320,7 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   morphHTML(document.getElementById('flowbar'),flowBar());bgPill();
   const isReport=page==='report',isHome=page==='home';
   document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
-  const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;morphHTML(document.getElementById('crumb'),isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'');
+  const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;morphHTML(document.getElementById('crumb'),isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?(RLP?'<button class="lnk2" data-rlback="1">设置</button> › 合理范围清单':`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`):page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'');
   let body;
   if(!isHome)LASTP='';
   if(isHome)body=(LASTP?`<section class="panel" style="margin-bottom:16px"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span>上次停在「${htmlEsc(PNAME(LASTP))}」</span><button class="btn pri" data-go="${LASTP}" data-keepflow="1">接着看</button></div></section>`:'')+HOME[homeVar].html();

@@ -44,3 +44,21 @@ def test_report_table_shows_slow_threshold_and_each_lines_experience():
     rows = next(x for x in JS.splitlines() if "const lineRows=" in x)
     assert "D.J.lines.find(x=>x.name===l.name)" in rows and "slowTxt(l.slow)" in rows
     assert "slowTxt(s.slow)" in next(x for x in JS.splitlines() if "const segRows=" in x)
+
+
+def test_settings_lists_each_firmware_and_edits_without_a_report(app):  # noqa: F811
+    """设置页"合理范围清单"：每个测过的固件一行；不用先打开报告，按项目文件夹看、改；只限码表结果文件夹。"""
+    c, _, _, tmp_path = app
+    measured(c, tmp_path)
+    proj = tmp_path / "data" / "xiaozhi-1"
+    (proj / "project.json").write_text('{"name": "xiaozhi", "board": "m5stack/core-s3"}', encoding="utf-8")
+    [row] = c.get("/api/rangelists").json()
+    assert row["name"] == "xiaozhi（m5stack/core-s3）" and not row["has"]           # 还没打开过报告：还没建
+    c.get("/api/report")
+    [row] = c.get("/api/rangelists").json()
+    assert row["has"] and row["items"] > 0 and row["changed"]
+    j = c.get("/api/rangelist", params={"project_dir": str(proj)}).json()
+    seg = next(iter(j["list"]["segments"]))
+    r = c.post("/api/rangelist/edit", json={"kind": "segment", "key": seg, "range": [0.1, 0.2], "slow": 0.3, "project_dir": str(proj)})
+    assert r.json()["list"]["segments"][seg]["range"] == [0.1, 0.2]
+    assert c.get("/api/rangelist", params={"project_dir": "/etc"}).status_code == 403
