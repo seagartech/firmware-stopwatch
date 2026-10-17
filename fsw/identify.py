@@ -112,6 +112,22 @@ def _rel(root, file):
     return f[2:] if f.startswith("./") else f
 
 
+def line_no(v):
+    """AI 给的行号规范成整数：返回 (行号, 说明)。写成 "655-660"、"约 655" 的取第一个数，并说明是按哪一行核对的；
+    没给或认不出的返回 (None, 说明)。后面对标准、插计时点都按整数算，不能让这里放过去的值在后面出错。"""
+    if isinstance(v, bool):
+        return None, f"AI 给的行号认不出来：{v}"
+    if isinstance(v, int):
+        return v, ""
+    if isinstance(v, float) and v.is_integer():
+        return int(v), ""
+    m = re.search(r"\d+", v) if isinstance(v, str) else None
+    if not m:
+        return None, "AI 没给出行号，要你自己填" if v in (None, "") else f"AI 给的行号认不出来：{v}"
+    n = int(m.group())
+    return n, "" if v.strip() == m.group() else f"AI 给的行号是「{v.strip()}」，码表按第 {n} 行核对"
+
+
 def check_location(root, file, line):
     """打开文件核对行号：返回 (那一行的代码, 问题说明)。"""
     root = Path(root).resolve()
@@ -151,9 +167,11 @@ def parse(text, root):
     for i, s in enumerate(data.get("steps") or []):
         if not isinstance(s, dict):
             continue
-        code, problem = check_location(root, s.get("file"), s.get("line"))
+        line, note = line_no(s.get("line"))
+        code, problem = check_location(root, s.get("file"), line) if line is not None else (None, None)
+        problem = "；".join(x for x in (note, problem) if x) or None  # 行号不是整数的也标需核对
         step = {"id": str(s.get("id") or f"P{i + 1}"), "name": str(s.get("name") or f"第 {i + 1} 步"),
-                "file": _rel(root, s.get("file")), "line": s.get("line"), "func": s.get("func") or "",
+                "file": _rel(root, s.get("file")), "line": line if line is not None else 0, "func": s.get("func") or "",
                 "where": s.get("where") or "", "once": s.get("once") or "",
                 "line_of": s.get("line_of") if s.get("line_of") in LINE_OF else "main",
                 "sure": s.get("sure") if s.get("sure") in SURE else "中",
@@ -336,9 +354,10 @@ def add_step(llm, root, sentence, what=""):
         return _fail("bad_reply", "大模型回答的格式不对，码表看不懂。换个说法再试，或者自己填文件和行号。")
     if not data.get("file"):
         return _fail("not_found", f"AI 没找到这一步：{data.get('why') or ''}换个说法再试，或者自己填文件和行号。")
-    code, problem = check_location(root, data.get("file"), data.get("line"))
+    line, note = line_no(data.get("line"))
+    code, problem = check_location(root, data.get("file"), line) if line is not None else (None, note)
     if problem:
         return _fail("bad_location", f"AI 给的位置不对（{problem}）。换个说法再试，或者自己填文件和行号。")
     rel = _rel(root, data["file"])
-    return {"ok": True, "n": data.get("name") or sentence, "f": Path(rel).name, "path": rel, "l": int(data["line"]),
+    return {"ok": True, "n": data.get("name") or sentence, "f": Path(rel).name, "path": rel, "l": line,
             "why": data.get("why") or "", "sure": data.get("sure") if data.get("sure") in SURE else "中", "code": code}
