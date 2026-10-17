@@ -80,12 +80,15 @@ def carry(project_dir, work, what, provider):
         x["after_line"] = to
     if changed:
         return {"ok": False, "why": "这几处代码变了", "changed": sorted(set(changed))}
+    # 行号以上次插入方案里的为准（它和留下的原版文件是同一版源码）；找关键步骤的结果可能是更早或更晚那次存的，行号不一定对得上
+    base = {f"P{ins.number(x['p'], plan.get('steps') or [])}": (x.get("path"), x.get("l")) for x in plan.get("steps") or []}
     steps = []
     for s in r["steps"]:
         d = next((v for (k, f), v in shift.items() if k == s["id"] and f == s["file"]), None)
-        if d is None:  # 这一步没有对应的插入（不该发生）：不冒险，重新找
+        b = base.get(s["id"])
+        if d is None or not b or b[0] != s["file"]:  # 这一步对不上上次的插法：不冒险，重新找
             return {"ok": False, "why": f"「{s['name']}」对不上上次的插法", "changed": [s["name"]]}
-        steps.append({**s, "line": s["line"] + d})
+        steps.append({**s, "line": b[1] + d})
     new_plan_steps = []
     for s in plan.get("steps") or []:
         k = f"P{ins.number(s['p'], plan['steps'])}"
