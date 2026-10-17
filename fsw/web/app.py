@@ -1458,6 +1458,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     exported = set()  # 导出过的文件（可能存在结果文件夹以外，比如源码旁边）：也能"在访达里显示"
     allowed_roots = lambda: [Path(live["data"]).resolve(), Path(data_dir).resolve()]
 
+    @app.post("/api/report/open")
+    def report_open(body: PathBody):
+        """导出完点「打开看看」：用浏览器打开刚导出的那份报告。只开这次导出过的文件（可能存在源码旁边，不在结果文件夹里）。"""
+        p = Path(body.path).expanduser().resolve()
+        if p not in exported or not p.is_file():
+            raise HTTPException(404, "找不到这份报告：可能被挪走或删了，重新导出一份")
+        (opener or _open_file)(str(p))
+        return {"ok": True}
+
     @app.post("/api/open-folder")
     def open_folder(body: PathBody):
         """原始日志的"打开所在文件夹"：只开码表自己的结果文件夹里的东西。"""

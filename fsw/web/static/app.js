@@ -1196,7 +1196,7 @@ function popHTML(){const F=FF[scene],C=CC();
  const box=(t,body,acts)=>`<h2>${t}</h2>${body}<div class="acts">${acts}</div>`;
  if(pop==='export'){const busy=ADV&&ADV.status==='running'&&repKey().startsWith('real');
   if(EXP.state==='saving')return box('导出报告','<p><span class="spin"></span> 正在存……</p>','');
-  if(EXP.state==='ok')return box('导出报告',`<p>✓ 已导出：</p><p class="code" style="overflow-wrap:anywhere">${htmlEsc(EXP.saved)}</p>${EXP.partial?'<p class="note" style="color:var(--warn)">导出时"为什么、怎么改"还没写完，这份里没有建议。写完后再导出一份。</p>':''}`,`<button class="btn pri" data-hopen="${htmlEsc(EXP.saved)}">打开看看</button><button class="btn" data-pop="close">关闭</button>`);
+  if(EXP.state==='ok')return box('导出报告',`<p>✓ 已导出：</p><p class="code" style="overflow-wrap:anywhere">${htmlEsc(EXP.saved)}</p>${EXP.partial?'<p class="note" style="color:var(--warn)">导出时"为什么、怎么改"还没写完，这份里没有建议。写完后再导出一份。</p>':''}`,`<button class="btn pri" data-ropen="${htmlEsc(EXP.saved)}">打开看看</button><button class="btn" data-pop="close">关闭</button>`);
   if(EXP.state==='fail')return box('导出报告',`<p style="color:var(--bad)">✕ 没导出成功：${htmlEsc(EXP.err)}</p>`,`<button class="btn pri" data-expgo="1">再试一次</button><button class="btn" data-pop="close">取消</button>`);
   if(EXP.state==='wait')return box('导出报告',`<p><span class="spin"></span> 等"为什么、怎么改"写完，写完马上自动导出。</p>`,`<button class="btn" data-expgo="1">不等了，现在导出</button><button class="btn" data-pop="close">取消</button>`);
   const advFail=ADV&&ADV.status==='failed'&&repKey().startsWith('real');
@@ -1485,6 +1485,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-expclose]')){EXP.saved=null;render();return}
   const hr=e.target.closest('[data-hrestore]');if(hr){hr.disabled=true;hr.textContent='正在还原……';  // 码表重开过也认得：按项目文件夹里存的插入记录还原
    api('/api/fsw/restore',{project_dir:hr.dataset.hrestore}).then(j=>{toast(j.detail?'✕ '+j.detail:(j.flashed?'✓ ':j.waiting?'':'✕ ')+(j.say||'已还原'));if(j.waiting)restoreWatch();histLoad().then(render)});return}
+  const ro=e.target.closest('[data-ropen]');if(ro){api('/api/report/open',{path:ro.dataset.ropen}).then(j=>toast(j.ok?'✓ 已用浏览器打开这份报告':'✕ '+(j.detail||'打不开')));return}
   const ho=e.target.closest('[data-hopen]');if(ho){api('/api/history/open',{path:ho.dataset.hopen}).then(j=>toast(j.ok?'✓ 已用浏览器打开这次的报告':'✕ '+(j.detail||'打不开')));return}
   const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}
   const rpv=e.target.closest('[data-repvar]');if(rpv){repVar=rpv.dataset.repvar;render();return}

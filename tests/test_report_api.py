@@ -131,3 +131,16 @@ def test_export_to_a_folder_you_choose(app):
     assert Path(r["path"]).parent == mine
     assert c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x", "folder": "相对路径"}).status_code == 400
     assert c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x", "folder": str(tmp_path / "没有这个")}).status_code == 400
+
+
+def test_open_the_report_just_exported_next_to_the_source(app):
+    """导出完点「打开看看」：报告默认存在源码旁边（结果文件夹外面），也要能打开。"""
+    c, opened, _, tmp_path = app
+    with_source(tmp_path)
+    measured(c, tmp_path)
+    r = c.post("/api/report/export", json={"html": PAGE_HTML, "what": "x"}).json()
+    assert c.post("/api/report/open", json={"path": r["path"]}).json()["ok"]
+    assert opened[-1] == str(Path(r["path"]).resolve())
+    assert c.post("/api/report/open", json={"path": "/etc/passwd"}).status_code == 404  # 不是导出过的文件不开
+    js = (Path(__file__).parent.parent / "fsw" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'data-ropen="${htmlEsc(EXP.saved)}">打开看看' in js and "'/api/report/open'" in js
