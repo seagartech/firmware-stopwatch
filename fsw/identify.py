@@ -51,6 +51,7 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
  "side_from": "顺带那条线从哪个计时点分出去，没有就空",
  "side_segments": [{{"from": "P1", "to": "P5", "name": "…", "who": "…", "outside": false}}],
  "outside_note": "设备外那段在做什么，12 个字以内，比如：服务器：听写、想回答；没有就空",
+ "wake_word": "要先喊唤醒词才开始听的语音设备，写出代码里配置的中文唤醒词（比如：你好小智）；不需要唤醒词或不是语音设备就空着",
  "doubts": [{{"text": "读代码时发现的可能变慢或出错的地方", "sure": "高 / 中 / 低"}}]
 }}
 ```
@@ -220,7 +221,7 @@ def to_page(r, what):
         "server": r.get("outside_note") or "", "mapWhat": what,
         "mapSel": next((s["p"] for s in steps if s["sure"] != "高"), steps[0]["p"]),
         "measure": f"{sname} → {mend}", "mainTitle": f"{mname}：{sname} → {mend}",
-        "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "",
+        "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "wake": str(r.get("wake_word") or "").strip(), "warn": r.get("warn"), "startNote": start.get("note") or "",
         "sideAsk": None, "sideTitle": "", "sideLbl": "",
     }
     if side:

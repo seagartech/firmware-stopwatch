@@ -94,6 +94,23 @@ def compute(cur, spec):
     return {"segs": segs, "ends": [ends[l["name"]] for l in spec.lines], "probs": probs}
 
 
+OUTSIDE_MIN = 0.05  # 经过网络或服务器的一段，正常不会比这更短（局域网来回也要几十毫秒）
+
+
+def suspects(rnd, scenario, outside_min=OUTSIDE_MIN):
+    """第 1 轮收齐后自动校验计时点位置（决策 158）：经过网络或服务器的一段短于 outside_min 秒（含先后反了），
+    多半是起止点没对准（比如"服务器想回答"只算出 0.003 秒）。设备里的段几毫秒很常见，不校验。"""
+    out = []
+    for k, g in (scenario.get("segments") or {}).items():
+        v = (rnd.get("segs") or {}).get(k)
+        if v is None or g.get("side") != "outside" or v >= outside_min:
+            continue
+        out.append({"segment": k, "name": g.get("name") or k, "seconds": v,
+                    "why": f"这段要经过网络或服务器，正常不会短于 {outside_min} 秒" if v >= 0 else
+                           "这段终点比起点先记到，两个计时点的先后对不上"})
+    return out
+
+
 STALE_US = 500_000  # 比起点早半秒以上，算这一轮开始之前的
 
 

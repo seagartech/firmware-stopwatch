@@ -350,6 +350,38 @@ function chips(){const C=(t,x)=>`<button class="pill" data-fill="${x}">${x}</but
  return (hist.length?row('这个项目测过的',hist):'')+(hScan===2?(ai.length?row('AI 推荐',ai):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note">${REAL&&REAL.needs_board?'选好板子后，AI 会扫一遍这个固件。':envKey()?'这次没扫出来，直接写就行。':'设置好大模型后，选完固件会自动扫一遍。'}</span></div>`):`<div class="chiprow"><span class="note">AI 推荐</span><span class="note"><span class="spin"></span> 正在扫这个固件有哪些流程，约 10～20 秒（估算）。不用等，可以直接写。</span></div>`)+row('通用例子',gen)+`<p class="note" style="margin:8px 0 0">不知道测什么，就从「AI 推荐」里挑一个。</p>`}
 const examples=`<div class="pills"><span class="note">比如：</span>${['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'].map(x=>`<button class="pill" data-fill="${x}">${x}</button>`).join('')}</div>`;
 
+// 精简流程（决策 158）：一律测全程；点「开始测量」后自动执行，只在要人工操作或校验没过时停下
+const WHOLE='全程：从设备最早知道被触发，到用户感受到的最后一个结果';
+let AUTO=false,autoHold='',autoBusy='',SPEAK=false,SPEAKOK=false,SPEAKON=false;
+fetch('/api/speak').then(r=>r.json()).then(j=>{SPEAKOK=!!j.available;if(page==='home')render()}).catch(()=>{});
+// 找完关键步骤：按 AI 认出来的场景挑每轮做什么；语音设备且选了电脑朗读，就把句子和唤醒词交给后台
+async function speakSetup(){await loadRCT();SPEAKON=SPEAK&&!!RCT&&RCT.template==='对话';
+ try{await post('/api/speak',{on:SPEAKON,wake:(IDENT&&IDENT.page&&IDENT.page.wake)||'',items:SPEAKON?RCT.items:[]})}catch(e){SPEAKON=false}}
+const AUTO_ROUNDS=10;
+function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),REAL&&REAL.root].includes(p.path));
+ const auto=again?3.5:7.5,human=Math.round((AUTO_ROUNDS*15+45)/60);  // 按验证 14 的实测：大模型三次约 5 分钟，编译烧录约 2.5 分钟；每轮约 15 秒
+ return `<section class="estbox"><h2 style="font-size:15px;margin:0 0 8px">预计总耗时</h2><div class="estgrid">
+  <div><b class="num">约 ${Math.round(auto+human)} 分钟</b><span class="note">预计总耗时${again?'（再测，沿用上次结果）':'（首次测量）'}</span></div>
+  <div><b class="num">约 ${auto} 分钟</b><span class="note">自动执行（无需值守）</span></div>
+  <div class="hum"><b class="num">约 ${human} 分钟</b><span class="note">人工操作（需在场）</span></div></div>
+  <ol class="note" style="margin:8px 0 0;padding-left:20px"><li>连接设备到电脑的 USB 口（烧录前提示）</li><li>按页面提示触发设备 ${AUTO_ROUNDS + 1} 次：第 1 次校验计时点，不计入数据；之后 ${AUTO_ROUNDS} 轮，每轮约 5～15 秒</li></ol>
+  ${SPEAKOK?`<div class="chiprow" style="grid-template-columns:5.5em 1fr"><span class="note">触发方式</span><span style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><span class="seg" role="group" aria-label="触发方式"><button data-speak="0" aria-pressed="${!SPEAK}">人工</button><button data-speak="1" aria-pressed="${SPEAK}">电脑朗读</button></span><span class="note">${SPEAK?'语音设备由电脑朗读句子代替人说话，电脑音量调到 50 以上；AI 认出不是语音设备时自动改回人工':'由人触发设备'}</span></span></div>`:''}</section>`}
+// 自动往下走：每次画完页面看一眼该不该进下一步（同一步只触发一次）
+function autoTick(){if(!AUTO||pop)return;
+ const go=(key,fn)=>{if(autoBusy===key)return;autoBusy=key;setTimeout(fn,0)};
+ if(page==='home'&&hStage===3&&stepsRead===2){
+  const P=REAL&&IDENT&&IDENT.page,bad=P?(P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(IDENT.provider==='deepseek'?'这次用的是 DeepSeek，准确率较低，请核对关键步骤':'')):'';
+  return go('steps',()=>{hStage=1;mode='boss';if(bad){AUTO=false;autoHold=bad;page='steps';render();window.scrollTo(0,0);return}
+   page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){speakSetup();fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)})}
+ if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){AUTO=false;envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
+ if(page==='flash'&&fl.st===2)return go('collect',()=>{page='collect';colN=AUTO_ROUNDS;justFlashed=true;colStart();render();window.scrollTo(0,0)});
+ if(page==='collect'&&col.st===2)return go('report',()=>setTimeout(()=>{if(!AUTO||page!=='collect'||col.st!==2)return;AUTO=false;page='report';mode='boss';render();window.scrollTo(0,0)},1500));
+}
+function autoStart(){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-boardq');b&&b.focus();return}
+ if(REAL&&!envKey()){pop='env';render();return}
+ hSay=WHOLE;AUTO=true;autoHold='';autoBusy='';flowReset();flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render()}
+const suspectBox=()=>{const S=(COLJ&&COLJ.suspect)||[];return `<div class="errbox"><b>第 1 轮自动校验没通过，已暂停</b>${S.map(x=>`<p style="margin:6px 0">「${htmlEsc(x.name)}」这一段 ${fms(Math.abs(x.seconds))} 秒${x.seconds<0?'（先后反了）':''}：${htmlEsc(x.why)}。计时点位置可能不对，接着测的数据不可信。</p>`).join('')}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-autofix="1">查看并修改计时点位置</button><button class="btn" data-col="resume">忽略，继续测量</button></div></div>`};
+
 const HOME={
 m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件夹马上显示读到的芯片和编译工具；出发前用一句话复述要测什么，你点"对"再去找关键步骤。',
  html:()=>{
@@ -363,8 +395,9 @@ m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件�
      <div class="inrow" style="margin-top:8px"><input type="text" id="h-paste" placeholder="或者粘贴路径，比如 ~/projects/my-firmware"><button class="btn" data-pick="paste">用这个路径</button></div>
      ${hErr?`<div class="errbox" style="margin-top:10px">${hErr}</div>`:''}`}</div>`
   :`<div class="field"><label for="h-path">固件源码位置</label><div class="inrow"><input type="text" id="h-path" value="${hSrc}" readonly><button class="btn" data-pick="reset">换一个</button></div></div>${boardRow()}
-   <div class="field" style="margin-top:14px"><label for="h-what">你想测从什么时候到什么时候？用一句话说</label>
-    <div class="inrow"><input type="text" id="h-what" placeholder="比如：从按下按键到屏幕亮" value="${hSay}"><button class="btn pri" data-stage="2">下一步</button></div>${hNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先写一句，或者点下面的一个。</p>':''}${chips()}</div>`}
+   <dl class="kv" style="margin-top:14px"><dt>测量范围</dt><dd>全程：从设备收到触发，到最后一个对外输出；起点和终点由 AI 读代码确定</dd></dl>
+   ${estBox()}
+   <div class="acts" style="justify-content:flex-start;align-items:center"><button class="btn pri" data-autostart="1" ${REAL&&!REAL.chip?blk('#h-boardq','先选板子'):''}>开始测量</button><span class="note">点了以后自动执行，需要人工操作时页面提示并响一声</span></div>`}
   </section>
   <section class="panel"><h2>以前测过的</h2>${recentList()}</section></div>`}}
 };
@@ -774,12 +807,13 @@ const prepNote=()=>{if(!PREP||!['running','ready'].includes(PREP.status))return 
  return PREP.status==='running'?`<br><span class="spin"></span> 你核对的时候，AI 已经在后台按这些步骤准备插法（${Math.max(0,Math.round(Date.now()/1000-PREP.started))} 秒）；没改步骤的话，点确认就直接用。`:'<br>✓ 插法已经在后台准备好了：没改步骤的话，点确认马上插，不用等。'};
 function stepsPage(){
  if(stepsRead===0)readStart();
+ const hold=autoHold&&stepsRead===2?`<div class="why" style="border-left-color:var(--warn)"><b>自动执行在这里停下：</b>${htmlEsc(autoHold)}</div>`:'';
  if(stepsRead===2)prepKick();
  if(stepsRead!==2)return `<div class="stack"><section class="panel"><h1 style="font-size:22px">${stepsRead===3?'没找完':'正在读代码找关键步骤'}</h1><p class="note" style="margin-top:0">测的是：${hSay?hSay.replace(/^从/,'').replace('到',' → '):FF[scene].measure}　固件：${hSrc||FF[scene].pick.dir}</p><div id="readbox">${readBox()}</div></section></div>`;
  const warn=(REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad)">${htmlEsc(IDENT.page.warn)}</div>`:'')+((REAL&&IDENT?IDENT.provider:setLLM)==='deepseek'?`<div class="why" style="border-left-color:var(--warn)">这次用的是 DeepSeek，验证期它 9 个只找对 4 个，请每条都仔细核对。</div>`:'');
  const body=stepsB()+stepsA();
  const n=live().length,ch=dropped.size;
- return `<div class="stack">${warn}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${REAL&&IDENT?(IDENT.reused?reuseTxt():`读完了，用了 ${mmss(IDENT.seconds)}，调用 1 次 ${usedLLM()}`):`读完了，用了 1 分 10 秒，调用 1 次 ${usedLLM()}`}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${REAL?`${htmlEsc(REAL.name)}，${CHIP()}`:FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
+ return `<div class="stack">${hold}${warn}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${REAL&&IDENT?(IDENT.reused?reuseTxt():`读完了，用了 ${mmss(IDENT.seconds)}，调用 1 次 ${usedLLM()}`):`读完了，用了 1 分 10 秒，调用 1 次 ${usedLLM()}`}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${REAL?`${htmlEsc(REAL.name)}，${CHIP()}`:FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
  ${body}
  ${flow==='first'&&flowMax>=2?`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">回到插计时点和烧录</button></div></section></div>`:`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch||Object.keys(edits).length||added.length?'；你的删除、修改、添加都会记下来':''}。${prepNote()}</span><button class="btn pri" data-goins="1" >确认，插入计时点</button></div></section></div>`}`}
 
@@ -852,7 +886,7 @@ function flList(from=0,to=4){const n=to-from+1;
  return `<ol class="isteps">${li}</ol>${big}`}
 const stepLog=()=>`<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`;
 // 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
-const tryAct=()=>{const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
+const tryAct=()=>{if(FSWJ&&FSWJ.speak)return `不用说话，电脑正在朗读"${htmlEsc((RCT&&RCT.items||[''])[0])}"${FSWJ.speak_hint?`。${htmlEsc(FSWJ.speak_hint)}`:''}`;const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
 function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
  if(!up&&J.boot_quiet)return `<div class="bigask"><b>设备可能已经开机了：现在对设备${tryAct()}</b><span class="note">没看到它的开机输出（有的设备开机后不出声，或者开机那几行在码表连上之前就打完了）。看设备已经回到待命画面，就直接做一次；码表收到计时点就算通。</span>${fullLogBtn()}${fullLog()}</div>`;  // 不一直转圈等"开机"
  if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;
@@ -960,14 +994,14 @@ function enough(){const g=okRounds(),C=CX(),D=DX(),L=D.lines.length-1,ln=D.lines
  ${rare.length?`<div class="eblk"><div class="ehead"><b>② 偶尔出的问题看清了吗</b>${v(!few.length,'看清了','次数太少')}</div><p class="note" style="margin:2px 0 6px">一格一轮，亮的是出了这个问题的那轮。只出现 1～3 次，还分不清是偶尔还是常态。</p>${rare.map(strip).join('')}</div>`:''}
  <p class="note" style="margin:6px 0 0">${more?`为什么建议再测：${moreWhy}<br>不再测也能出报告，报告里会注明"次数少，只供参考"。`:''}按收到的数算的，不用大模型。</p></section>`}
 const MIN_ROUNDS=3;  // 至少几轮能出报告（3～9 轮只适合跑流程，报告注明）
-let colVar='b',colN=20,col={st:0,att:0,got:[],phase:0},colT=null;
+let colVar='b',colN=AUTO_ROUNDS,col={st:0,att:0,got:[],phase:0},colT=null;
 const CC=()=>COLLECT[scene];
 // 真流程：每轮做什么（/api/rounds 按你写的"测什么"挑模板）、线和问题（后台多轮实测状态里这次真的场景），不借演示数据
 let RCT=null,COLJ=null;
 const realCol=()=>realFlash()&&FSWJ&&FSWJ.status==='done';
 const CX=()=>realCol()&&RCT?RCT:COLLECT[scene];
 async function loadRCT(){const P=IDENT.page,st=(P.measure||'').split('→')[0].trim(),names=Object.fromEntries((P.steps||[]).map(x=>[x.p,x.n]));
- try{const t=await (await fetch('/api/rounds?'+new URLSearchParams({what:hSay||P.mapWhat||'',start:st}))).json();
+ try{const t=await (await fetch('/api/rounds?'+new URLSearchParams({what:hSay===WHOLE?`${P.measure||''} ${P.mainTitle||''}`:hSay||P.mapWhat||'',start:st}))).json();
   RCT={...t,ph:[...(P.main||[]).filter(k=>live().some(x=>x.p===k)).map(k=>names[k]).filter(Boolean),'这一轮记好了'],probs:(COLJ&&COLJ.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}))};if(page==='collect')render()}catch(e){}}
 function realD(){const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,COLJ&&COLJ.scenario||{start:{point:(P.main||[])[0]}}),sEnd=P.sideAsk?P.sideAsk.q:'';
  const L=COLJ&&COLJ.lines&&COLJ.lines.length?COLJ.lines:(sEnd?[{name:sEnd},{name:mEnd}]:[{name:mEnd}]);
@@ -983,14 +1017,14 @@ function colWatch(){colStop();const poll=()=>{if(!colT)colT=setInterval(async()=
  if(!window.EventSource){poll();return}
  try{colES=new EventSource('/api/collect/events');colES.onmessage=e=>{try{colApply(JSON.parse(e.data))}catch(x){}};
   colES.onerror=()=>{if(colES){colES.close();colES=null}if(col.st===1)poll()}}catch(e){poll()}}
-function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}));const C=CX(),before=col.got.length;if(j.status==='done'||j.status==='stopped'){fetchReport();if(realFlash())histLoad()}
+function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}));const C=CX(),before=col.got.length;if(j.status==='done'||j.status==='stopped'||j.status==='suspect'){fetchReport();if(realFlash())histLoad()}
  col.got=(j.rounds||[]).map(r=>r.ok?{n:r.n,e:r.ends,probs:C.probs.filter(p=>(r.probs||[]).includes(p.k)),att:r.att,segs:r.segs}:{bad:true,att:r.att,missing:r.missing||[]});
- col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
+ col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.speak_hint||j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
  const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));
  // "叮"在这一轮的计时点全部收到时就响（和设备出声差不多同时）；码表还要等一会儿才收尾记下这一轮，收尾时不再重复响
  for(const x of col.got.slice(before)){if(!x.bad&&col.rd){col.rd=false;continue}ding(!!x.bad)}
  if(j.status==='running'&&need>0&&got>=need&&!col.rd){col.rd=true;ding(false)}
- if(j.status==='done'){colStop();col.st=2}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
+ if(j.status==='done'){colStop();col.st=2}else if(j.status==='suspect'){colStop();col.st=4}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
  if(page==='collect')render()}
 async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0;col.rd=false}else col={st:1,att:0,got:[],phase:0,sc:scene};ADV=null;clearInterval(advT);advT=null;fixPick=null;
  const real=realFlash()&&FSWJ&&FSWJ.status==='done';
@@ -1026,8 +1060,8 @@ function tipOf(x){const C=CX(),L=DX().lines,at=t=>t.replace(/&/g,'&amp;').replac
 function colB(){const k=okRounds().length,cur=Math.min(k,colN-1),C=CX();
  const sq=x=>{const p=x.probs&&x.probs[0];return `<i class="sq" tabindex="0" data-tip="${tipOf(x)}" style="background:${x.bad?'var(--soft)':p?`var(--${p.c})`:'var(--ok)'}"></i>`};
  return `<section class="panel" style="text-align:center">
- ${col.st===1?`<p class="note" style="margin:0">第 ${cur+1} 轮 / 共 ${colN} 轮</p><p style="font-size:15px;margin:10px 0 4px">${col.phase===0?C.say:C.said}</p><p style="font-size:26px;font-weight:600;margin:0 0 16px">"${C.items[cur%C.items.length]}"</p>
- <div class="phs">${PH().map((p,i)=>`<span class="${i<col.phase?'ok':i===col.phase?'cur':''}">${p}</span>`).join('<b>→</b>')}</div>`:col.st===3?`<p style="font-size:20px;font-weight:600">已停止：测了 ${k} / ${colN} 轮</p>`:`<p style="font-size:20px;font-weight:600">测完了</p>`}
+ ${col.st===1?`<p class="note" style="margin:0">第 ${cur+1} 轮 / 共 ${colN} 轮</p><p style="font-size:15px;margin:10px 0 4px">${COLJ&&COLJ.speak?(col.phase===0?'电脑朗读（不用说话）：':'电脑刚才朗读的是：'):col.phase===0?C.say:C.said}</p><p style="font-size:26px;font-weight:600;margin:0 0 16px">"${C.items[cur%C.items.length]}"</p>
+ <div class="phs">${PH().map((p,i)=>`<span class="${i<col.phase?'ok':i===col.phase?'cur':''}">${p}</span>`).join('<b>→</b>')}</div>`:col.st===4?`<p style="font-size:20px;font-weight:600">已暂停：第 1 轮自动校验没通过</p>`:col.st===3?`<p style="font-size:20px;font-weight:600">已停止：测了 ${k} / ${colN} 轮</p>`:`<p style="font-size:20px;font-weight:600">测完了</p>`}
  <div class="sqs">${col.got.map(sq).join('')}${[...Array(Math.max(0,colN-k))].map(()=>'<i class="sq"></i>').join('')}</div>
  <p class="note" style="margin-bottom:2px">一格是一轮，颜色表示这轮有没有出问题（不是快慢）。鼠标移到格子上看这轮各段用时。</p><p class="note"><i class="dot" style="background:var(--ok)"></i>正常　${C.probs.map(p=>`<i class="dot" style="background:var(--${p.c})"></i>${p.t}　`).join('')}<i class="dot" style="background:var(--soft)"></i>没收全，自动补一轮</p>
  ${col.got.filter(x=>x.bad||x.probs.length).slice(-3).reverse().map(x=>`<p class="note" style="margin:2px 0">${x.bad?'第 '+x.att+' 次':'第 '+x.n+' 轮'}：${issues(x)}</p>`).join('')}
@@ -1053,6 +1087,7 @@ const COLVAR={a:{label:'A 逐轮表',idea:'A 逐轮表：每收一轮加一行�
  c:{label:'C 边测边画',idea:'C 边测边画：每收一轮在图上多两个点，合理范围和"一般用时"线跟着变，收到一半就能看出稳不稳。'}};
 function collectPage(){
  if(col.st===0)return `<div class="stack">${colSetup()}</div>`;
+ if(col.st===4)return `<div class="stack">${suspectBox()}${colB()}</div>`;
  const body={a:colA,b:colB,c:colC}[colVar]();
  const g=okRounds(),bad=col.got.length-g.length;
  return `<div class="stack">${col.st===1&&col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:''}${col.st===1?`<div class="status" style="justify-content:flex-end">${beepBtn()}</div>`:''}${body}${col.st===2||(col.st===3&&okRounds().length>=10)?enough():''}
@@ -1360,7 +1395,7 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   {const m=document.getElementById('main');const need=page==='steps'&&stepsRead===2&&alsoFace===null?'#sideask':null;const el=need&&m.querySelector(need);if(el)el.classList.add('need')}
   document.getElementById('v-boss').setAttribute('aria-pressed',String(mode==='boss'));
   document.getElementById('v-dev').setAttribute('aria-pressed',String(mode==='dev'));
-  syncFlow();syncHash();uiSave();
+  syncFlow();syncHash();uiSave();autoTick();
 }
 // 步骤条同步给后台：后台记下走到哪一步、哪步出错、哪些跳过（刷新网页、以后接真功能都靠它）
 let lastKind='',lastSync='';
@@ -1443,6 +1478,9 @@ document.addEventListener('click',e=>{
    api('/api/source/pick',{kind:'dir'}).then(async p=>{if(!p.path)return;const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idf_path:p.path})});const j=await r.json();if(!r.ok){idfErr=j.detail;render();return}
     SAVED=j.settings;const e2=await (await fetch('/api/env')).json();IDFS=(e2.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast('✓ 已记下这个位置');render()});return}
   if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
+  if(e.target.closest('[data-autostart]')){autoStart();return}
+  const spk=e.target.closest('[data-speak]');if(spk){SPEAK=spk.dataset.speak==='1';render();return}
+  if(e.target.closest('[data-autofix]')){AUTO=false;autoHold='第 1 轮自动校验没通过：'+((COLJ&&COLJ.suspect)||[]).map(x=>`「${x.name}」${fms(Math.abs(x.seconds))} 秒`).join('、')+'。请检查这一段起止两个计时点的位置，改好后重新插入。';page='steps';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-mclose]')){hStage=1;render();return}
   if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}
   if(e.target.closest('[data-cdskip]')){clearInterval(cdT);cdT=null;cd=0;hStage=4;render();return}
@@ -1547,7 +1585,7 @@ if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   if(e.target.closest('[data-beeptest]')){resetAudio();unlockAudio();beepBlocked=false;ding(false);setTimeout(()=>{beepMsg=actx?actx.state:'none';beepLog('试听');render()},400);return}
   if(e.target.closest('[data-beep]')){beep=!beep;render();return}
   const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
-  const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
+  const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){if(col.st===4)autoBusy='';colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
   if(e.target.closest('[data-resume]')){page='home';hStage=2;render();window.scrollTo(0,0);return}
   const tk=e.target.closest('[data-test]');if(tk){const i=document.getElementById('set-key'),v=i?i.value.trim():'';keyErr='';if(v&&!v.startsWith('•'))keyDraft=v;tk.disabled=true;tk.textContent='正在测试……';
    api('/api/llm/test',{provider:setLLM,key:v&&!v.startsWith('•')?v:null}).then(r=>{keyTested=!!r.ok;keyErr=r.ok?'':r.message;render()}).catch(()=>{keyErr='码表后台没有回应，看看运行码表的窗口是不是关了。';render()});return}
