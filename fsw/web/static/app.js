@@ -39,7 +39,8 @@ async function advStart(){ADV={status:'running',read:''};fixPick=null;render();
  const r=await fetch('/api/advise/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work:REAL.work,steps:IDENT.page.steps,what:hSay,project_dir:REAL.project_dir})});
  const j=await r.json();if(!r.ok){ADV={status:'failed',message:j.detail};render();return}ADV=j;advWatch()}
 function advWatch(){clearInterval(advT);
- advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render();if(x.status==='done'&&EXP.state==='wait'){EXP.state='saving';render();exportReport(EXP.dir)}else if(x.status==='failed'&&EXP.state==='wait'){EXP.state='';render()}}catch(e){}},1000)}
+ advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render();if(EXP.state==='wait'&&pop!=='export')EXP.state='';  // 等的时候点了取消（或关掉了对话框）：不再自动导出
+ if(x.status==='done'&&EXP.state==='wait'){EXP.state='saving';render();exportReport(EXP.dir)}else if(x.status==='failed'&&EXP.state==='wait'){EXP.state='';render()}}catch(e){}},1000)}
 function advBox(){if(!ADV||ADV.status==='done')return '';
  if(ADV.status==='failed')return `<div class="errbox"><b>为什么、怎么改还没写出来</b><p style="margin:6px 0">${ADV.message||''}</p><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-advretry="1">重试</button></div></div>`;
  return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(ADV.read)}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
@@ -278,7 +279,7 @@ function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="b
  return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
 // 提示（决策 129）：成功（✓）绿色、自己消失；出错（✕）红色、一直在，点 × 才关；其他黄色，按字数多留一会儿
 let toastT=null;function toast(m){const t=document.getElementById('toast');m=String(m||'');const kind=m.startsWith('✓')?'ok':m.startsWith('✕')?'bad':'warn';
- t.className='toast t-'+kind;t.innerHTML=`<span>${htmlEsc(m)}</span>${kind==='bad'?'<button class="tclose" aria-label="关掉这个提示">×</button>':''}`;t.hidden=false;clearTimeout(toastT);
+ t.className='toast t-'+kind;t.innerHTML=`<span>${htmlEsc(kind==='bad'?m.replace(/^✕\s*/,''):m)}</span>${kind==='bad'?'<button class="tclose" aria-label="关掉这个提示">×</button>':''}`;t.hidden=false;clearTimeout(toastT);
  if(kind!=='bad')toastT=setTimeout(()=>{t.hidden=true},Math.min(8000,1800+m.length*80))}
 document.addEventListener('click',e=>{if(e.target.closest('#toast .tclose'))document.getElementById('toast').hidden=true});
 // 首页"以前测过的"：真测过的记录（后台按结果文件夹里的原始日志重算）；演示数据只在演示入口（地址里写 ?demo=）出现

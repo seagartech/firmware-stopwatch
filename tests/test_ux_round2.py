@@ -358,3 +358,14 @@ def test_unlock_is_inaudible_and_happens_on_any_click():
 def test_blocked_sound_shows_a_one_click_fix():
     """决策 132：该响的时候浏览器的声音还关着（比如 Safari 不认那段听不见的声音）：页面上出现"提示音被浏览器关着，点这里打开"。"""
     assert "提示音被浏览器关着，点这里打开" in grab("beepBtn") and "beepBlocked=true" in grab("ding")
+
+
+def test_cancel_while_waiting_does_not_export_later():
+    """等"为什么、怎么改"写完再导出时点了取消：写完后不再自动导出（以前取消只关了框，写完照样导出一份）。"""
+    assert "if(EXP.state==='wait'&&pop!=='export')EXP.state='';" in JS
+    assert JS.index("if(EXP.state==='wait'&&pop!=='export')") < JS.index("if(x.status==='done'&&EXP.state==='wait')")
+
+
+def test_error_toast_has_only_the_close_mark():
+    """出错提示：红框、右边一个 × 关掉，前面不再多一个 ✕。"""
+    assert "kind==='bad'?m.replace(/^✕\\s*/,''):m" in JS
