@@ -584,7 +584,9 @@ function reportPage(D){
 
 let page='home',mode='boss',scene='',homeVar='m',hStage=0,hSay='';
 // 网址 #页面名 记着在哪一页（D 组）：打开时先不画，等按后台状态接上进度（uiRestore）再画，免得先闪一下空白首页
-let booting=true;const HASH0=(()=>{try{const h=decodeURIComponent(location.hash.slice(1));return PAGES.some(p=>p.id===h)?h:''}catch(e){return ''}})();
+// 这个标签页开着时刷新，sessionStorage 里的记号还在；关了浏览器或标签页再打开，记号没了，算新的一轮
+const FRESH=(()=>{try{const f=!sessionStorage.getItem('fsw-open');sessionStorage.setItem('fsw-open','1');return f}catch(e){return !location.hash}})();
+let booting=true,LASTP='';const HASH0=(()=>{try{const h=decodeURIComponent(location.hash.slice(1));return PAGES.some(p=>p.id===h)?h:''}catch(e){return ''}})();
 const save=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
 // ===== 找关键步骤 =====
 
@@ -1308,7 +1310,8 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
   const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;morphHTML(document.getElementById('crumb'),isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`:page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'');
   let body;
-  if(isHome)body=HOME[homeVar].html();
+  if(!isHome)LASTP='';
+  if(isHome)body=(LASTP?`<section class="panel" style="margin-bottom:16px"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span>上次停在「${htmlEsc(PNAME(LASTP))}」</span><button class="btn pri" data-go="${LASTP}" data-keepflow="1">接着看</button></div></section>`:'')+HOME[homeVar].html();
   else if(isReport)body=reportPage(D);
   else if(page==='settings')body=settingsPage();
   else if(page==='steps')body=stepsPage();
@@ -1361,14 +1364,18 @@ function canViewNear(p){const L=flow==='retest'?['retest','steps','flash','colle
 window.addEventListener('popstate',()=>{if(booting)return;let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}if(!PAGES.some(p=>p.id===h)||h===page)return;
  navPop=true;pop=null;if(hStage>=2)hStage=1;page=canView(h)?h:canViewNear(h);render();window.scrollTo(0,0)});
 function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(STEPS||[]),...added].find(r=>r.p===p);if(x)ed[p]=[x.f,x.l]}
- return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colN,colVar,adv:ADV&&ADV.started||null,rtCase}}
+ return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colN,colVar,adv:ADV&&ADV.started||null,rtCase,last:page==='home'?LASTP:''}}
 let uiLast='',uiT=null;
 const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
-function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;clearTimeout(uiT);uiT=setTimeout(()=>{uiT=null;uiSend(s)},250)}
+function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;try{sessionStorage.setItem('fsw-ui',s)}catch(e){}  // 这个标签页自己也存一份：别的标签页开了新的一轮，这里刷新也不丢
+ clearTimeout(uiT);uiT=setTimeout(()=>{uiT=null;uiSend(s)},250)}
 window.addEventListener('pagehide',()=>{if(!uiT)return;clearTimeout(uiT);uiT=null;try{navigator.sendBeacon('/api/ui?key='+encodeURIComponent(DEMO),new Blob([uiLast],{type:'application/json'}))}catch(e){uiSend(uiLast)}});
 async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return r.ok?await r.json():null}catch(e){return null}};
- const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),u=U&&U.ui,J=(U&&U.jobs)||{};
+ const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),J=(U&&U.jobs)||{};let u=U&&U.ui;
+ if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')||'null');if(m&&m.v===1)u=m}catch(e){}}
  if(!u||u.v!==1||!SCENES[u.scene]){page=HASH0==='settings'?'settings':'home';return}
+ // 关了浏览器或标签页再打开：算新的一轮，从空白首页开始；只有实测、烧录还在后台跑着时才接上，首页顶上给「接着看」
+ if(FRESH){const cj=await get('/api/collect'),fj=await get('/api/fsw'),run=x=>!!x&&['running','waiting_device'].includes(x.status);if(!run(cj)&&!run(fj)){page='home';return}}
  scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
  REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colN=u.colN||colN;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;
  const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;
@@ -1390,7 +1397,10 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  const want=HASH0&&HASH0!==u.page&&canView(HASH0)?HASH0:u.page||'home';
  page=canView(want)?want:canViewNear(want);
  if(page!==want){const L=flow==='retest'?['retest','steps','flash','collect','compare']:FLOW1.map(x=>x[0]),i=L.indexOf(page);if(flow&&i>=0)flowMax=Math.min(flowMax,i)}  // 接不上的那几步不再标成做完
- if(page!==want)setTimeout(()=>toast(`上次在「${PNAME(want)}」，这一步的进度没能接上，先回到「${PNAME(page)}」，从这里接着做。`),300)}
+ if(page!==want&&!FRESH)setTimeout(()=>toast(`上次在「${PNAME(want)}」，这一步的进度没能接上，先回到「${PNAME(page)}」，从这里接着做。`),300);
+ // 后台还在跑的那种新打开：进首页，顶上一条「接着看」回到上次那页；刷新还停在原页
+ if(FRESH&&page!=='home'&&page!=='settings'){LASTP=page;page='home';hStage=Math.min(hStage,1)}
+ else if(page==='home'&&u.last&&u.last!=='home'&&canView(u.last))LASTP=u.last}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{
@@ -1429,7 +1439,8 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-bgpop]')){pop='bg';render();return}
   if(e.target.closest('[data-bgretry]')&&REAL&&REAL.work){pop=null;bgStartReal();render();return}
   const pc=e.target.closest('[data-pop]');if(pc){render();if(pc.dataset.nudge)nudge(pc.dataset.nudge);return}
-  const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;/* 第一次测时点首页只是回看，步骤条留着（D 组） */page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
+  const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
+  const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;/* 第一次测时点首页只是回看，步骤条留着（D 组） */page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
   const rt=e.target.closest('[data-retest]');if(rt){flowReset();scene=rt.dataset.retest;rtSrc=0;rtOther=false;rtReading=false;rtPath='';page='retest';rtCase=RTCASE;flow='retest';render();window.scrollTo(0,0);return}
   const rv2=e.target.closest('[data-rtvar]');if(rv2){rtCase=rv2.dataset.rtvar;rtSrc=0;rtOther=false;render();return}
   const rs2=e.target.closest('[data-rtsrc]');if(rs2){const a=rs2.dataset.rtsrc,P=PROJ.find(p=>p.scene===scene),F=FF[scene];

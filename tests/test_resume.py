@@ -66,3 +66,28 @@ def test_home_button_keeps_the_step_bar_in_first_run():
     # 点首页只是回看：第一次测的步骤条不清；真换了固件或板子才作废
     assert "if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;" in JS
     assert "function newRun(){" in JS and "换了固件或板子：后面的步骤要重新做" in JS
+
+
+def test_fresh_open_goes_home_with_a_way_back():
+    # 新打开（网址没带 #页面名）进首页，首页顶上「接着看」回上次那页；刷新带着 #页面名，还停在原页
+    body = JS[JS.index("async function uiRestore("):JS.index("async function uiRestore(") + 6000]
+    assert "if(FRESH&&page!=='home'&&page!=='settings'){LASTP=page;page='home'" in body
+    assert "上次停在「${htmlEsc(PNAME(LASTP))}」" in JS and 'data-go="${LASTP}" data-keepflow="1">接着看' in JS
+    assert "if(!isHome)LASTP='';" in JS
+    # 在首页刷新，「接着看」还在
+    assert "last:page==='home'?LASTP:''" in JS
+    # 关了浏览器再打开（不带 #）：没有实测、烧录在跑，就从空白首页开始新的一轮
+    assert "if(FRESH){const cj=await get('/api/collect'),fj=await get('/api/fsw')" in body
+    assert "if(!run(cj)&&!run(fj)){page='home';return}" in body
+    # 刷新和重新打开靠 sessionStorage 分：关了标签页、浏览器就没了
+    assert "sessionStorage.getItem('fsw-open')" in JS
+    # 两个标签页：一个开了新的一轮，另一个刷新还按自己那份接着
+    assert "sessionStorage.setItem('fsw-ui',s)" in JS and "if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')" in JS
+    # 点首页就收起那条提示
+    assert "if(to==='home')LASTP='';" in JS
+
+
+def test_step_bar_current_step_is_the_most_visible():
+    # 正在看的这一步实心显示，比做完的（绿字）和做到这里（虚线）都显眼
+    css = (Path(__file__).resolve().parents[1] / "fsw/web/static/style.css").read_text(encoding="utf-8")
+    assert ".flow .fs.cur{color:var(--panel);background:var(--fg)" in css
