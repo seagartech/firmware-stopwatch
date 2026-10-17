@@ -1272,6 +1272,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             sc, raw = job["_scenario"], job["raw_log"]
             if job.get("_page") is not None and job.get("_project_dir"):  # 真测：每次都按项目现在的合理范围清单判
                 sc = job["_scenario"] = _judge_scenario(job, ok)
+                if job.get("status") in ("done", "stopped") and "_prev" not in job:
+                    job["_prev"] = _prev_run(job, sc, ok)
         elif demo in demos:
             sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
         else:
@@ -1286,7 +1288,42 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
                 "timing": _timing() if raw else None, "quality": quality, "start_lag": _start_lag(raw, sc),
                 "list_filled": (job or {}).get("_filled") if ok and same else None,
+                "prev": (job or {}).get("_prev") if ok and same else None,
                 "measured_at": (job or {}).get("measured_at") if ok and same else None}
+
+    def _prev_run(job, sc, ok):
+        """改完再测（任务 22）：和上次比。上次 = 同一个项目、计时点一样、收齐 10 轮以上的最近一次。
+        返回 {"run", "measured_at", "n", "segs": {段: 中位数}, "lines": {线: 中位数}}；比不了返回 {"why": 一句话}。"""
+        if len(ok) < rl.MIN_ROUNDS:
+            return {"why": f"这次只测了 {len(ok)} 轮，不到 {rl.MIN_ROUNDS} 轮，不和上次比"}
+        proj, cur = Path(job["_project_dir"]), Path(job["raw_log"]).parent.name
+        pts = {(g.get("from"), g.get("to")): k for k, g in sc["segments"].items()}
+        names = [l["name"] for l in sc["lines"]]
+        other = None
+        for log in sorted(proj.glob("runs/*/raw.log"), reverse=True):
+            run = log.parent
+            if run.name >= cur:
+                continue
+            meta = _run_meta(proj, run)
+            if not meta or not meta.get("page"):
+                continue
+            try:
+                psc = stds.real_scenario(meta["page"], stds.find(meta["page"].get("steps") or []), meta.get("values"))
+                rounds = [r for r in meas.collect(log.read_text(encoding="utf-8", errors="replace").splitlines(),
+                                                  meas.Spec.from_scenario(psc)) if r["ok"]]
+            except Exception:  # 老数据格式对不上：这一次不拿来比
+                continue
+            if len(rounds) < rl.MIN_ROUNDS:
+                continue
+            if {(g.get("from"), g.get("to")) for g in psc["segments"].values()} != set(pts) or [l["name"] for l in psc["lines"]] != names:
+                other = other or meta.get("measured_at") or run.name
+                continue
+            segs = {pts[(g.get("from"), g.get("to"))]: round(jdg.med(v), 6) for k, g in psc["segments"].items()
+                    if (v := [r["segs"][k] for r in rounds if r["segs"].get(k) is not None])}
+            lines = {l["name"]: round(jdg.med(v), 6) for i, l in enumerate(psc["lines"])
+                     if (v := [r["ends"][i] for r in rounds if i < len(r["ends"]) and r["ends"][i] is not None])}
+            return {"run": run.name, "measured_at": meta.get("measured_at") or run.name, "n": len(rounds), "segs": segs, "lines": lines}
+        return {"why": f"计时点和上次（{other}）不一样，不和上次比"} if other else None
 
     def _judge_scenario(job, ok):
         """这份报告按什么判：项目有合理范围清单就按清单；测满 10 轮、清单还没有或有空着的，按这次实测自动填上（只填空的）。"""

@@ -105,3 +105,36 @@ def test_identify_uses_carry_and_does_not_call_llm(tmp_path, monkeypatch):
     assert j["reused"] and j["carried"]["moved"] == 2 and len(calls) == 1
     plan = _j.loads((Path(r["project_dir"]) / "fsw-plan.json").read_text(encoding="utf-8"))
     assert plan["fingerprint"] == r2["fingerprint"] and cy.sig(plan["steps"])[0] == ("P1", "main/rfid_task.c", 90)
+
+
+def test_report_compares_with_last_full_run_of_same_points(tmp_path):
+    """报告和上次比：同一个项目、计时点一样、收齐 10 轮以上的最近一次；第一次不比；这次不到 10 轮说清不比。"""
+    import shutil as _sh
+    from fastapi.testclient import TestClient
+    from fsw.web.app import create_app
+    from fsw import standards as stds
+    from tests.test_advise_api import real_log
+    from tests.test_collect_api import FakeSerialDevice, wait as cwait
+    from tests.test_standards import PAGE
+    proj = tmp_path / "data" / "xiaozhi-1"
+
+    def measure(rounds):
+        c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", idf_finder=lambda: [],
+                                  cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.x"],
+                                  device=FakeSerialDevice(real_log(rounds)), wait_step=0.01))
+        c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": rounds, "project_dir": str(proj)})
+        cwait(c, lambda j: j["status"] == "done")
+        return c.get("/api/report").json()
+
+    first = measure(20)
+    assert first["prev"] is None                                            # 第一次：不比
+    for i, run in enumerate(sorted((proj / "runs").iterdir())):             # 同一秒测的会写进同一个文件夹：挪开
+        run.rename(proj / "runs" / f"2000010{i}-000000")
+    second = measure(20)
+    p = second["prev"]
+    assert p["run"] == "20000100-000000" and p["n"] == 20
+    assert set(p["segs"]) == {g["k"] for g in second["segments"]} and p["lines"][second["lines"][-1]["name"]] == second["lines"][-1]["med"]
+    for i, run in enumerate(sorted(d for d in (proj / "runs").iterdir() if not d.name.startswith("2000"))):
+        run.rename(proj / "runs" / f"2000020{i}-000000")
+    few = measure(5)
+    assert "不到 10 轮" in few["prev"]["why"]
