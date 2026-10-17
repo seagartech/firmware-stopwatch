@@ -762,7 +762,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def _run_from(start):
         job, a = fsw["job"], fsw["args"]
         _, orig_fw, fsw_fw = _fsw_dirs(a)
-        job.update(status="running", err=None, cancel=False)
+        job.update(status="running", err=None, cancel=False, gen=job.get("gen", 0) + 1)  # 第几趟：上一趟还没停的"试一次"见到就停，让出调试口
 
         def build():
             T().end("confirm")
@@ -842,6 +842,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             T().count("try_said")
             T().count("clicks")
             fresh = job.pop("_just_flashed", False)
+            my_gen = job.get("gen")
+            superseded = lambda: fsw["job"] is not job or job.get("gen") != my_gen  # 又插了一次 / 又点了编译烧录 / 再试一次：这一趟作废，让出调试口、不改页面状态
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机" if fresh else "设备开着，等计时点",
                        try_started=time.time(), dev_seen=None if fresh else time.time(), boot_quiet=False)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
@@ -862,6 +864,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     rounds["best"] = set(rounds["cur"])
 
             def on_line(line):
+                if superseded():
+                    return
                 if not job.get("dev_seen") and _plain(line):
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 feed(line)
@@ -873,7 +877,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             def enough():  # 有一轮全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
                 return rounds["best"] == want
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
-            while lines is None and time.time() < t_end:  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
+            while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
                 if not ports:
                     time.sleep(wait_step / 4)
@@ -883,7 +887,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 def stop_or_reopen():  # 决策 127：打开调试口 8 秒还一行输出都没有，多半打开的是设备重启前那个（它断开又回来了）：关掉重开
                     if not job.get("dev_seen") and time.time() - opened > REOPEN_SECS:
                         reopen["hit"] = True
-                    return enough() or reopen["hit"]
+                    return superseded() or enough() or reopen["hit"]
                 try:
                     got_lines = device.read(ports[0], max(1, t_end - time.time()), on_line, stop=stop_or_reopen)
                     if not reopen["hit"] or time.time() >= t_end:
@@ -895,6 +899,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 except Exception as e:
                     err = e
                     time.sleep(wait_step)
+            if superseded():
+                return
             if lines is None:
                 return _fail(job, "try", "设备的调试口一直打不开。看看线插好没有，或者有没有别的软件（比如串口监视器）占着它。",
                              error=f"打不开调试口：{err}" if err else "没看到设备")

@@ -305,3 +305,35 @@ def test_try_needs_one_complete_round_not_points_from_different_rounds(setup):
     wait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
     assert j["status"] == "failed" and j["err"]["kind"] == "try"
+
+
+def test_new_run_stops_the_old_try_and_frees_the_port(setup):
+    """10-17 真机：试一次还在听调试口时又点了编译烧录，旧的那趟一直占着口，烧录报"multiple access on port"。
+    新的一趟开始，旧的试一次马上停下、让出调试口，也不再改页面状态。"""
+    import threading
+
+    class Holding(FakeDevice):
+        def __init__(self):
+            super().__init__()
+            self.open, self.first_left = 0, threading.Event()
+            self.calls = 0
+
+        def read(self, port, seconds, on_line, stop=None):
+            self.calls += 1
+            if self.calls == 1:  # 第一趟：设备不出声，一直占着口，直到被叫停
+                self.open += 1
+                t = time.time()
+                while time.time() - t < 5 and not (stop and stop()):
+                    time.sleep(0.01)
+                self.open -= 1
+                self.first_left.set()
+                return []
+            return super().read(port, seconds, on_line, stop)
+    dev = Holding()
+    c, r, *_ = setup(device=dev)
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    c.post("/api/fsw/run", json={"from": "build"})
+    wait(c, lambda j: j["phase"] == "try" and dev.open == 1)
+    start_insert(c, r)                                                           # 另一个页面里又插了一次（新的一趟）
+    assert dev.first_left.wait(2), "旧的试一次没让出调试口"
