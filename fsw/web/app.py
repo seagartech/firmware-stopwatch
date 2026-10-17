@@ -1161,8 +1161,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 time.sleep(min(1.0, NO_DATA_SECS / 3))
 
         def run_device():
-            threading.Thread(target=watch_quiet, daemon=True).start()
-            threading.Thread(target=watch_ready, daemon=True).start()
+            def helper_crashed(e):  # 看收尾、看安静的小线程出错：停下这次实测（已测的留着），不让最后一轮一直收不了尾
+                job["_stop"] = True
+                crashed(e)
+            threading.Thread(target=_guarded(watch_quiet, helper_crashed), daemon=True).start()
+            threading.Thread(target=_guarded(watch_ready, helper_crashed), daemon=True).start()
             while not stop():
                 ports = port_finder()
                 if not ports:
