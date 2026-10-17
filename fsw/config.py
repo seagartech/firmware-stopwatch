@@ -70,8 +70,8 @@ class Config:
 
 def _read_key(path):
     try:
-        text = path.read_text(encoding="utf-8").strip()
-    except OSError:
+        text = path.read_text(encoding="utf-8-sig").strip()  # 记事本存的文件开头带 BOM，不剥掉密钥就不对
+    except (OSError, ValueError):
         return None
     return text or None
 

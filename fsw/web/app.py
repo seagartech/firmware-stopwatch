@@ -9,6 +9,7 @@ import json
 import re
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -172,6 +173,23 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|[\x00-\x08\x0b-\x1f\
 def _plain(text):
     """工具输出里控制颜色、进度条的字符去掉（决策 106）：网页上原样显示就是乱码。"""
     return ANSI.sub("", str(text or "")).replace("\r", "").strip()
+
+
+def _detail(e):
+    """出错时的原始报错：放进"详情"（error 字段），不放进提示。大模型的错用它自带的原话。"""
+    return getattr(e, "detail", None) or f"{type(e).__name__}: {e}"
+
+
+def _guarded(fn, on_error):
+    """后台线程整段兜住：码表自己出错也要转成这个任务的失败状态、说清楚，不能一直停在"进行中"挡住重试。
+    on_error(e) 负责把任务改成失败；原始的调用栈打在运行码表的窗口里，好查。"""
+    def run():
+        try:
+            fn()
+        except Exception as e:
+            traceback.print_exc()
+            on_error(e)
+    return run
 
 
 def _log(job, msg, pct=None, show=None):
@@ -493,7 +511,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                            message="原版编译没通过，不是码表改的：你选的源码本身在这台电脑上编不过"
                                    "（编译工具、依赖或板子配置的问题），烧录前要先解决。")
 
-        threading.Thread(target=run, daemon=True).start()
+        def crashed(e):
+            job.update(state="failed", cause="tool", error=_detail(e),
+                       message="后台编原始代码时码表出错了，不是源码的问题：回首页重新选一次源码再试。")
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return job
 
     @app.get("/api/bgbuild")
@@ -592,9 +613,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                                          on_tool=lambda d: p.update(read=d))
                 p.update(status="ready", text=text)
             except Exception as e:
-                p.update(status="failed", message=str(getattr(e, "message", e)))
+                p.update(status="failed", message=str(getattr(e, "message", e)), error=_detail(e))
             p["seconds"] = round(time.time() - p["started"], 1)
-        threading.Thread(target=run, daemon=True).start()
+
+        def crashed(e):  # 比如步骤的行号不对、对标准时出错：标成没成，点确认时重新生成，插入不会一直等它
+            p.update(status="failed", message="提前准备插法时码表出错了，点确认时会重新生成。", error=_detail(e),
+                     seconds=round(time.time() - p["started"], 1))
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return _prep_view(p)
 
     @app.get("/api/fsw/prepare")
@@ -654,14 +679,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                         text = _model()[1].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
                                                        on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     except llms.LLMError as e:
-                        return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。")
+                        return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
             else:
                 job["calls"] += 1
                 try:
                     text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
                                              on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                 except llms.LLMError as e:
-                    return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。")
+                    return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
             Path(body.project_dir).mkdir(parents=True, exist_ok=True)
             (Path(body.project_dir) / "fsw-plan-reply.txt").write_text(text, encoding="utf-8")  # AI 的原话留一份，出错时好查
             plan = ins.parse_plan(text, body.work, steps, needs)
@@ -686,7 +711,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             T().count("llm_calls", job.get("calls", 0))
             T().begin("confirm")
 
-        threading.Thread(target=run, daemon=True).start()
+        def crashed(e):
+            if job["status"] == "running":
+                _fail(job, "insert", "插计时点时码表出错了，点\"重新插入\"再试一次。", error=_detail(e))
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return job
 
     def _run_from(start):
@@ -833,7 +861,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if {"build": build, "flash": flash, "ready": ready, "try": try_once}[name]() is not True:
                     return
 
-        threading.Thread(target=run, daemon=True).start()
+        def crashed(e):  # 比如烧录时加载乐鑫环境出错：按当时在做的那步报失败，页面上照样能点重试
+            if job["status"] not in ("running", "waiting_device"):
+                return
+            kind = {"flash": "burn", "try": "try"}.get(job.get("phase"), "build")
+            if isinstance(e, ToolEnvError):
+                return _fail(job, kind, ToolEnvError.message, error=_detail(e), cause="tool")
+            _fail(job, kind, {"burn": "烧录时码表出错了，没写进设备：点「重新烧录」再试一次。",
+                              "try": "试一次时码表出错了：点「再试一次」。"}.get(kind, "编译时码表出错了：点「重新编译」再试一次。"),
+                  error=_detail(e))
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return job
 
     @app.post("/api/fsw/run")
@@ -1023,7 +1060,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     if body.source == "device":
                         T().end("collect")
 
-        threading.Thread(target=run, daemon=True).start()
+        def crashed(e):  # 上面已经停下（已测的留着）：说清楚为什么停了
+            if job is col["job"]:
+                job.update(message=f"实测时码表出错了，已测的 {ok_count()} 轮都留着：点「接着测」继续。", error=_detail(e))
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return _col_view(job)
 
     @app.post("/api/collect/stop")
@@ -1313,7 +1353,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             else:
                 job.update(status="failed", kind=r.get("kind"), message=r["message"])
 
-        threading.Thread(target=run, daemon=True).start()
+        def crashed(e):
+            job.update(status="failed", kind="other", message="写建议时码表出错了，点\"重试\"再写一次。", error=_detail(e))
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return job
 
     @app.get("/api/advise")
@@ -1392,7 +1434,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
         def burn(port):
             for k in range(6):  # 刚测完调试口可能还没放开、或设备正在重连：等一下再烧，别马上报错（决策 129）
-                r = device.flash(orig_fw, port, lambda pct, msg: None)
+                try:
+                    r = device.flash(orig_fw, port, lambda pct, msg: None)
+                except ToolEnvError as e:
+                    r = {"ok": False, "cause": "tool", "message": e.message, "error": e.detail}
+                except Exception as e:  # 烧录时码表自己出错：源码已经还原了，说清楚原版没烧上，不能让接口直接报错
+                    traceback.print_exc()
+                    r = {"ok": False, "cause": "crash", "error": _detail(e)}
                 if r.get("ok") or not re.search(r"busy|Could not open|doesn't exist|Errno 16|not configured|Errno 6|Could not configure", str(r.get("error") or ""), re.I):
                     break
                 time.sleep(wait_step * 3)
@@ -1404,6 +1452,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             else:
                 busy = re.search(r"busy|Errno 16", str(r.get("error") or ""), re.I)  # 设备还在重连（not configured）已经在上面等过了
                 out["say"] = ("源码已还原，原版没烧上：" + r["message"] if r.get("cause") == "tool" else
+                              "源码已还原，原版没烧上：烧录时码表出错了，再点一次「还原成原版」。" if r.get("cause") == "crash" else
                               "源码已还原，原版没烧上：调试口被别的程序占着。关掉它（比如串口监视器）再点一次「还原成原版」。" if busy else
                               "源码已还原，原版没烧上：看看线插好没有，再点一次「还原成原版」。")
                 out["detail"] = _plain(r.get("error"))  # 原话放在详情里，不堆在提示里
@@ -1423,7 +1472,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     if p2:
                         return burn(p2[0])
                     time.sleep(wait_step)
-            threading.Thread(target=wait_and_burn, daemon=True).start()
+
+            def burn_crashed(e):
+                out.update(waiting=False, say="源码已还原，原版没烧上：烧录时码表出错了，再点一次「还原成原版」。", detail=_plain(_detail(e)))
+                job.update(status="restored", restore=dict(out))
+            threading.Thread(target=_guarded(wait_and_burn, burn_crashed), daemon=True).start()
         else:
             out["say"] = "源码已还原。没找到编好的原版固件，设备上的计时版要等下次编好原版再烧回去。"
             job.update(status="restored", restore=dict(out))
@@ -1457,7 +1510,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 job.update(state="failed", step=r.get("step", job["step"]), message=r.get("message", ""),
                            log=r.get("log") or job["log"])
 
-        threading.Thread(target=run, daemon=True).start()
+        def crashed(e):
+            job.update(state="failed", message="安装中途码表出错了，点\"重试\"接着装。", log=_detail(e))
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return job
 
     @app.post("/api/install/start")
@@ -1522,7 +1577,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 T().end("identify", reused=bool(r.get("reused")))
                 T().begin("check")
 
-        threading.Thread(target=run, daemon=True).start()
+        def crashed(e):
+            if job["state"] == "running":
+                job.update(state="failed", kind="other", message="找关键步骤时码表出错了，点\"重试\"再找一次。", error=_detail(e))
+        threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return job
 
     @app.post("/api/identify/start")
