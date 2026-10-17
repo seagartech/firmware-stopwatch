@@ -1751,6 +1751,32 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             T().count("clicks")
         return r
 
+    # ---- 页面进度：刷新、新开标签页时按它接着做（D 组） ----
+    # 网页把"选了哪份源码、要测什么、走到哪一步、核对时改过什么"这些只在网页里的东西存到这里（只在内存，码表重开就没了）；
+    # 后台任务的进度不在这里，网页打开时自己去问各任务。演示数据和真流程分开存，互不覆盖。
+    ui = {}
+
+    @app.post("/api/ui")
+    async def ui_save(request: Request, key: str = ""):
+        raw = await request.body()
+        if len(raw) > 2_000_000:
+            raise HTTPException(413, "页面进度太大，没存")
+        try:
+            data = json.loads(raw or b"null")
+        except ValueError:
+            raise HTTPException(400, "页面进度不是 JSON")
+        if not isinstance(data, dict):
+            raise HTTPException(400, "页面进度不是 JSON 对象")
+        ui[key[:40]] = data
+        return {"ok": True}
+
+    @app.get("/api/ui")
+    def ui_get(key: str = ""):
+        """页面进度，加上各后台任务是给哪份复制好的源码做的：网页只接上同一份源码的任务。"""
+        work = lambda a: getattr(a, "work", None)
+        return {"ui": ui.get(key[:40]), "jobs": {"identify": work(ident["args"]), "fsw": work(fsw["args"]),
+                                                 "bgbuild": (bg["job"] or {}).get("work")}}
+
     @app.middleware("http")
     async def no_stale_page(request, call_next):
         """网页文件每次都让浏览器先问一下有没有新的，升级码表后不会还用旧代码。"""
