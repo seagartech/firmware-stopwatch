@@ -238,7 +238,7 @@ function dev(D){const T=D.S.tech;if(D.S.real)timingLoad();const PV=D.J&&D.J.prev
   <section class="panel scroll"><h2 style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">分段用时<button class="pill" data-go="range">合理范围清单</button></h2><table class="num"><thead><tr><th>段（计时点）</th><th>代码位置${T.locNote||''}</th><th class="own">谁负责</th><th class="r">中位数</th>${PV?'<th class="r">上次</th>':''}<th class="r">最小～最大</th><th class="r">合理</th><th class="r">慢阈值</th><th>判断</th></tr></thead><tbody>${segRows}${lineRows}</tbody></table></section>
   <section class="panel scroll"><h2>有问题的轮</h2>${bad.length?`<table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}</tr></thead><tbody>${bad.map(r=>`<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${f(e)}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<p class="note">没有。</p>'}</section>${fixDev(D)}
   ${D.S.real?timingBox(TIMING||(JREP&&JREP.timing)):''}
-  <section class="panel"><h2>原始日志</h2><p style="margin:0 0 8px"><span class="code">${T.log}</span></p><ul class="notes" style="margin:0 0 8px"><li>设备调试口输出的原样记录，没有删改：固件原有的日志和码表插的计时点行（FSW 开头）都在里面。</li><li>报告里所有数字都从这份文件算出来。</li><li>合理范围改过以后，报告顶上会提示用新范围更新，不用重测。</li></ul><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
+  <section class="panel"><h2>原始日志</h2><p style="margin:0 0 8px"><span class="code">${T.log}</span></p><ul class="notes" style="margin:0 0 8px"><li>设备调试口输出的原样记录，没有删改：固件原有的日志和码表插的计时点行（FSW 开头）都在里面。</li><li>报告里所有数字都从这份文件算出来。</li><li>合理范围清单改过以后，报告打开时自动按新的判，不用重测。</li></ul><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
 
@@ -467,7 +467,8 @@ let repVar='a',fixPick=null,fixTodo=false,segSel=null;
 const slowTxt=x=>x==null||x===Infinity?'—':x;
 function prevLine(){const P=JREP&&JREP.prev;if(!P)return '';if(P.why)return `<p class="note" style="margin:0">${htmlEsc(P.why)}</p>`;
  const L=JREP.lines||[],m=L[L.length-1];if(!m||P.lines[m.name]==null)return '';const p=P.lines[m.name];
- return `<p style="margin:0"><b>比上次（${htmlEsc(P.measured_at)}，${P.n} 轮）：</b>${htmlEsc(m.end||m.name)} ${f(p)} → ${f(m.med)} 秒　${arrow(m.med,p)}<span class="note">　各段见「技术细节」的"上次"一栏</span></p>`}
+ const endName=(IDENT&&IDENT.page&&(IDENT.page.measure||'').split('→').pop().trim())||m.end||m.name;  // 用"听到回答"这种说法，不用"回答这条"
+ return `<p style="margin:0"><b>比上次（${htmlEsc(P.measured_at)}，${P.n} 轮）：</b>${htmlEsc(endName)} ${f(p)} → ${f(m.med)} 秒　${arrow(m.med,p)}<span class="note">　各段见「技术细节」的"上次"一栏</span></p>`}
 function staleBar(){if(!(JREP&&!JREP._none&&repKey().startsWith('real')))return '';const RL=JREP.scenario&&JREP.scenario.range_list,F=JREP.list_filled,PL=prevLine();
  if(RL&&RL.broken)return PL+`<section class="panel stale"><p style="margin:0"><b>⚠ 合理范围清单格式不对，这次按码表自带的范围判。</b></p><p class="note" style="margin:4px 0 0">${htmlEsc(RL.broken)}</p></section>`;
  return PL+(F&&F.length?`<p class="note" style="margin:0">✓ 已按这次 ${JREP.n} 轮实测把合理范围清单填好（${F.length} 项）。想改就点「技术细节」→「合理范围清单」。</p>`:'')}
@@ -1267,7 +1268,8 @@ function restoreWatch(){clearInterval(restoreT);restoreT=setInterval(async()=>{t
 let restoring=false;  // 还原中：写建议时页面会不停重画，按钮不能一重画就变回去（决策 139）
 function restoreBox(sc){const r=restored[sc];if(restoring&&!r)return `<section class="panel"><h2>设备上现在是：计时版</h2><p class="note" style="margin:0"><span class="spin"></span> 正在还原：先把源码放回原样，再把原版烧回设备，一般半分钟左右，不用再点。</p></section>`;if(r&&RESTORE&&realFlash()){const R=RESTORE;return `<section class="panel"><h2>设备上现在是：${R.flashed?'原版':'计时版（源码已还原）'}</h2><p class="note" style="margin:0">${R.same?`✓ 源码已还原，和你原来的源码逐字节比对一致（${R.files} 个文件）。`:R.same===false?`✕ 源码还原后和你原来的源码有 ${R.diff.length} 个文件不一样：${R.diff.map(htmlEsc).join('、')}。`:'源码已还原。'}${R.flashed?`<br>✓ 已把原版烧回设备（${htmlEsc(R.port)}）。`:R.waiting?'<br><span class="spin"></span> 设备没插着，原版还没烧回去：插上设备就自动烧，不用再点。':R.error?`<br><span style="color:var(--bad)">✕ ${htmlEsc((R.say||'原版没烧上').replace(/^源码已还原，/,''))}</span>${R.detail?`<details class="lvwhy"><summary>详情</summary><code>${htmlEsc(R.detail)}</code></details>`:''}`:'<br>原版还没烧回去。'}</p>${R.flashed||R.waiting?'':`<div class="acts" style="margin:8px 0 0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
  return `<section class="panel"><h2>设备上现在是：${r?'原版':'计时版'}</h2>${r?'<p class="note" style="margin:0">✓ 已还原成原版，和你的原版逐字节比对一致。</p>':`<p class="note" style="margin:0 0 8px">计时版每过一个计时点会多打印一行，交货、演示前请还原。<br>还原是直接烧读代码时编好的那份原版，烧完逐字节比对。还要接着测就先别还原。</p><div class="acts" style="margin:0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
-function retestEntry(){return `<section class="panel"><h2>改完以后</h2><p class="note" style="margin:0 0 8px">照上面的建议改完代码、换了模型或升级了版本，点这里再测一次。<br>码表先查改了什么，能跳过的步骤自动跳过，测完直接和这次比。</p><div class="acts" style="margin:0"><button class="btn pri" data-retest="${scene}">改完了，再测一次</button></div></section>`}
+function retestEntry(){const real=realFlash()&&REAL&&REAL.project_dir;  // 真测：走首页那条"改完了，再测一次"（带上次的源码、板子、要测什么）；演示数据照旧
+ return `<section class="panel"><h2>改完以后</h2><p class="note" style="margin:0 0 8px">照上面的建议改完代码、换了模型或升级了版本，点这里再测一次。<br>${real?'计时点那几处代码没动，就不再调用大模型找步骤、插计时点；测完报告里直接和这次比。':'码表先查改了什么，能跳过的步骤自动跳过，测完直接和这次比。'}</p><div class="acts" style="margin:0"><button class="btn pri" ${real?'data-rtreal="1"':`data-retest="${scene}"`}>改完了，再测一次</button></div></section>`}
 
 function rtExtra(sc,k){const P=PROJ.find(p=>p.scene===sc),R=RT[sc],u=COLLECT[sc];const same=R.same;
  if(k==='gone')return {label:'文件夹没了',checks:[['bad','源码',`找不到 ${P.path}（可能挪走或删了）`],['est','计时点','没有源码，查不了'],['ok','设备','插着，上面还是上次烧的计时版']],
@@ -1527,6 +1529,7 @@ if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   const hr=e.target.closest('[data-hrestore]');if(hr){hr.disabled=true;hr.textContent='正在还原……';  // 码表重开过也认得：按项目文件夹里存的插入记录还原
    api('/api/fsw/restore',{project_dir:hr.dataset.hrestore}).then(j=>{toast(j.detail?'✕ '+j.detail:(j.flashed?'✓ ':j.waiting?'':'✕ ')+(j.say||'已还原'));if(j.waiting)restoreWatch();histLoad().then(render)});return}
   const ro=e.target.closest('[data-ropen]');if(ro){api('/api/report/open',{path:ro.dataset.ropen}).then(j=>toast(j.ok?'✓ 已用浏览器打开这份报告':'✕ '+(j.detail||'打不开')));return}
+  if(e.target.closest('[data-rtreal]')){retestFrom({path:(REAL.body&&REAL.body.path)||hSrc,what:hSay||(IDENT&&IDENT.page&&IDENT.page.mapWhat)||''});return}
   const hrt=e.target.closest('[data-hretest]');if(hrt){const h=HIST.find(x=>x.project_dir===hrt.dataset.hretest);if(h)retestFrom(h);return}
   const ho=e.target.closest('[data-hopen]');if(ho){api('/api/history/open',{path:ho.dataset.hopen}).then(j=>toast(j.ok?'✓ 已用浏览器打开这次的报告':'✕ '+(j.detail||'打不开')));return}
   const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}

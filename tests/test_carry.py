@@ -160,3 +160,13 @@ def test_carry_still_works_after_reselecting_changed_source(setup, tmp_path):  #
     assert r2["status"] == "changed" and not (proj / "fsw-plan.json").exists()      # 码表照旧作废
     got = cy.carry(proj, r2["work"], WHAT, "x")
     assert got["ok"] and {s["id"]: s["line"] for s in got["result"]["steps"]} == {"P1": 89, "P2": 132, "P5": 55}
+
+
+def test_report_retest_button_and_wording_for_real_runs():
+    """真机走查截图：报告底部「改完了，再测一次」点进的是演示用的旧页面；顶上写"回答这条"不像人话；原始日志那里还说"提示用新范围更新"。"""
+    from tests.test_boss_short import JS, grab
+    entry = grab("retestEntry")
+    assert 'data-rtreal="1"' in entry and "data-retest=" in entry                   # 真测走新流程，演示数据照旧
+    assert "e.target.closest('[data-rtreal]')){retestFrom(" in JS
+    assert "split('→').pop().trim()" in grab("prevLine")
+    assert "报告顶上会提示用新范围更新" not in JS
