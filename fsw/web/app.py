@@ -29,6 +29,7 @@ from fsw import timeline as tln
 from fsw import standards as stds
 from fsw import rangelist as rl
 from fsw import carry as cy
+from fsw import speech as tts
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
 from fsw.platforms.espidf import EspIdf, ToolEnvError, find_idf, find_ports, pick_idf
@@ -135,6 +136,12 @@ class CollectBody(BaseModel):
     interval: float = 0.12           # 回放时每行间隔（秒）
     drop_at: int = 0                 # 回放时第几次故意没收全（演示"没收全，自动补测"）
     what: str | None = None          # 你自己写的"测什么"（首页"以前测过的"和导出文件名用）
+
+
+class SpeakBody(BaseModel):
+    on: bool = False
+    wake: str = ""                   # 唤醒词（AI 读代码认出来的；没有就空）
+    items: list[str] = []            # 句子清单（多轮实测每轮说的那句）
 
 
 class PathBody(BaseModel):
@@ -331,7 +338,7 @@ class SyncBody(BaseModel):
 
 
 def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
-               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None):
+               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None, speaker=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     cfg = lambda: load_config(config_dir)  # 设置文件夹默认 ~/.config/firmware-stopwatch/，测试时换成临时文件夹
@@ -342,6 +349,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     uploads = ascii_work_root(data_dir) / "_uploads"
     picker = picker or native_pick
     installs_rec = data_dir / "idf-installs.json"  # 码表帮装过的编译工具，记下位置以后也能找到
+    speaker = speaker or tts.say
+    vox = {"on": False, "wake": "", "items": []}  # 电脑语音代替人说话（决策 158）：网页找完关键步骤后设好
 
     def _recorded():
         try:
@@ -868,6 +877,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     return
                 if not job.get("dev_seen") and _plain(line):
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
+                heard["at"] = time.time()
+                heard["marks"] += bool(ins.count_marks([line]))
                 feed(line)
                 cur = rounds["cur"]
                 job["got"] = sorted(cur)
@@ -876,6 +887,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
             def enough():  # 有一轮全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
                 return rounds["best"] == want
+            heard = {"marks": 0, "at": time.time()}  # 电脑语音：收到几行计时点、最后一行设备输出在什么时候
+            job.update(speak=vox["on"], speak_hint="")
+            _speak_loop(lambda: superseded() or enough() or job["status"] != "running",
+                        lambda: bool(job.get("dev_seen")) and time.time() - heard["at"] >= tts.IDLE_SECS + 2,
+                        lambda: heard["marks"], lambda: vox["items"][0], lambda t: job.update(speak_hint=t))
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -1032,6 +1048,23 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(409, "这次插进去的计时点连不成一段，量不出用时：回到「找关键步骤」那一步，至少留下起点和终点再插一次。")
         return page
 
+    @app.get("/api/speak")
+    def speak_get():
+        return {**vox, "available": tts.available() or speaker is not tts.say}
+
+    @app.post("/api/speak")
+    def speak_set(body: SpeakBody):
+        on = body.on and bool(body.items) and (tts.available() or speaker is not tts.say)
+        vox.update(on=on, wake=body.wake.strip(), items=[x for x in body.items if x.strip()])
+        return speak_get()
+
+    def _speak_loop(stop, idle, marks, next_item, hint):
+        """后台线程里让电脑一句句播（vox 打开时）：多轮实测和试一次共用。"""
+        if not vox["on"]:
+            return
+        threading.Thread(target=_guarded(lambda: tts.drive(speaker, next_item, idle, marks, stop, hint, wake=vox["wake"]),
+                                         lambda e: hint(f"电脑语音播放出错了，请改由人说：{e}")), daemon=True).start()
+
     @app.post("/api/collect/start")
     def collect_start(body: CollectBody):
         if not 3 <= body.rounds <= 100:
@@ -1084,7 +1117,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                                 for p in scenario.get("problems") or []],
                    "experience": main_experience(scenario)}
             col["job"] = job
-        job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False)
+        job.update(status="running", target=body.rounds, message="", progress=[0, len(spec.need)], last="", _stop=False, suspect=None,
+                   speak=vox["on"], speak_hint="")
         raw = open(job["raw_log"], "a", encoding="utf-8")
         T().count("clicks")
         if body.source == "device":
@@ -1101,7 +1135,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raw.write(line + "\n")  # 设备调试口原样存一份（码表不改日志去向）
             raw.flush()
             if meas.parse_line(line):
-                quiet.update(since=time.time(), lines=0, odd=0, any=True)
+                quiet.update(since=time.time(), lines=0, odd=0, any=True, marks=quiet.get("marks", 0) + 1)
                 job["hint"] = ""
             else:
                 quiet["lines"] += 1
@@ -1141,6 +1175,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                         job["half_hint"] = (f"「{name}」连着 {worst[1]} 轮都记在你说完之前，不像是这一轮的事，再测也一样。"
                                             "多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 job["rounds"].append(r)
+                if r["ok"] and not job.get("_checked"):  # 第 1 轮收齐：自动校验计时点位置，不对就停下，不让后面白测（决策 158）
+                    job["_checked"] = True
+                    bad = meas.suspects(r, job["_scenario"])
+                    if bad:
+                        job["suspect"] = bad
+                        job["_stop"] = True
             job["progress"], job["last"] = list(coll.progress()), coll.last
             if ok_count() >= job["target"]:
                 job["_stop"] = True
@@ -1193,6 +1233,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 crashed(e)
             threading.Thread(target=_guarded(watch_quiet, helper_crashed), daemon=True).start()
             threading.Thread(target=_guarded(watch_ready, helper_crashed), daemon=True).start()
+            _speak_loop(stop, lambda: job["status"] == "running" and not (coll.started and coll.cur and not coll.done and not coll.ready)
+                        and time.time() - quiet["since"] >= tts.IDLE_SECS,
+                        lambda: quiet.get("marks", 0), lambda: vox["items"][ok_count() % len(vox["items"])],
+                        lambda t: job.update(speak_hint=t))
             while not stop():
                 ports = port_finder()
                 if not ports:
@@ -1226,7 +1270,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 with job["_lock"]:
                     take(coll.finish())
                 if job is col["job"]:
-                    job["status"] = "done" if ok_count() >= job["target"] else "stopped"
+                    job["status"] = "suspect" if job.get("suspect") else "done" if ok_count() >= job["target"] else "stopped"
                     if body.source == "device":
                         T().end("collect")
 
@@ -1723,7 +1767,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if s != last:
                     last, beat = s, time.time()
                     yield f"data: {s}\n\n"
-                    if v.get("status") in ("done", "stopped", "idle"):
+                    if v.get("status") in ("done", "stopped", "suspect", "idle"):
                         return
                 elif time.time() - beat > 15:
                     beat = time.time()

@@ -236,3 +236,9 @@ th.own,td.own{min-width:6.5em}
 /* 分段用时：多了"上次"一栏后段名别被挤成两三个字一行 */
 th.segn{min-width:9em}
 .tipname{text-decoration:underline dotted;text-underline-offset:3px;cursor:help}  /* 悬停看包含哪几段 */
+/* 首页预计总耗时（精简流程，决策 158） */
+.estbox{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:12px 0}
+.estgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.estgrid>div{border:1px solid var(--soft);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column}
+.estgrid b{font-size:20px}
+.estgrid .hum{border-color:var(--speak)}.estgrid .hum b{color:var(--speak)}
