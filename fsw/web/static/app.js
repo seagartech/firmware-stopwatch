@@ -395,7 +395,7 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
   return `<li class="${c}"><span class="tdot"></span><div>${x[0]}<span class="who ${x[1]}">${x[1]==='hum'?'人工操作':'自动执行'}</span>${c==='done'?done(i):''}</div><span class="note">${c==='done'?'✓':'约 '+(x[2]>=60?Math.round(x[2]/60)+' 分钟':x[2]+' 秒')}</span></li>`}).join('');
  let now;
  if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
- else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>连接设备到电脑的 USB 口</b><span class="note">计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
+ else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>未检测到设备：连接 USB，或按电源键开机</b><span class="note">设备闲置一段时间会自动关机。计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
  else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?'AI 读取源码，确定每个计时点的插入位置':fl.log||'')}</span></div>`;
  else if(at===3){const N=FSWJ?FSWJ.need||FSWJ.total||live().length:live().length,got=FSWJ?(FSWJ.got||[]).length:0;now=tryBox(got,N).replace('<div class="bigask">','<div class="bigask"><span class="lab">人工操作 · 试测（校验计时点，不计入数据）</span>')}
  else if(col.st===4)now=suspectBox();
@@ -1069,7 +1069,7 @@ function issues(x){if(x.bad)return `<span class="chip c-gray">${missTxt(x)}，�
  return x.probs.map(p=>`<span class="chip c-${p.c}">${p.t}</span>`).join(' ')||'<span class="note">正常</span>'}
 function colSetup(){const C=CX(),D=DX();return `${justFlashed?`<div class="okbar">✓ 计时版已烧进设备，试的那一次 ${realFlash()&&FSWJ?FSWJ.total:live().length} 个计时点都收到了。下面开始多轮实测。</div>`:''}<section class="panel"><h1 style="font-size:22px">多轮实测：${C.cnt} ${colN} ${C.unit}</h1>
  <p style="margin:4px 0 0">同样的事做很多轮，码表从设备输出里记下每一轮各段用了多久。刚才试的那一次不算。</p>
- <div class="status" style="margin:6px 0 4px">${REAL&&!devNow().on?'<span><i class="dot" style="background:var(--warn)"></i>没看到设备：用 USB 线插上，插上会自动继续</span>':`<span><i class="dot" style="background:var(--ok)"></i>${C.dev}已连上${REAL?' '+htmlEsc(devNow().port):''}，计时点输出正常</span>`}<span><i class="dot" style="background:var(--ok)"></i>${C.mode}</span><span><i class="dot" style="background:var(--ok)"></i>量 ${D.lines.length} 条线：${D.lines.map(l=>D.S.startShort+' → '+l.end).join('；')}</span></div>
+ <div class="status" style="margin:6px 0 4px">${REAL&&!devNow().on?'<span><i class="dot" style="background:var(--warn)"></i>没看到设备：用 USB 线插上，或按电源键开机（闲置会自动关机），检测到会自动继续</span>':`<span><i class="dot" style="background:var(--ok)"></i>${C.dev}已连上${REAL?' '+htmlEsc(devNow().port):''}，计时点输出正常</span>`}<span><i class="dot" style="background:var(--ok)"></i>${C.mode}</span><span><i class="dot" style="background:var(--ok)"></i>量 ${D.lines.length} 条线：${D.lines.map(l=>D.S.startShort+' → '+l.end).join('；')}</span></div>
  <dl class="cform">
   <dt>谁来${C.act}</dt><dd><p style="margin:0">${C.who}</p><p class="note" style="margin:4px 0 0">${C.why}</p></dd>
   <dt>测几轮</dt><dd><div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><div class="seg" role="group" aria-label="测几轮">${[10,20,30].map(n=>`<button data-coln="${n}" aria-pressed="${n===colN}">${n} 轮${n===20?'（推荐）':''}</button>`).join('')}</div><label class="note" style="display:inline-flex;align-items:center;gap:6px">自己填<input type="number" id="col-n" min="3" max="100" step="1" value="${[10,20,30].includes(colN)?'':colN}" placeholder="3～100" style="width:5.5em"> 轮</label></div>
@@ -1243,7 +1243,7 @@ function guide(){const F=FF[scene];
  if(page==='settings'){if(hStage<1)return null;if(setFirst&&!keyTested&&setLLM!=='cc')return ['填大模型密钥：粘贴进去，点「测试密钥」','#set-key'];return ['准备好了，点「回去继续」','[data-resume]']}
  if(page==='steps'){if(stepsRead<2)return ['不用操作，等它读完（一般 1～3 分钟）。读完会弹窗告诉你',null];
   if(alsoFace===null)return ['先回答「读代码时发现一件事」','#sideask'];return ['看一眼「要你看一眼」里的步骤，没问题就点「确认，去插计时点」','[data-go="flash"]']}
- if(page==='flash'){if(fl.st===4)return ['没看到设备：用 USB 线插上设备，插上会自动继续','[data-fl="plug"]'];
+ if(page==='flash'){if(fl.st===4)return ['没看到设备：用 USB 线插上设备，或按电源键开机（闲置会自动关机），检测到会自动继续','[data-fl="plug"]'];
   if(fl.st===2)return ['装好了，马上进入多轮实测',null];
   if(fl.st===1&&fl.step===4)return [F.big,'.bigask'];
   if(fl.st===1)return [`正在${FST()[fl.step][0]}，不用操作，做完会提示你`,null];
