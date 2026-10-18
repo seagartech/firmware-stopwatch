@@ -490,3 +490,14 @@ def test_long_source_urls_become_a_short_link():
                          capture_output=True, text=True, check=True).stdout
     assert '<a href="https://a.org/x/c3Q(eq)"' in out and "原文链接</a> 另有参考" in out
     assert "srcHtml(es.source)" in js
+
+
+def test_start_reported_many_times_uses_the_one_right_before_the_next_step():
+    # 真测第 31 次：没人说话的 45 秒里杂音让"判断你说完"报了 14 次，码表取了第一次，说完到开口记成 41 秒
+    sc = {"start": {"point": "P1", "name": "你说完"},
+          "segments": {"a": {"from": "P1", "to": "P3", "name": "上传听写"}, "b": {"from": "P3", "to": "P4", "name": "等声音"}},
+          "lines": [{"name": "到开口", "segments": ["a", "b"]}]}
+    noise = [f"FSW,P1,{(35 + i * 3) * 1_000_000},1" for i in range(14)]
+    lines = ["FSW,RESET,30000000,0"] + noise + ["FSW,P1,75630000,1", "FSW,P3,76040000,0", "FSW,P4,76800000,0", "FSW,RESET,80000000,0"]
+    r = [x for x in m.collect(lines, m.Spec.from_scenario(sc)) if x.get("ok")]
+    assert len(r) == 1 and r[0]["ends"] == [1.17]

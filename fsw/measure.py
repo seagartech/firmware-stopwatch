@@ -298,6 +298,7 @@ class Collector:
     def _ok_or_stale(self):
         """比起点还早的点不是这一轮的（决策 111）：比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它，
         这一轮真正的那一次没记到。这样的轮不能算（也不能拿它判问题），写清楚是哪个点，自动补一轮。"""
+        self._latest_start()
         stale = []
         for x in self.spec.need:
             if x == self.spec.start:
@@ -314,6 +315,21 @@ class Collector:
         self.att += 1
         return {"ok": False, "att": self.att, "stale": True,
                 "missing": [self.spec.names.get(x, x) + "（记到的是这一轮开始之前的）" for x in stale]}
+
+    def _latest_start(self):
+        """起点一轮里报了好几次（比如设备每听到一阵杂音停下就判一次"说完了"）：取紧挨着下一步之前的那一次，
+        不取第一次。不然人真正说完之前几十秒的那次杂音会被当成起点（真测第 31 次：说完到开口记成 41 秒）。"""
+        st = self.spec.start
+        occ = sorted(self.occ.get(st, []))
+        if len(occ) < 2:
+            return
+        nxt = {g[0][1] for g in (l["segs"] for l in self.spec.lines) if g and g[0][0] == st}  # 每条线起点之后的第一步
+        ts = [o[0] for x in nxt for o in self.occ.get(x, []) if o[0] >= occ[0][0]]
+        if not ts:
+            return
+        before = [o for o in occ if o[0] <= min(ts)]
+        if before:
+            self.cur[st] = before[-1]
 
     def _ok(self):
         self.att += 1
