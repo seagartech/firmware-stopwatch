@@ -257,6 +257,7 @@ def real_scenario(page, standard, values=None):
             "point_names": {x["p"]: x["n"] for x in steps},
             "point_kinds": {x["p"]: x.get("kind") or "" for x in steps if x.get("felt")},
             "category": page.get("category") or "",
+            "start_late": bool(page.get("startLate")), "start_note": page.get("startNote") or "",
             "optional": [x["p"] for x in steps if x.get("opt")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
             "matched": mp}
@@ -352,6 +353,9 @@ def with_default_experience(sc):
     end = ((sc.get("segments") or {}).get((line.get("segments") or [""])[-1]) or {}).get("to")
     if end not in kinds:  # 这条线的终点不是 AI 标的"感觉到的结果"（老的识别结果没标）：不知道人在等什么，不套
         return sc
+    if sc.get("start_late"):  # 起点比人做完晚一截（比如要等服务器回话才知道）：体验标准从人做完算起，拿少算的用时去比会判轻，不比
+        why = sc.get("start_note") or "起点之前还有一段设备看不见"
+        return {**sc, "exp_skip": f"起点比你做完晚一截（{why.rstrip('。')}），测出的用时少算了这段，所以不拿体验标准比"}
     ref = reference(sc.get("category"))  # 按 AI 认出的设备类别挑；对不上用尼尔森三档（10-18 用户定）
     if not ref or ref.get("fair") is None:
         return sc

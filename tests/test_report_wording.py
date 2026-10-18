@@ -57,7 +57,7 @@ J = {"labels": [
 
 def subline_of(j):
     D = {"lines": [{"name": "开口这条", "end": "设备出声", "med": 2.6}], "allSegs": SEGS, "rounds": [{"n": 1}, {"n": 2}, {"n": 3}], "main": {"name": "开口这条"}}
-    return run(["f", "roundList", "withJudge", "subline"], f"subline(withJudge({json.dumps(D)},{json.dumps(j)}))")
+    return run(["f", "roundList", "noExp", "withJudge", "subline"], f"subline(withJudge({json.dumps(D)},{json.dumps(j)}))")
 
 
 def test_subline_uses_merged_wording():

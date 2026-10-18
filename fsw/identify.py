@@ -40,7 +40,7 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
  "summary": "一段话结论：链路有几步，有没有用户需要知道的重要情况（比如某一段不在设备上发生）",
  "start_found": true, "end_found": true,
  "missing": "起点或终点找不到时说清是哪一头、为什么；都找到就空着",
- "start": {{"name": "起点的短名字，6 个字以内，比如：你说完", "note": "起点之前设备看不见的那段，没有就空"}},
+ "start": {{"name": "起点的短名字，6 个字以内，比如：你说完", "note": "起点之前设备看不见的那段，没有就空", "late": "true / false（人做完到起点之间，是否还隔着上传、服务器或手机处理这类明显要花时间的环节；只差按键消抖、驱动上报这种几十毫秒的写 false）"}},
  "main": {{"name": "要测的这条线的名字，比如：开口这条", "end": "终点的短名字，6 个字以内，比如：设备开口"}},
  "side": null 或 {{"name": "顺带发现的线，比如：表情这条", "end": "比如：换上表情", "found": "发现了什么，一句话，比如：设备开口说话之前，会先换一个表情", "why": "为什么推荐也测，一句话"}},
  "steps": [
@@ -72,6 +72,7 @@ steps 按发生的先后顺序排；segments 是要测的这条线从起点到�
 - 设备有几种触发方式（比如点屏幕、喊唤醒词、接着上一句说）时，起点选几种方式汇合后、每一轮都会经过的那一步；只在某一种方式才走的步骤可以列，但 always 写 false。
 - 起点和每一个 always=true 的步骤，在连续使用时（比如连续对话里的第二句、第三句，连续刷第二张卡）也必须每次都经过；只在开机、唤醒、建立连接时走一次的步骤（比如开始连接、连上服务器）always 写 false，不能当起点。
 - 起点是用户做完那件事、设备知道了的时刻（比如判断你说完了、读到卡号），不要选"进入聆听""开始等待"这类事情还没发生的时刻：那样会把等人开口的时间也算进去。
+- 设备自己能察觉人做完的那一下（比如设备自己判断出安静了、按键松开、读卡芯片报卡）优先当起点；要等服务器、手机回话才知道的时刻只在设备自己确实察觉不到时才用，并把 start.late 写 true。
 - 拿不准就标"低"或"中"，并在 doubt 里写为什么，不要编。
 - 说明文字里不要写 P1、P2 这样的编号，写步骤的中文名。
 - 起点或终点在源码里找不到，就把 start_found / end_found 写 false，并在 missing 里说清楚。
@@ -243,7 +244,7 @@ def to_page(r, what):
         "server": r.get("outside_note") or "", "mapWhat": what, "category": str(r.get("category") or "").strip(),
         "mapSel": next((s["p"] for s in steps if s["sure"] != "高"), steps[0]["p"]),
         "measure": f"{sname} → {mend}", "mainTitle": f"{mname}：{sname} → {mend}",
-        "act": str(r.get("act") or "").strip(), "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "",
+        "act": str(r.get("act") or "").strip(), "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "", "startLate": start.get("late") in (True, "true", "是"),
         "sideAsk": None, "sideTitle": "", "sideLbl": "",
     }
     if side:

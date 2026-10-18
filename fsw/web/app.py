@@ -1324,7 +1324,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(404, "还没有测完的轮")
         out = jdg.judge(sc, ok)
         keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points", "range_list",
-                "first_run")
+                "first_run", "exp_skip")
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
