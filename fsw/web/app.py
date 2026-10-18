@@ -879,6 +879,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 heard["at"] = time.time()
                 heard["marks"] += bool(ins.count_marks([line]))
+                heard["resets"] += "FSW,RESET" in line
                 feed(line)
                 cur = rounds["cur"]
                 job["got"] = sorted(cur)
@@ -887,12 +888,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
             def enough():  # 有一轮全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
                 return rounds["best"] == want
-            heard = {"marks": 0, "at": time.time()}  # 电脑语音：收到几行计时点、最后一行设备输出在什么时候
+            heard = {"marks": 0, "resets": 0, "at": time.time()}  # 电脑语音：收到几行计时点、几个一轮结束标记、最后一行设备输出在什么时候
             job.update(speak=vox["on"], speak_hint="")
             _speak_loop(lambda: superseded() or enough() or job["status"] != "running",
                         lambda: bool(job.get("dev_seen")) and time.time() - heard["at"] >= tts.IDLE_SECS + 2,
                         lambda: heard["marks"], lambda: vox["items"][0], lambda t: job.update(speak_hint=t),
-                        lambda: time.time() - heard["at"])
+                        lambda: heard["resets"])
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -1059,11 +1060,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         vox.update(on=on, wake=body.wake.strip(), items=[x for x in body.items if x.strip()])
         return speak_get()
 
-    def _speak_loop(stop, idle, marks, next_item, hint, quiet=None):
+    def _speak_loop(stop, idle, marks, next_item, hint, resets=None):
         """后台线程里让电脑一句句播（vox 打开时）：多轮实测和试一次共用。"""
         if not vox["on"]:
             return
-        threading.Thread(target=_guarded(lambda: tts.drive(speaker, next_item, idle, marks, stop, hint, wake=vox["wake"], quiet=quiet),
+        threading.Thread(target=_guarded(lambda: tts.drive(speaker, next_item, idle, marks, stop, hint, wake=vox["wake"], resets=resets),
                                          lambda e: hint(f"电脑语音播放出错了，请改由人说：{e}")), daemon=True).start()
 
     @app.post("/api/collect/start")
@@ -1135,7 +1136,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def on_line(line):
             raw.write(line + "\n")  # 设备调试口原样存一份（码表不改日志去向）
             raw.flush()
-            quiet["line_at"] = time.time()
+            quiet["resets"] = quiet.get("resets", 0) + ("FSW,RESET" in line)
             if meas.parse_line(line):
                 quiet.update(since=time.time(), lines=0, odd=0, any=True, marks=quiet.get("marks", 0) + 1)
                 job["hint"] = ""
@@ -1238,7 +1239,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             _speak_loop(stop, lambda: job["status"] == "running" and not (coll.started and coll.cur and not coll.done and not coll.ready)
                         and time.time() - quiet["since"] >= tts.IDLE_SECS,
                         lambda: quiet.get("marks", 0), lambda: vox["items"][ok_count() % len(vox["items"])],
-                        lambda t: job.update(speak_hint=t), lambda: time.time() - quiet.get("line_at", 0))
+                        lambda t: job.update(speak_hint=t), lambda: quiet.get("resets", 0))
             while not stop():
                 ports = port_finder()
                 if not ports:
