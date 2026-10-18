@@ -247,8 +247,12 @@ def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
     segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
     sc = stds.with_default_experience(stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None))
     names = [l["name"] for l in sc["lines"]]
-    assert names == ["到喇叭出第一声", "回答这条"] and sc["lines"][0]["segments"] == ["P1-P2", "P2-P3"]
+    assert names == ["到喇叭出第一声", "到喇叭最后一声"] and sc["lines"][0]["segments"] == ["P1-P2", "P2-P3"]
     assert [e["line"] for e in sc["experiences"]] == ["到喇叭出第一声"]
     spec = m.Spec.from_scenario(sc)
     cur = {"P1": (0, 0), "P2": (1_000_000, 0), "P3": (1_800_000, 0), "P4": (4_000_000, 0)}
     assert m.compute(cur, spec)["ends"] == [1.8, 4.0]
+    from fsw import judge as jdg
+    rounds = [{"n": i + 1, **m.compute(cur, spec)} for i in range(10)]
+    first = jdg.judge(sc, rounds)["lines"][0]
+    assert first["exp"] == "差" and first["combo"] == "体验差：慢在「服务器」（1.00 秒，占 56%）"
