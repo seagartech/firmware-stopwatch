@@ -187,7 +187,9 @@ def real_scenario(page, standard, values=None):
     mp = match_points(steps, standard) if standard else {}
     main = [(g["a"], g["b"], g) for g in page.get("segs") or []]
     side = [(g["a"], g["b"], g) for g in page.get("fsegs") or []]
-    if side:  # 顺带那条线从起点算：先走要测的这条，到分叉的地方再拐过去
+    on_main = {a for a, _, _ in main} | {b for _, b, _ in main}
+    if side and side[0][0] in on_main:  # 顺带那条线从起点算：先走要测的这条，到分叉的地方再拐过去
+        # 分叉点不在要测的这条上（比如发生在起点之前的"按下变色"）：从它自己的第一个点单独量，不和主线拼
         prefix = []
         for a, b, g in main:
             if a == side[0][0]:
