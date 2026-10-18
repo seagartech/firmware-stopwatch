@@ -441,6 +441,7 @@ def test_last_point_takes_the_final_report_of_the_round():
         if l.startswith("FSW,P3,4000000"):
             assert c.progress() == (2, 3)  # 中途那次不算记好了
             assert c.flush(1.5) == []      # 停顿 1.5 秒不收尾
+    out += c.finish()  # 结束标记之后还要等 1 秒收"最后一声"的尾巴，等完才交出这一轮
     ok = [r for r in out if r.get("ok")]
     assert len(ok) == 1 and ok[0]["ends"] == [1.25, 8.0]
 
@@ -511,3 +512,12 @@ def test_round_with_an_absurdly_long_segment_is_left_out():
     rounds[3]["segs"]["c"] = 30.0   # 放回答长短看内容，不查
     assert m.outliers(rounds, sc) == {1}
     assert m.outliers(rounds[:4], sc) == set()  # 太少看不出平时多长
+
+
+def test_last_point_reported_just_after_the_round_end_marker_still_counts():
+    # 真测第 27 次：回答中途已报过一次"放完"，真正最后一声在设备回到聆听（结束标记）之后 7 毫秒才报出来，少算了 2～3 秒
+    lines = ["FSW,RESET,0,0", "FSW,P1,1000000,0", "FSW,P2,2250000,0", "FSW,P3,4000000,1",
+             "FSW,RESET,9000000,0", "FSW,P3,9007000,5",
+             "FSW,P1,10000000,0", "FSW,P2,11000000,0", "FSW,P3,13000000,1", "FSW,RESET,14000000,0"]
+    ok = [r for r in m.collect(lines, _last_spec()) if r.get("ok")]
+    assert [r["ends"] for r in ok] == [[1.25, 8.007], [1.0, 3.0]]
