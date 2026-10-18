@@ -338,7 +338,7 @@ class SyncBody(BaseModel):
 
 
 def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
-               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None, speaker=None):
+               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None, speaker=None, volume_reader=None):
     app = FastAPI(title="固件码表")
     demos = load_demos()
     cfg = lambda: load_config(config_dir)  # 设置文件夹默认 ~/.config/firmware-stopwatch/，测试时换成临时文件夹
@@ -349,6 +349,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     uploads = ascii_work_root(data_dir) / "_uploads"
     picker = picker or native_pick
     installs_rec = data_dir / "idf-installs.json"  # 码表帮装过的编译工具，记下位置以后也能找到
+    volume_reader = volume_reader or ((lambda: None) if speaker else tts.volume)  # 测试换了播放就不去查真音量
     speaker = speaker or tts.say
     vox = {"on": False, "wake": "", "items": []}  # 电脑语音代替人说话（决策 158）：网页找完关键步骤后设好
 
@@ -893,7 +894,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             _speak_loop(lambda: superseded() or enough() or job["status"] != "running",
                         lambda: bool(job.get("dev_seen")) and time.time() - heard["at"] >= tts.IDLE_SECS + 2,
                         lambda: heard["marks"], lambda: vox["items"][0], lambda t: job.update(speak_hint=t),
-                        lambda: heard["resets"])
+                        lambda: heard["resets"], again="再试一次")
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -1060,11 +1061,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         vox.update(on=on, wake=body.wake.strip(), items=[x for x in body.items if x.strip()])
         return speak_get()
 
-    def _speak_loop(stop, idle, marks, next_item, hint, resets=None):
+    def _speak_loop(stop, idle, marks, next_item, hint, resets=None, again="接着测"):
         """后台线程里让电脑一句句播（vox 打开时）：多轮实测和试一次共用。"""
         if not vox["on"]:
             return
-        threading.Thread(target=_guarded(lambda: tts.drive(speaker, next_item, idle, marks, stop, hint, wake=vox["wake"], resets=resets),
+        vol = volume_reader()
+        if vol is not None and vol < tts.LOW_VOLUME:
+            hint(f"电脑音量只有 {vol}，设备可能听不清：调到 {tts.LOW_VOLUME} 以上。")
+        threading.Thread(target=_guarded(lambda: tts.drive(speaker, next_item, idle, marks, stop, hint, wake=vox["wake"],
+                                                           resets=resets, again=again),
                                          lambda e: hint(f"电脑语音播放出错了，请改由人说：{e}")), daemon=True).start()
 
     @app.post("/api/collect/start")

@@ -163,3 +163,10 @@ def test_collect_with_computer_speaking(tmp_path):
     finally:
         voice.IDLE_SECS = voice_idle
     assert j["speak"] is True and said and set(said) == {"一加一等于几"}
+
+
+def test_give_up_hint_names_the_button_of_the_page():
+    clk, hints = Clock(), []
+    voice.drive(lambda t: None, lambda: "一加一等于几", lambda: True, lambda: 0, lambda: False, hints.append,
+                sleep=clk.sleep, clock=clk, again="再试一次")
+    assert "「再试一次」" in hints[-1]
