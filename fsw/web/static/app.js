@@ -352,11 +352,7 @@ const examples=`<div class="pills"><span class="note">比如：</span>${['从按
 
 // 精简流程（决策 158）：一律测全程；点「开始测量」后自动执行，只在要人工操作或校验没过时停下
 const WHOLE='全程：从设备最早知道被触发，到用户感受到的最后一个结果';
-let AUTO=false,autoHold='',autoBusy='',SPEAK=false,SPEAKOK=false,SPEAKON=false;
-fetch('/api/speak').then(r=>r.json()).then(j=>{SPEAKOK=!!j.available;if(page==='home')render()}).catch(()=>{});
-// 找完关键步骤：按 AI 认出来的场景挑每轮做什么；语音设备且选了电脑朗读，就把句子和唤醒词交给后台
-async function speakSetup(){await loadRCT();SPEAKON=SPEAK&&!!RCT&&RCT.template==='对话';
- try{await post('/api/speak',{on:SPEAKON,wake:(IDENT&&IDENT.page&&IDENT.page.wake)||'',items:SPEAKON?RCT.items:[]})}catch(e){SPEAKON=false}}
+let AUTO=false,autoHold='',autoBusy='';
 const AUTO_ROUNDS=10;
 function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),REAL&&REAL.root].includes(p.path));
  const auto=again?3.5:7.5,human=Math.round((AUTO_ROUNDS*15+45)/60);  // 按验证 14 的实测：大模型三次约 5 分钟，编译烧录约 2.5 分钟；每轮约 15 秒
@@ -365,14 +361,14 @@ function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),RE
   <div><b class="num">约 ${auto} 分钟</b><span class="note">自动执行（无需值守）</span></div>
   <div class="hum"><b class="num">约 ${human} 分钟</b><span class="note">人工操作（需在场）</span></div></div>
   <ol class="note" style="margin:8px 0 0;padding-left:20px"><li>连接设备到电脑的 USB 口（烧录前提示）</li><li>按页面提示触发设备 ${AUTO_ROUNDS + 1} 次：第 1 次校验计时点，不计入数据；之后 ${AUTO_ROUNDS} 轮，每轮约 5～15 秒</li></ol>
-  ${SPEAKOK?`<div class="chiprow" style="grid-template-columns:5.5em 1fr"><span class="note">触发方式</span><span style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><span class="seg" role="group" aria-label="触发方式"><button data-speak="0" aria-pressed="${!SPEAK}">人工</button><button data-speak="1" aria-pressed="${SPEAK}">电脑朗读</button></span><span class="note">${SPEAK?'语音设备由电脑朗读句子代替人说话，电脑音量调到 50 以上；AI 认出不是语音设备时自动改回人工':'由人触发设备'}</span></span></div>`:''}</section>`}
+  </section>`}
 // 自动往下走：每次画完页面看一眼该不该进下一步（同一步只触发一次）
 function autoTick(){if(!AUTO||pop)return;
  const go=(key,fn)=>{if(autoBusy===key)return;autoBusy=key;setTimeout(fn,0)};
  if(page==='home'&&hStage===3&&stepsRead===2){
   const P=REAL&&IDENT&&IDENT.page,bad=P?(P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(IDENT.provider==='deepseek'?'这次用的是 DeepSeek，准确率较低，请核对关键步骤':'')):'';
   return go('steps',()=>{hStage=1;mode='boss';if(bad){AUTO=false;autoHold=bad;page='steps';render();window.scrollTo(0,0);return}
-   page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){speakSetup();fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)})}
+   page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)})}
  if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){AUTO=false;envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
  if(page==='flash'&&fl.st===2)return go('collect',()=>{page='collect';colN=AUTO_ROUNDS;justFlashed=true;colStart();render();window.scrollTo(0,0)});
  if(page==='collect'&&col.st===2)return go('report',()=>setTimeout(()=>{if(!AUTO||page!=='collect'||col.st!==2)return;AUTO=false;page='report';mode='boss';render();window.scrollTo(0,0)},1500));
@@ -886,7 +882,7 @@ function flList(from=0,to=4){const n=to-from+1;
  return `<ol class="isteps">${li}</ol>${big}`}
 const stepLog=()=>`<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`;
 // 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
-const tryAct=()=>{if(FSWJ&&FSWJ.speak)return `不用说话，电脑正在朗读"${htmlEsc((RCT&&RCT.items||[''])[0])}"${FSWJ.speak_hint?`。${htmlEsc(FSWJ.speak_hint)}`:''}`;const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
+const tryAct=()=>{const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
 function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
  if(!up&&J.boot_quiet)return `<div class="bigask"><b>设备可能已经开机了：现在对设备${tryAct()}</b><span class="note">没看到它的开机输出（有的设备开机后不出声，或者开机那几行在码表连上之前就打完了）。看设备已经回到待命画面，就直接做一次；码表收到计时点就算通。</span>${fullLogBtn()}${fullLog()}</div>`;  // 不一直转圈等"开机"
  if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;
@@ -1019,7 +1015,7 @@ function colWatch(){colStop();const poll=()=>{if(!colT)colT=setInterval(async()=
   colES.onerror=()=>{if(colES){colES.close();colES=null}if(col.st===1)poll()}}catch(e){poll()}}
 function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}));const C=CX(),before=col.got.length;if(j.status==='done'||j.status==='stopped'||j.status==='suspect'){fetchReport();if(realFlash())histLoad()}
  col.got=(j.rounds||[]).map(r=>r.ok?{n:r.n,e:r.ends,probs:C.probs.filter(p=>(r.probs||[]).includes(p.k)),att:r.att,segs:r.segs}:{bad:true,att:r.att,missing:r.missing||[]});
- col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.speak_hint||j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
+ col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
  const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));
  // "叮"在这一轮的计时点全部收到时就响（和设备出声差不多同时）；码表还要等一会儿才收尾记下这一轮，收尾时不再重复响
  for(const x of col.got.slice(before)){if(!x.bad&&col.rd){col.rd=false;continue}ding(!!x.bad)}
@@ -1060,7 +1056,7 @@ function tipOf(x){const C=CX(),L=DX().lines,at=t=>t.replace(/&/g,'&amp;').replac
 function colB(){const k=okRounds().length,cur=Math.min(k,colN-1),C=CX();
  const sq=x=>{const p=x.probs&&x.probs[0];return `<i class="sq" tabindex="0" data-tip="${tipOf(x)}" style="background:${x.bad?'var(--soft)':p?`var(--${p.c})`:'var(--ok)'}"></i>`};
  return `<section class="panel" style="text-align:center">
- ${col.st===1?`<p class="note" style="margin:0">第 ${cur+1} 轮 / 共 ${colN} 轮</p><p style="font-size:15px;margin:10px 0 4px">${COLJ&&COLJ.speak?(col.phase===0?'电脑朗读（不用说话）：':'电脑刚才朗读的是：'):col.phase===0?C.say:C.said}</p><p style="font-size:26px;font-weight:600;margin:0 0 16px">"${C.items[cur%C.items.length]}"</p>
+ ${col.st===1?`<p class="note" style="margin:0">第 ${cur+1} 轮 / 共 ${colN} 轮</p><p style="font-size:15px;margin:10px 0 4px">${col.phase===0?C.say:C.said}</p><p style="font-size:26px;font-weight:600;margin:0 0 16px">"${C.items[cur%C.items.length]}"</p>
  <div class="phs">${PH().map((p,i)=>`<span class="${i<col.phase?'ok':i===col.phase?'cur':''}">${p}</span>`).join('<b>→</b>')}</div>`:col.st===4?`<p style="font-size:20px;font-weight:600">已暂停：第 1 轮自动校验没通过</p>`:col.st===3?`<p style="font-size:20px;font-weight:600">已停止：测了 ${k} / ${colN} 轮</p>`:`<p style="font-size:20px;font-weight:600">测完了</p>`}
  <div class="sqs">${col.got.map(sq).join('')}${[...Array(Math.max(0,colN-k))].map(()=>'<i class="sq"></i>').join('')}</div>
  <p class="note" style="margin-bottom:2px">一格是一轮，颜色表示这轮有没有出问题（不是快慢）。鼠标移到格子上看这轮各段用时。</p><p class="note"><i class="dot" style="background:var(--ok)"></i>正常　${C.probs.map(p=>`<i class="dot" style="background:var(--${p.c})"></i>${p.t}　`).join('')}<i class="dot" style="background:var(--soft)"></i>没收全，自动补一轮</p>
@@ -1479,7 +1475,6 @@ document.addEventListener('click',e=>{
     SAVED=j.settings;const e2=await (await fetch('/api/env')).json();IDFS=(e2.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast('✓ 已记下这个位置');render()});return}
   if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
   if(e.target.closest('[data-autostart]')){autoStart();return}
-  const spk=e.target.closest('[data-speak]');if(spk){SPEAK=spk.dataset.speak==='1';render();return}
   if(e.target.closest('[data-autofix]')){AUTO=false;autoHold='第 1 轮自动校验没通过：'+((COLJ&&COLJ.suspect)||[]).map(x=>`「${x.name}」${fms(Math.abs(x.seconds))} 秒`).join('、')+'。请检查这一段起止两个计时点的位置，改好后重新插入。';page='steps';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-mclose]')){hStage=1;render();return}
   if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}

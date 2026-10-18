@@ -23,11 +23,11 @@ def door_lines(check_first, rounds=12):
     return list(m.demo_lines(d, rounds))
 
 
-def test_outside_segment_too_short_is_suspect():
+def test_reversed_segment_is_suspect_but_a_very_short_server_segment_is_not():
     sc = DOOR["scenario"]
-    assert m.suspects({"segs": {"check": 0.003, "beep": 0.004}}, sc) == [
-        {"segment": "check", "name": "服务器校验并返回", "seconds": 0.003, "why": "这段要经过网络或服务器，正常不会短于 0.05 秒"}]
-    assert m.suspects({"segs": {"check": -0.2}}, sc)[0]["why"].startswith("这段终点比起点先记到")
+    assert m.suspects({"segs": {"check": -0.2}}, sc) == [
+        {"segment": "check", "name": "服务器校验并返回", "seconds": -0.2, "why": "这段终点比起点先记到，两个计时点的先后对不上"}]
+    assert m.suspects({"segs": {"check": 0.001}}, sc) == []  # 服务器连着发两条消息：真的只有一两毫秒
 
 
 def test_device_segments_of_a_few_ms_are_fine():
@@ -56,7 +56,7 @@ def wait(c, until, timeout=10):
 
 
 def test_first_round_check_stops_measuring(make):
-    c = make(door_lines(0.003))
+    c = make(door_lines(-0.2))
     c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 10})
     j = wait(c, lambda j: j["status"] not in ("running", "waiting_device"))
     assert j["status"] == "suspect" and j["suspect"][0]["name"] == "服务器校验并返回"
@@ -64,7 +64,7 @@ def test_first_round_check_stops_measuring(make):
 
 
 def test_ignore_and_resume_does_not_check_again(make):
-    c = make(door_lines(0.003))
+    c = make(door_lines(-0.2))
     c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 10})
     wait(c, lambda j: j["status"] == "suspect")
     c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 10, "resume": True})
@@ -83,93 +83,6 @@ def test_home_page_has_no_what_input_and_starts_with_one_button():
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert 'id="h-what"' not in js and 'data-autostart="1"' in js
     assert "let colVar='b',colN=AUTO_ROUNDS" in js and "const AUTO_ROUNDS=10" in js
-
-
-# ===== 电脑朗读代替人说话 =====
-from fsw import speech as voice
-
-
-class Clock:
-    def __init__(self):
-        self.t = 0.0
-
-    def sleep(self, s):
-        self.t += s
-
-    def __call__(self):
-        return self.t
-
-
-def test_drive_wakes_once_waits_for_reply_to_end_then_asks_each_round():
-    # 设备听到唤醒词先回应约 4 秒：期间日志会停（不能看安静），说完才打一轮结束标记；之后接着听，不用再唤醒
-    clk, said, st = Clock(), [], {"marks": 0, "resets": 0, "busy": 0.0, "end": None}
-
-    def speak(t):
-        said.append((t, clk.t))
-        st["marks"] += 1
-        st["busy"] = clk.t + 4.0
-        st["end"] = clk.t + 4.0
-
-    def resets():
-        if st["end"] is not None and clk.t >= st["end"]:
-            st["resets"] += 1
-            st["end"] = None
-        return st["resets"]
-    idle = lambda: resets() is not None and clk.t >= st["busy"] + 3
-    stop = lambda: len(said) >= 4 and clk.t > st["busy"]
-    r = voice.drive(speak, lambda: "一加一等于几", idle, lambda: st["marks"], stop, lambda t: None,
-                    wake="你好", sleep=clk.sleep, clock=clk, resets=resets)
-    assert r == "stopped" and [t for t, _ in said] == ["你好", "一加一等于几", "一加一等于几", "一加一等于几"]
-    assert said[1][1] - said[0][1] >= 4.0  # 等唤醒回应说完才问
-
-
-def test_drive_wakes_again_after_device_did_not_react():
-    clk, said, hints = Clock(), [], []
-    voice.drive(lambda t: said.append(t), lambda: "一加一等于几", lambda: True, lambda: 0, lambda: False, hints.append,
-                wake="你好", sleep=clk.sleep, clock=clk, resets=lambda: 0)
-    assert said == ["你好", "一加一等于几"] * 3
-
-
-def test_drive_gives_up_after_three_silent_tries_with_volume_hint():
-    clk, hints = Clock(), []
-    r = voice.drive(lambda t: None, lambda: "一加一等于几", lambda: True, lambda: 0, lambda: False, hints.append,
-                    sleep=clk.sleep, clock=clk)
-    assert r == "gave_up" and "音量" in hints[0] and "已停止语音播放" in hints[-1]
-
-
-def test_collect_with_computer_speaking(tmp_path):
-    said = []
-    lines = door_lines(0.4)
-
-    class Dev(FakeSerialDevice):  # 电脑播一句，设备才吐一轮
-        def stream(self, port, on_line, stop):
-            heard = 0
-            while not stop():
-                if len(said) > heard and self.pos < len(lines):  # 吐完这一轮（到下一个 RESET 之前）
-                    heard += 1
-                    on_line(lines[self.pos]); self.pos += 1
-                    while self.pos < len(lines) and "RESET" not in lines[self.pos]:
-                        on_line(lines[self.pos]); self.pos += 1
-                time.sleep(0.001)
-    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", idf_finder=lambda: [],
-                              cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/x"],
-                              device=Dev(lines), wait_step=0.01, speaker=said.append))
-    assert c.post("/api/speak", json={"on": True, "items": ["一加一等于几"]}).json()["on"] is True
-    voice_idle = voice.IDLE_SECS
-    voice.IDLE_SECS = 0.05
-    try:
-        c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 3})
-        j = wait(c, lambda j: j["status"] == "done", timeout=20)
-    finally:
-        voice.IDLE_SECS = voice_idle
-    assert j["speak"] is True and said and set(said) == {"一加一等于几"}
-
-
-def test_give_up_hint_names_the_button_of_the_page():
-    clk, hints = Clock(), []
-    voice.drive(lambda t: None, lambda: "一加一等于几", lambda: True, lambda: 0, lambda: False, hints.append,
-                sleep=clk.sleep, clock=clk, again="再试一次")
-    assert "「再试一次」" in hints[-1]
 
 
 def _page_with_touch_start():
@@ -203,3 +116,41 @@ def test_identify_marks_trigger_only_steps_optional():
          "segments": [{"from": "P1", "to": "P2", "name": "x"}]}
     steps = identify.to_page(r, "全程")["steps"]
     assert steps[0].get("opt") is True and "opt" not in steps[1]
+
+
+
+def _talk_spec():
+    sc = {"start": {"point": "P5", "name": "你说完"},
+          "segments": {"a": {"from": "P5", "to": "P6", "name": "服务器"}, "b": {"from": "P6", "to": "P7", "name": "放声音"}},
+          "lines": [{"name": "开口这条", "segments": ["a", "b"]}]}
+    return m.Spec.from_scenario(sc)
+
+
+def test_last_sound_ending_after_the_round_marker_counts_for_its_own_round():
+    # 实测顺序：…P6 → RESET → P5（下一轮）→ P7（上一轮最后一声放完，晚 0.13 秒）→ P6 …
+    us = lambda s: f"{int(s * 1e6)}"
+    lines = ["FSW,RESET," + us(0) + ",0",
+             "FSW,P5," + us(1.0) + ",0", "FSW,P6," + us(2.0) + ",0", "FSW,RESET," + us(4.0) + ",0",
+             "FSW,P5," + us(4.05) + ",0", "FSW,P7," + us(4.13) + ",0", "FSW,P6," + us(5.0) + ",0",
+             "FSW,RESET," + us(7.0) + ",0", "FSW,P7," + us(7.1) + ",0", "FSW,RESET," + us(9.0) + ",0"]
+    c = m.Collector(_talk_spec())
+    out = []
+    for l in lines:
+        out += c.feed(l)
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 2
+    assert [round(x, 2) for x in ok[0]["ends"]] == [3.13] and [round(x, 2) for x in ok[1]["ends"]] == [3.05]
+
+
+def test_leftover_end_of_a_round_already_judged_is_not_taken_by_the_next_round():
+    # 唤醒回应那一轮没有起点（不算一轮），它最后一声放完晚到：不能被下一轮当成自己的终点
+    us = lambda s: f"{int(s * 1e6)}"
+    lines = ["FSW,RESET," + us(0) + ",0", "FSW,P6," + us(1.0) + ",0", "FSW,RESET," + us(3.0) + ",0",
+             "FSW,P5," + us(3.05) + ",0", "FSW,P7," + us(3.1) + ",0", "FSW,P6," + us(4.0) + ",0", "FSW,P7," + us(5.0) + ",0",
+             "FSW,RESET," + us(6.0) + ",0"]
+    out = []
+    c = m.Collector(_talk_spec())
+    for l in lines:
+        out += c.feed(l)
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 1 and round(ok[0]["ends"][0], 2) == 1.95
