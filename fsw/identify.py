@@ -45,6 +45,7 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
   {{"id": "P1", "name": "中文名，8 个字以内，比如：收到听写文字", "file": "相对源码根目录的路径，比如 main/application.cc", "line": 123,
     "func": "函数名", "where": "before 或 after（插在这行之前还是之后）", "once": "first / last / every（一轮里记第一次、最后一次还是每次）",
     "line_of": "start（起点）/ main（要测的这条）/ side（顺带发现的那条）", "sure": "高 / 中 / 低",
+    "always": "true / false（每一轮都一定会经过这一步吗？只在某一种触发方式才走的写 false，比如点屏幕开始、喊唤醒词那一下）",
     "why": "为什么放这里（大白话）", "doubt": "拿不准的地方，没有就空"}}
  ],
  "segments": [{{"from": "P1", "to": "P2", "name": "这段在做什么", "who": "固件 / 硬件 / 网络 / 服务器，可以组合", "outside": false}}],
@@ -61,6 +62,7 @@ steps 按发生的先后顺序排；segments 是要测的这条线从起点到�
 - 每个位置必须是你亲自打开文件核对过的真实行号。
 - "收到"类的计时点放在任何条件判断（比如"状态不对就丢掉"）之前，被丢掉的也要能记到。
 - "切换完成""生效"类的计时点放在这次切换引起的动作（比如清空缓存、关掉录音）都做完之后。
+- 设备有几种触发方式（比如点屏幕、喊唤醒词、接着上一句说）时，起点选几种方式汇合后、每一轮都会经过的那一步；只在某一种方式才走的步骤可以列，但 always 写 false。
 - 拿不准就标"低"或"中"，并在 doubt 里写为什么，不要编。
 - 说明文字里不要写 P1、P2 这样的编号，写步骤的中文名。
 - 起点或终点在源码里找不到，就把 start_found / end_found 写 false，并在 missing 里说清楚。
@@ -176,7 +178,8 @@ def parse(text, root):
                 "where": s.get("where") or "", "once": s.get("once") or "",
                 "line_of": s.get("line_of") if s.get("line_of") in LINE_OF else "main",
                 "sure": s.get("sure") if s.get("sure") in SURE else "中",
-                "why": s.get("why") or "", "doubt": s.get("doubt") or "", "code": code, "loc_ok": problem is None}
+                "why": s.get("why") or "", "doubt": s.get("doubt") or "", "code": code, "loc_ok": problem is None,
+                "always": s.get("always") not in (False, "false", "否")}
         if problem:
             step["sure"], step["doubt"] = "低", problem + (("；" + step["doubt"]) if step["doubt"] else "")
         steps.append(step)
@@ -202,7 +205,7 @@ def to_page(r, what):
     steps = [{"p": s["id"], "n": s["name"], "f": Path(s["file"]).name or s["file"], "path": s["file"], "l": s["line"],
               "line": LINE_OF[s["line_of"]], "why": s["why"], "sure": s["sure"], "code": s["code"], "loc_ok": s["loc_ok"],
               "where": s["where"], "once": s["once"], "func": s["func"],
-              **({"note": s["doubt"]} if s["doubt"] else {})} for s in r["steps"]]
+              **({"note": s["doubt"]} if s["doubt"] else {}), **({} if s.get("always", True) else {"opt": True})} for s in r["steps"]]
     ids = {s["p"] for s in steps}
     start, main, side = r.get("start") or {}, r.get("main") or {}, r.get("side")
     side_steps = [s["p"] for s in steps if s["line"] == "face"]
