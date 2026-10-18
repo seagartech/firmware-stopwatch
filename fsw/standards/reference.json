@@ -1,10 +1,64 @@
 {
- "format": "fsw-reference/1",
- "name": "对话体验参考值",
- "experience": {
-  "fair": 1.5,
-  "good": 0.8,
-  "source": "参考值：出自一家语音 AI 测试公司（Hamming AI）的技术文章——800 毫秒内算好，800～1500 毫秒能察觉但能接受，超过 1500 毫秒对话开始\"断\"。不是国家或行业标准，也不是各厂家产品的统计",
-  "short": "参考值"
- }
+ "format": "fsw-reference/2",
+ "name": "体验标准库",
+ "note": "按设备类别挑体验标准；对不上任何类别就用尼尔森三档。只收有正式出处的数，查不实的类别不收（2026-10-18 调研）。",
+ "fallback": {
+  "key": "通用",
+  "fair": 1.0,
+  "good": 0.1,
+  "short": "尼尔森三档",
+  "source": "尼尔森响应时间三档（Jakob Nielsen，1993，人机交互研究）：0.1 秒内感觉是立刻的，1 秒内思路不会被打断，超过 10 秒注意力就跑了。不分设备，没有更具体的标准时用它。https://www.nngroup.com/articles/response-times-3-important-limits/"
+ },
+ "categories": [
+  {
+   "key": "语音对话",
+   "hint": "用麦克风听人说话、经语音识别后用喇叭回答的设备（智能音箱、语音助手）",
+   "fair": 2.0,
+   "good": 0.8,
+   "short": "团体标准 T/CESA 1045-2019",
+   "source": "T/CESA 1045-2019《智能音箱技术规范》6.3.3：语音输入结束到结果开始输出，A 级平均 ≤2.0 秒（团体标准）。https://www.ttbz.org.cn/Home/PdfFileStreamGet/c3QsMjgxNTU(eq) 另有行业参考：超过 1.5 秒对话开始\"断\"（Hamming AI 技术文章，不是标准）。"
+  },
+  {
+   "key": "门禁",
+   "hint": "刷卡、指纹、人脸等识别身份后开门的出入口控制设备（读卡芯片、继电器或电磁锁输出）",
+   "fair": 1.0,
+   "short": "浙江省门禁技术指南",
+   "source": "浙江省《施工现场门禁系统技术指南》（2017）6.6.2：读到完整凭证到执行部分开始动作 ≤1 秒（省级指南，写明依据 GB 50396-2007）。只量设备内部一段，码表测的会稍长。https://zjjcmspublic.oss-cn-hangzhou-zwynet-d01-a.internet.cloud.zj.gov.cn/jcms_files/jcms1/web3541/site/picture/old/W020170801475398369994.pdf"
+  },
+  {
+   "key": "智能门锁",
+   "hint": "装在门上、用电机驱动锁舌的门锁（指纹、密码、掌静脉、蓝牙开锁）",
+   "fair": 0.8,
+   "short": "团体标准 T/ZZB 3820-2024",
+   "source": "T/ZZB 3820-2024《掌静脉智能门锁》6.7：收到解锁指令到解锁 ≤0.8 秒（团体标准）。不含唤醒和识别时间，码表测的会稍长。https://www.ttbz.org.cn/Home/PdfFileStreamGet/c3QsMTU0NjYw"
+  },
+  {
+   "key": "刷卡终端",
+   "hint": "非接触刷卡交易或检票的终端、闸机（ISO 14443 读卡、扣费、蜂鸣、开闸）",
+   "fair": 0.3,
+   "short": "北京地方标准 DB11/T 159.1",
+   "source": "DB11/T 159.1-2015《市政交通一卡通技术规范 第1部分：总则》：寻卡成功到交易完成，消费类终端 ≤300 毫秒（地方标准）。不含蜂鸣和开闸。https://jtw.beijing.gov.cn/xxgk/flfg/jthy/201912/P020191231387273401570.pdf"
+  },
+  {
+   "key": "智能家居控制",
+   "hint": "经云端或手机控制的开关、插座、灯（继电器、调光，接 Alexa、米家、涂鸦等云平台）",
+   "fair": 0.8,
+   "short": "亚马逊 Alexa 认证",
+   "source": "Amazon Works with Alexa 要求：指令发出到收到设备回应，中位数 ≤800 毫秒、10 次里最慢 ≤1000 毫秒（厂商认证要求，只量云端一段）。https://developer.amazon.com/docs/smarthome/wwa-skill-requirements.html"
+  },
+  {
+   "key": "报警",
+   "hint": "火灾、烟雾、紧急按钮等报警设备（传感器或报警按钮触发后声光报警）",
+   "fair": 10.0,
+   "short": "国家标准 GB 4717 征求意见稿",
+   "source": "GB 4717《火灾报警控制器》征求意见稿 5.4.1.2 / 5.4.1.4：探测器或手动报警按钮信号输入后 10 秒内发出声光报警（国家标准草案）。https://members.wto.org/crnattachments/2024/TBT/CHN/24_01358_00_x.pdf"
+  },
+  {
+   "key": "倒车影像",
+   "hint": "挂倒挡后显示车后画面的车载摄像头系统",
+   "fair": 2.0,
+   "short": "美国法规 FMVSS 111",
+   "source": "FMVSS 111（49 CFR 571.111）S5.5.3：挂倒挡后 2.0 秒内显示倒车画面（美国联邦法规，含开机时间）。https://www.law.cornell.edu/cfr/text/49/571.111"
+  }
+ ]
 }

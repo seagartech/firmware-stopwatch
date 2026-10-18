@@ -127,7 +127,7 @@ def judge(scenario, rounds):
         e = experience(l["name"], st, es)
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
                              "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常", "new": bool(l.get("new")),
-                             "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short")} if es else None,
+                             "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category")} if es else None,
                              "combo": ANSWER_TXT if by_answer and e is None else combo(e, v == "正常", v, _big(l, seg_st, segs_def, st)),
                              "over_slow": 0 if by_answer else sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
                              "segments": l["segments"]})

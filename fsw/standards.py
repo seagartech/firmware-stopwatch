@@ -47,12 +47,26 @@ def load_all():
     return [d for d in out if d.get("segments")]
 
 
-def reference():
-    """通用的体验参考值（现在只有对话的 1.5 秒），不属于哪个设备。"""
+def _library():
     try:
-        return json.loads(REF_FILE.read_text(encoding="utf-8")).get("experience")
+        return json.loads(REF_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return {}
+
+
+def categories():
+    """体验标准库里的设备类别（10-18：按类别挑垂直标准，对不上用尼尔森）。"""
+    return _library().get("categories") or []
+
+
+def reference(category=None):
+    """这一类设备的体验标准；没有这一类（或 AI 写了"其他"）就用尼尔森三档。返回里带 category 说明按哪一类判的。"""
+    lib = _library()
+    hit = next((c for c in lib.get("categories") or [] if c.get("key") == (category or "").strip()), None)
+    ref = hit or lib.get("fallback")
+    if not ref:
         return None
+    return {**{k: v for k, v in ref.items() if k in ("fair", "good", "source", "short")}, "category": ref.get("key")}
 
 
 def _at(s):
@@ -241,7 +255,8 @@ def real_scenario(page, standard, values=None):
             "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
             "experiences": exps, "problems": problems, "standard": (standard or {}).get("name"),
             "point_names": {x["p"]: x["n"] for x in steps},
-            "point_kinds": {x["p"]: x["kind"] for x in steps if x.get("felt") and x.get("kind")},
+            "point_kinds": {x["p"]: x.get("kind") or "" for x in steps if x.get("felt")},
+            "category": page.get("category") or "",
             "optional": [x["p"] for x in steps if x.get("opt")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
             "matched": mp}
@@ -325,8 +340,8 @@ def inserted_page(page, steps=None, inserted=None):
 
 
 def with_default_experience(sc):
-    """第一下感觉到的结果是声音的（AI 标的 kind），那条线还没有体验标准时，挂上码表自带标准里的
-    对话体验参考值（1.5 秒，出处写在标准里）。不是声音的、或已经有体验标准的不动。"""
+    """到"第一下感觉到的结果"那条线还没有体验标准时，按设备类别从体验标准库挑一条挂上（出处写在库里），
+    对不上任何类别用尼尔森三档。已经有体验标准的不动。"""
     from fsw.scenario import experience_of
     lines = sc.get("lines") or []
     kinds = sc.get("point_kinds") or {}
@@ -335,9 +350,9 @@ def with_default_experience(sc):
     if not line or any(experience_of(sc, l["name"]) for l in lines):
         return sc
     end = ((sc.get("segments") or {}).get((line.get("segments") or [""])[-1]) or {}).get("to")
-    if kinds.get(end) != "声音":  # 参考值说的是"人说完到听到回答"：只套在终点是听到声音的线上（AI 标的 kind，不按名字猜）
+    if end not in kinds:  # 这条线的终点不是 AI 标的"感觉到的结果"（老的识别结果没标）：不知道人在等什么，不套
         return sc
-    ref = reference()
+    ref = reference(sc.get("category"))  # 按 AI 认出的设备类别挑；对不上用尼尔森三档（10-18 用户定）
     if not ref or ref.get("fair") is None:
         return sc
     return {**sc, "experiences": list(sc.get("experiences") or []) + [{**ref, "line": line["name"]}]}
