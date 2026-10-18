@@ -360,3 +360,21 @@ def test_try_reports_how_many_points_it_needs(setup):
     wait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
     assert j["need"] == 3
+
+
+class LateLastSoundDevice(FakeDevice):
+    """亲测：唤醒后那一轮，最后一声比结束标记晚 0.08 秒才到。试测要算它收齐，不用人再说一遍。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,P5,6119818,18", "FSW,RESET,9921421,0", "FSW,P1,10000000,1", "FSW,P2,11000000,0",
+               "FSW,RESET,13607192,0", "FSW,P5,13689834,3"]
+        for l in out:
+            on_line(l)
+        return out
+
+
+def test_try_counts_the_last_sound_that_ends_just_after_the_round_marker(setup):
+    c, r, *_ = setup(device=LateLastSoundDevice())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "done" and j["got"] == [1, 2, 5]

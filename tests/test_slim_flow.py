@@ -156,6 +156,23 @@ def test_leftover_end_of_a_round_already_judged_is_not_taken_by_the_next_round()
     assert len(ok) == 1 and round(ok[0]["ends"][0], 2) == 1.95
 
 
+def test_last_sound_from_before_the_start_does_not_block_the_late_tail():
+    # 亲测第 7 轮起：这一轮开头先记到一次"最后一声"（唤醒回应放完），真正的最后一声在结束标记之后 0.13 秒才到。
+    # 不能因为"最后一声"已经有一次就不等尾巴、判成"记到的是这一轮开始之前的"
+    us = lambda s: f"{int(s * 1e6)}"
+    lines = ["FSW,RESET," + us(0) + ",0", "FSW,P5," + us(1.0) + ",0", "FSW,P6," + us(2.0) + ",0", "FSW,P7," + us(3.0) + ",0",
+             "FSW,RESET," + us(4.0) + ",0", "FSW,P7," + us(4.1) + ",0",
+             "FSW,P5," + us(6.0) + ",0", "FSW,P6," + us(7.0) + ",0", "FSW,RESET," + us(9.0) + ",0", "FSW,P7," + us(9.13) + ",0",
+             "FSW,RESET," + us(12.0) + ",0"]
+    c = m.Collector(_talk_spec())
+    out = []
+    for l in lines:
+        out += c.feed(l)
+    assert not [r for r in out if r.get("ok") is False]
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 2 and round(ok[1]["ends"][0], 2) == 3.13
+
+
 def test_found_list_ignores_half_written_last_line():
     from fsw import identify
     assert identify.found_names("找到：听到唤醒词（a.cc:1）\n找到：设") == ["听到唤醒词"]
@@ -168,3 +185,29 @@ def test_found_list_ignores_half_written_last_line():
             return "```json\n{}\n```"
     identify.identify(LLM(), ".", "全程", on_progress=lambda p: got.append(p["found"]))
     assert got[-1] == ["听到唤醒词", "设备听到你停了"]
+
+
+# 亲测第 9 次（小灵）的原始计时点，第 5 轮起：第 6 轮回答中途播放卡了一下，多打了一次 P10（喇叭最后一声）
+REAL9 = """RESET,63794499 P10,63929815 P1,67792209 P4,67797493 P5,67808822 P2,68518562 P3,68519451 P6,68921469 P7,68928223
+P8,68929822 P9,70604169 RESET,70604916 P10,70729825 P1,74260329 P4,74263473 P5,74266290 P2,75557807 P3,75558734 P6,75931468
+P7,75938576 P8,75939846 P9,77196188 RESET,77196857 P10,77319831 P1,80411278 P4,80414096 P5,80417397 P2,81190070 P3,81190964
+P6,81697723 P7,81704603 P8,81709809 P10,82069812 P9,84775270 RESET,84776372 P10,84909814 P1,88550912 P4,88553741 P5,88557050
+P2,89380240 P3,89381145 P6,89763188 P7,89770094 P8,89779871 P9,91270466 RESET,91271410 P10,91399813 P1,95937161 P4,95938663
+P5,95941214 P2,96765791 P3,96766662 P6,97202890 P7,97209229 P8,97209814 P9,98946558 RESET,98947221 P10,99009861 P1,103312839
+P4,103315727 P5,103319002 P2,104218078 P3,104218953 P6,104594319 P7,104609255 P8,104619812 P9,107593904 RESET,107594744
+P10,107739859 RESET,120000000"""
+
+
+def test_end_point_printed_twice_mid_answer_does_not_shift_later_rounds():
+    order = ["P1", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]
+    sc = {"start": {"point": "P1", "name": "收到听写文字"}, "optional": ["P2", "P3"],
+          "segments": {f"s{i}": {"from": a, "to": b, "name": f"{a}-{b}"} for i, (a, b) in enumerate(zip(order, order[1:]))},
+          "lines": [{"name": "回答这条", "segments": [f"s{i}" for i in range(len(order) - 1)]}]}
+    c = m.Collector(m.Spec.from_scenario(sc))
+    out = []
+    for x in REAL9.split():
+        k, us = x.split(",")
+        out += c.feed(f"FSW,{k},{us},0")
+    assert not [r for r in out if r.get("ok") is False]
+    ends = [round(r["ends"][0], 2) for r in out if r.get("ok")]
+    assert ends == [2.94, 3.06, 4.5, 2.85, 3.07, 4.43]  # 第 6 轮（水在几度结冰）是 4.5 秒，不是 1.66
