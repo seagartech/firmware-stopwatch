@@ -154,3 +154,17 @@ def test_leftover_end_of_a_round_already_judged_is_not_taken_by_the_next_round()
         out += c.feed(l)
     ok = [r for r in out if r.get("ok")]
     assert len(ok) == 1 and round(ok[0]["ends"][0], 2) == 1.95
+
+
+def test_found_list_ignores_half_written_last_line():
+    from fsw import identify
+    assert identify.found_names("找到：听到唤醒词（a.cc:1）\n找到：设") == ["听到唤醒词"]
+    got = []
+
+    class LLM:
+        def investigate(self, prompt, root, on_text, on_tool):
+            for piece in ["找到：听", "到唤醒词（a.cc:1）\n找到：设", "备听到你停了（b.cc:2）\n"]:
+                on_text(piece)
+            return "```json\n{}\n```"
+    identify.identify(LLM(), ".", "全程", on_progress=lambda p: got.append(p["found"]))
+    assert got[-1] == ["听到唤醒词", "设备听到你停了"]
