@@ -272,3 +272,26 @@ def test_playing_the_answer_is_not_flagged_as_occasionally_slow():
         cur = {"P1": (0, 0), "P2": (1_000_000, 0), "P3": (1_800_000, 0), "P4": (int((1.8 + play) * 1e6), 0)}
         rounds.append({"n": i + 1, **m.compute(cur, spec)})
     assert not [x for x in jdg.judge(sc, rounds)["labels"] if x["kind"] == "spiky"]
+
+
+def test_playing_the_answer_is_not_judged_by_range_and_every_line_is_listed():
+    # 亲测第 19 次：再测时"边收边放"按上次填的范围判"偏慢"、到最后一声那条也按范围判：长短看回答说了多少字，不判快慢
+    from fsw import standards as stds, judge as jdg
+    steps = [{"p": p, "n": n, "line": "talk"} for p, n in
+             [("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
+    segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
+    sc = stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None)
+    for k in sc["segments"]:
+        sc["segments"][k]["range"] = [0.1, 1.0]
+    for l in sc["lines"]:
+        l["range"], l["slow"] = [0.5, 2.0], 3.0
+    spec = m.Spec.from_scenario(sc)
+    cur = {"P1": (0, 0), "P2": (500_000, 0), "P3": (900_000, 0), "P4": (5_000_000, 0)}
+    out = jdg.judge(sc, [{"n": i + 1, **m.compute(cur, spec)} for i in range(10)])
+    seg = {g["k"]: g["verdict"] for g in out["segments"]}
+    assert seg["P3-P4"] == jdg.ANSWER and seg["P1-P2"] == "正常"
+    last = out["lines"][-1]
+    assert last["verdict"] == jdg.ANSWER and last["combo"] == jdg.ANSWER_TXT
+    labels = {x["line"]: x for x in out["labels"] if x["kind"] == "line"}
+    assert set(labels) == {"到喇叭出第一声", "到喇叭最后一声"}  # 没问题的线也列（收在"另有 N 条不用改"里）
+    assert labels["到喇叭最后一声"]["level"] == "可以不改" and labels["到喇叭最后一声"]["why"] == jdg.ANSWER_TXT

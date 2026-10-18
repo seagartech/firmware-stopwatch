@@ -858,7 +858,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             want = (want - {int(ins.point_id(x, a.steps)[1:]) for x in a.steps if x.get("opt")}) or want
             job["need"] = len(want)  # 页面上"已收到 x / 共几个"按这个数，和判通过的标准一致
             need_n = max(1, len(want) - min(2, len(want) // 4))
-            rounds = {"cur": set(), "best": set()}  # 这一轮收到的、收得最多的那一轮
+            # 起点（比如"设备听出你说完"）：喊唤醒词、点屏幕开头的那一轮本来就没有它（唤醒词模块认的，不经过"说完"判断）。
+            # 所以起点不要求和其余计时点在同一轮：这几分钟里收到过就行，其余的有一轮收齐就算试通
+            start_ids = {int(ins.point_id(x, a.steps)[1:]) for x in a.steps if x.get("line") == "start"} & want
+            rounds = {"cur": set(), "best": set(), "seen": set()}  # 这一轮收到的、收得最多的那一轮、收到过的
+            full = lambda got: got >= want - start_ids
+            shown = lambda got: got | (rounds["seen"] & start_ids)
             job["missing"] = []
 
             def feed(line):
@@ -868,14 +873,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     rounds["cur"] = set()
                     return
                 got = ins.count_marks([line]) & want
+                rounds["seen"] |= got
                 pv = rounds.get("prev")
                 # 设备回到聆听（结束标记）后 1 秒内、下一轮还没开始时才放完的最后一声：补上就收齐的，算上一轮的（和多轮实测同一个做法）
-                if got and not rounds["cur"] and pv and pv[0] and pv[1] is not None and p and 0 <= p[1] - pv[1] <= meas.LATE_US and pv[0] | got == want:
+                if got and not rounds["cur"] and pv and pv[0] and pv[1] is not None and p and 0 <= p[1] - pv[1] <= meas.LATE_US and full(pv[0] | got) and not full(pv[0]):
                     pv[0].update(got)
                     rounds["best"] = set(pv[0])
                     return
                 rounds["cur"] |= got
-                if len(rounds["cur"]) >= len(rounds["best"]):
+                if (full(rounds["cur"]), len(rounds["cur"])) >= (full(rounds["best"]), len(rounds["best"])):
                     rounds["best"] = set(rounds["cur"])
 
             def on_line(line):
@@ -885,13 +891,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 feed(line)
                 # 页面显示收得最多的那一轮：唤醒那一轮（没有起点）结束后计数不清回 0，免得像又从头来了一遍
-                cur = rounds["cur"] if len(rounds["cur"]) >= len(rounds["best"]) else rounds["best"]
+                cur = shown(rounds["cur"] if (full(rounds["cur"]), len(rounds["cur"])) >= (full(rounds["best"]), len(rounds["best"])) else rounds["best"])
                 job["got"] = sorted(cur)
                 job["missing"] = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - cur)] if cur else []
                 _log(job, line[:300])
 
             def enough():  # 有一轮全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
-                return rounds["best"] == want
+                return shown(rounds["best"]) == want
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -920,7 +926,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if lines is None:
                 return _fail(job, "try", "设备的调试口一直打不开。看看线插好没有，或者有没有别的软件（比如串口监视器）占着它。",
                              error=f"打不开调试口：{err}" if err else "没看到设备")
-            got = rounds["best"]  # 按收得最多的那一轮判
+            got = shown(rounds["best"])  # 按收得最多的那一轮判（起点收到过就算）
             job["got"] = sorted(got)
             if got and got != want and len(got) >= need_n:  # 差几个：不算试通，否则正式实测每一轮都会"没收全"
                 job["try_fails"] = job.get("try_fails", 0) + 1

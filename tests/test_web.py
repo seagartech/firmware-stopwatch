@@ -324,9 +324,10 @@ def test_original_build_failure_is_said_once():
 
 
 def test_few_rounds_said_under_the_headline():
-    """少于 20 轮：报告一句话结论下面就说"次数少，结论只供参考"（多轮实测页答应过）。"""
+    """少于 10 轮：报告一句话结论下面就说"数字不作数"。10 轮是默认轮数（决策 158），10～19 轮不再说"只供参考"（10-18 真机报告）。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
-    assert "次数少，结论只供参考" in js.split("function reportPage(")[1].split("\nfunction ")[0]
+    rp = js.split("function reportPage(")[1].split("\nfunction ")[0]
+    assert "适合跑流程，数字不作数" in rp and "次数少，结论只供参考" not in rp
 
 
 def test_flash_page_shows_compiler_installing_progress():
@@ -355,7 +356,7 @@ def test_round_count_is_flexible_3_to_100():
     assert 'id="col-n"' in js and 'min="3" max="100"' in js
     assert "can=k>=MIN_ROUNDS" in js and "const MIN_ROUNDS=3" in js
     rp = js.split("function reportPage(")[1].split("\nfunction ")[0]
-    assert "适合跑流程，数字不作数" in rp and "次数少，结论只供参考" in rp
+    assert "适合跑流程，数字不作数" in rp
     assert "D.n<10" in js.split("function tiers(")[1].split("\nfunction ")[0]  # 少于 10 轮不显示"10 次里最慢"
 
 

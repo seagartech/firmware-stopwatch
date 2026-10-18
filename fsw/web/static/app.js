@@ -63,7 +63,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
   tech:{cond:[['项目',`${htmlEsc(REAL.name)}，${CHIP()}`],['合理范围',sc.range_list?htmlEsc(sc.range_list.text):sc.standard?`码表自带的标准：${htmlEsc(sc.standard)}（按代码位置对上 ${Object.keys(sc.matched||{}).length} 个计时点）`:'还没有这个设备的合理范围']],pts:sc.points?Object.keys(sc.points).length:(IDENT.page.steps||[]).length,
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
-const VCLS={'超过慢阈值':'c-bad','偏慢':'c-warn','正常':'c-ok','推算':'c-gray','没有范围':'c-gray'};
+const VCLS={'超过慢阈值':'c-bad','偏慢':'c-warn','正常':'c-ok','推算':'c-gray','没有范围':'c-gray','看回答长短':'c-gray'};
 function withJudge(D,J){const L=n=>J.lines.find(x=>x.name===n)||{};
   D.verdict=l=>{const v=L(l.name).verdict||'正常';return [v==='没有范围'?'还没有合理范围':v,VCLS[v]||'c-gray']};
   const e=L(D.main.name).exp;D.exp=e?[e,e==='差'?'c-bad':'c-ok']:null;
@@ -92,7 +92,7 @@ function decisionsJ(D){const J=D.J,out=[];
   for(const x of J.labels){const lv=['必须改','建议改','可以不改'].indexOf(x.level);
    if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=isMain?D.biggest:([...D.allSegs].filter(s=>l.segs.includes(s.k)).sort((p,q)=>q.med-p.med)[0]||D.biggest),share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
     out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:isMain?`${l.end}要 ${f(l.med,1)} 秒，大头是"${b.name}"`:`${l.end}要 ${f(l.med,1)} 秒`,
-     d:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`:x.level==='可以不改'?`${x.why}。`:`${x.why}，大头是"${b.name}" ${f(b.med)} 秒，占 ${share}%。`,who:x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
+     d:x.why==='取决于回答长短，不判快慢'?`长短主要看这次回答说了多少字，不判快慢。`:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`:x.level==='可以不改'?`${x.why}。`:`${x.why}，大头是"${b.name}" ${f(b.med)} 秒，占 ${share}%。`,who:x.why==='取决于回答长短，不判快慢'?'不判快慢':x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
    else if(x.kind==='spiky'){const s=D.allSegs.find(y=>y.k===x.segment);if(!s||x.with)continue;  // 和对错问题同一根因的，合并到那条里
     out.push({k:x.k,seg:x.segment,lv,src:src.spiky,tag:['偶发','c-warn'],t:`"${s.name}"偶尔特别慢`,d:`平时 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒（${roundList(x.rounds.map(n=>({n})))}）。`,who:`找${s.owner}`})}
    else if(x.order&&D.lines.length>1)out.push({k:'reversed',lv,src:src.order,tag:['要查','c-bad'],t:`${x.rounds.length} 轮${D.lines[0].end}反而比${D.lines[1].end}晚`,d:`${roundList(x.rounds.map(n=>({n})))}。"先给反应"这个设计在这几轮白做了。`,who:'先查是哪一段变慢'});
@@ -173,7 +173,7 @@ function tiers(D){const few=D.n<10;  // 少于 10 轮："10 次里最慢"没意�
 // 两把尺子（2026-10-13）：体验标准问"用户等得了吗"（看结果，给负责人）；合理范围问"这套做法有没有做坏"（看实现，给研发）。
 // 体验标准只挂在有公认标准的那条线上，没有就只用合理范围。
 function lineCards(D){
-  const CB={'每段都没做坏，是做法本身慢，要换做法才会快':'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。','先查哪段做坏了':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。','可能有隐患':'用户还等得了，但比这套做法该有的慢，可能有隐患。','正常':'用户等得了，技术上也正常。','只按合理范围判：正常':'这个场景没有体验标准，只按合理范围判：正常。','只按合理范围判：先查哪段做坏了':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。','还没有合理范围：只记下用时，先不判快慢':D.J&&D.J.scenario&&D.J.scenario.first_run?'第一次测：这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':'还没有这个设备的合理范围：只记下用时，先不判快慢。'};
+  const CB={'每段都没做坏，是做法本身慢，要换做法才会快':'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。','先查哪段做坏了':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。','可能有隐患':'用户还等得了，但比这套做法该有的慢，可能有隐患。','正常':'用户等得了，技术上也正常。','只按合理范围判：正常':'这个场景没有体验标准，只按合理范围判：正常。','取决于回答长短，不判快慢':'长短主要看这次回答说了多少字，不判快慢；快慢看前面那条「到第一声」。','只按合理范围判：先查哪段做坏了':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。','还没有合理范围：只记下用时，先不判快慢':D.J&&D.J.scenario&&D.J.scenario.first_run?'第一次测：这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':'还没有这个设备的合理范围：只记下用时，先不判快慢。'};
   return D.lines.map(l=>{const [v,c]=D.verdict(l),isMain=l===D.main,inR=v==='正常',jl=D.J&&D.J.lines.find(x=>x.name===l.name);
     const ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):isMain&&D.exp?D.exp:null,es=jl?jl.exp_std:D.S.exp;  // 体验标准每条线一条：真测的按后台每条线的判定
     const concl=jl?(jl.new&&jl.combo.startsWith('还没有合理范围')?(D.J.scenario&&D.J.scenario.first_run?'第一次测：':'这条是这次新加的：')+'这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':CB[jl.combo]||jl.combo):!ex?(inR?'这个场景没有体验标准，只按合理范围判：正常。':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。')
@@ -521,7 +521,7 @@ function settingsPage(){
    <p class="note">每个项目一个文件夹：识别结果、合理范围、每次的原始日志和报告。都在你电脑上。</p>
   </section>
   ${first?'':rlSettings()}
-  <section class="panel"><h2>提示音</h2><p class="note" style="margin:0 0 8px">多轮实测时，收好一轮"叮"一声，没收全低一声。点"试听"听听这台电脑上能不能听到。<br>听不到：先看电脑音量；音量正常还听不到，把浏览器整个退出（Mac 上按 Command + Q）再打开。</p><div class="acts" style="margin:0;align-items:center"><button class="btn" data-beeptest="1">试听</button>${beepMsg?`<span class="note">${beepMsg==='running'?'浏览器的声音是开着的：要是没听到，看看电脑音量、有没有静音、有没有接了别的耳机。':`浏览器没让网页出声（${htmlEsc(beepMsg)}）：再点一次「试听」；还不行的话看看浏览器对这个网页是不是设了"不允许自动播放"。`}</span>`:''}</div></section>
+  <section class="panel"><h2>提示音</h2><p class="note" style="margin:0 0 8px">多轮实测时，某一轮没收全会低响一声，收好了不响。点"试听"听听这台电脑上能不能听到。<br>听不到：先看电脑音量；音量正常还听不到，把浏览器整个退出（Mac 上按 Command + Q）再打开。</p><div class="acts" style="margin:0;align-items:center"><button class="btn" data-beeptest="1">试听</button>${beepMsg?`<span class="note">${beepMsg==='running'?'浏览器的声音是开着的：要是没听到，看看电脑音量、有没有静音、有没有接了别的耳机。':`浏览器没让网页出声（${htmlEsc(beepMsg)}）：再点一次「试听」；还不行的话看看浏览器对这个网页是不是设了"不允许自动播放"。`}</span>`:''}</div></section>
   <div class="acts" style="justify-content:center;margin:4px 0 8px"><button class="btn pri" data-save="1" style="min-width:10em">保存</button></div>
 </div>`;
 }
@@ -538,9 +538,11 @@ const slowTxt=x=>x==null||x===Infinity?'—':x;
 function cmpTxt(now,prev,noise){const d=now-prev;if(noise!=null&&Math.abs(d)<=noise)return '<span class="note">在正常波动内</span>';
  return d<0?`<span class="down">↓ 快了 ${f(-d)} 秒</span>`:`<span class="up">↑ 慢了 ${f(d)} 秒</span>`}
 function prevLine(){const P=JREP&&JREP.prev;if(!P)return '';if(P.why)return `<p class="note" style="margin:0">${htmlEsc(P.why)}</p>`;
- const L=JREP.lines||[],m=L[L.length-1];if(!m||P.lines[m.name]==null)return '';const p=P.lines[m.name];
- const endName=(IDENT&&IDENT.page&&(IDENT.page.measure||'').split('→').pop().trim())||m.end||m.name;  // 用"听到回答"这种说法，不用"回答这条"
- return `<p style="margin:0"><b>比上次（${htmlEsc(P.measured_at)}，${P.n} 轮）：</b>${htmlEsc(endName)} ${f(p)} → ${f(m.med)} 秒　${cmpTxt(m.med,p,(P.noise_lines||{})[m.name])}<span class="note">　各段见「技术细节」的"上次"一栏</span></p>`}
+ // 每条线都比（测全程时"最后一声"主要看回答有多长，只比它会看错）
+ const L=(JREP.lines||[]).filter(m=>P.lines[m.name]!=null&&m.med!=null);if(!L.length)return '';
+ let RL=[];try{RL=repScene().lines||[]}catch(e){}const nm=m=>(RL.find(l=>l.name===m.name)||{}).end||String(m.name).replace(/^到/,'');
+ const items=L.map(m=>`${htmlEsc(nm(m))} ${f(P.lines[m.name])} → ${f(m.med)} 秒 ${cmpTxt(m.med,P.lines[m.name],(P.noise_lines||{})[m.name])}`).join('；');
+ return `<p style="margin:0"><b>比上次（${htmlEsc(P.measured_at)}，${P.n} 轮）：</b>${items}<span class="note">　各段见「技术细节」的"上次"一栏</span></p>`}
 function staleBar(){if(!(JREP&&!JREP._none&&repKey().startsWith('real')))return '';const RL=JREP.scenario&&JREP.scenario.range_list,F=JREP.list_filled,PL=prevLine();
  if(RL&&RL.broken)return PL+`<section class="panel stale"><p style="margin:0"><b>⚠ 合理范围清单格式不对，这次按码表自带的范围判。</b></p><p class="note" style="margin:4px 0 0">${htmlEsc(RL.broken)}</p></section>`;
  return PL+(F&&F.length?(JREP.scenario&&JREP.scenario.first_run?`<section class="panel"><p style="margin:0"><b>第一次测量：这次的结果已存为合理范围（${F.length} 项），下次改完再测就和它比。</b></p><p class="note" style="margin:4px 0 0">这次不拿自己判自己，快慢只按体验标准看；没有体验标准的线只记用时。想改合理范围就点「技术细节」→「合理范围清单」。</p></section>`:`<p class="note" style="margin:0">✓ 这次新出现的 ${F.length} 项（${F.map(htmlEsc).join('、')}）已按这次 ${JREP.n} 轮实测填进合理范围清单，下次和它比；其余照清单判。想改就点「技术细节」→「合理范围清单」。</p>`):'')}
@@ -658,7 +660,7 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:D.n<20?`<p class="note" style="margin:4px 0 0;color:var(--warn)">这次只测了 ${D.n} 轮（少于 20 轮），次数少，结论只供参考；再测几轮会更准。</p>`:''}</div>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2><details class="lvwhy" style="margin:-4px 0 8px"><summary>画的是第 ${D.rep.n} 轮</summary><p class="note" style="margin:4px 0 0">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p></details>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
@@ -872,7 +874,9 @@ const realFlash=()=>!!(REAL&&REAL.work&&IDENT&&IDENT.page);
 // 试一次没收到的计时点叫什么（页面上写出来，说清为什么少）
 const tryMissing=()=>{if(!FSWJ||!FSWJ.view)return [];const nm=Object.fromEntries(live().map(x=>[fswId(x.p),x.n]));return (FSWJ.view.steps||[]).filter(k=>!(FSWJ.got||[]).includes(+k.slice(1))).map(k=>nm[k]||k)};
 // 试一次要人做什么：用 AI 读代码写的操作说明；没有就按平常用法用一次（不拿计时点名字当操作说明）
-const trySay=()=>{if(!realFlash())return FF[scene].big;const act=(IDENT.page.act||'').trim();if(act)return htmlEsc(act);const w=IDENT.page.mapWhat||hSay||'';return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':'按平常的用法完整使用一次设备'};
+// 以前找关键步骤时 AI 会把设备的回应写进操作说明（比如"听到'叮'后"），猜错了人会一直等：换成不说设备怎么回应
+const actClean=t=>t.replace(/(等?听到|听见)[^，,；;。]*?叮[^，,；;。]*?(之?后|以后|[，,])/g,(m,a,e)=>'等它有反应后'+(/[，,]/.test(e)?'，':''));
+const trySay=()=>{if(!realFlash())return FF[scene].big;const act=actClean((IDENT.page.act||'').trim());if(act)return htmlEsc(act);const w=IDENT.page.mapWhat||hSay||'';return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':'按平常的用法完整使用一次设备'};
 // 计时点编号和后台一样：P3 → P3；你自己加的 U1、U2 → P21、P22
 const fswId=p=>{if(/^P\d+$/.test(p))return p;const u=live().filter(x=>!/^P\d+$/.test(x.p)).map(x=>x.p);return 'P'+(20+u.indexOf(p)+1)};
 const fswSteps=()=>live().map(x=>({p:x.p,n:x.n,path:x.path||x.f,l:x.l,line:x.line,why:x.why||'',where:x.where||'',once:x.once||'',...(x.opt?{opt:true}:{})}));
@@ -1061,9 +1065,8 @@ function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>
  col.got=(j.rounds||[]).map(r=>r.ok?{n:r.n,e:r.ends,probs:C.probs.filter(p=>(r.probs||[]).includes(p.k)),att:r.att,segs:r.segs}:{bad:true,att:r.att,missing:r.missing||[]});
  col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
  const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));
- // "叮"在这一轮的计时点全部收到时就响（和设备出声差不多同时）；码表还要等一会儿才收尾记下这一轮，收尾时不再重复响
- for(const x of col.got.slice(before)){if(!x.bad&&col.rd){col.rd=false;continue}ding(!!x.bad)}
- if(j.status==='running'&&need>0&&got>=need&&!col.rd){col.rd=true;ding(false)}
+ // 收好一轮不响，只有没收全才低响一声：测全程时一轮要等设备把回答整段放完才算收好，那时再"叮"一声人只会觉得提示音晚了
+ for(const x of col.got.slice(before))if(x.bad)ding(true)
  if(j.status==='done'){colStop();col.st=2}else if(j.status==='suspect'){colStop();col.st=4}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
  if(page==='collect')render()}
 async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0;col.rd=false}else col={st:1,att:0,got:[],phase:0,sc:scene};ADV=null;clearInterval(advT);advT=null;fixPick=null;

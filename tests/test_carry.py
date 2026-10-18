@@ -168,7 +168,7 @@ def test_report_retest_button_and_wording_for_real_runs():
     entry = grab("retestEntry")
     assert 'data-rtreal="1"' in entry and "data-retest=" in entry                   # 真测走新流程，演示数据照旧
     assert "e.target.closest('[data-rtreal]')){retestFrom(" in JS
-    assert "split('→').pop().trim()" in grab("prevLine")
+    assert "repScene().lines" in grab("prevLine")  # 线名用报告里的说法（"喇叭出第一声"），不用"回答这条"
     assert "报告顶上会提示用新范围更新" not in JS
 
 
