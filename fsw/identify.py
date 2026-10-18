@@ -36,6 +36,7 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
 最后只输出一个 ```json 代码块，格式如下（中文、大白话，写给不写代码的人看）：
 ```json
 {{
+ "category": "这是哪一类设备，只能从下面的类别里挑一个原样写，都不像就写：其他",
  "summary": "一段话结论：链路有几步，有没有用户需要知道的重要情况（比如某一段不在设备上发生）",
  "start_found": true, "end_found": true,
  "missing": "起点或终点找不到时说清是哪一头、为什么；都找到就空着",
@@ -61,6 +62,9 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
 ```
 steps 按发生的先后顺序排；segments 是要测的这条线从起点到终点的每一段，outside=true 表示这段在设备外面（服务器、网络）。
 
+## 设备类别（填 category 用）
+{categories}
+
 ## 规则
 - 每个位置必须是你亲自打开文件核对过的真实行号。
 - "收到"类的计时点放在任何条件判断（比如"状态不对就丢掉"）之前，被丢掉的也要能记到。
@@ -79,8 +83,14 @@ SURE = {"高", "中", "低"}
 LINE_OF = {"start": "start", "main": "talk", "side": "face"}
 
 
+def _categories():
+    """体验标准库里的设备类别（fsw/standards/reference.json）：AI 读完代码顺手挑一个，码表按它选体验标准。"""
+    from fsw import standards as stds
+    return "\n".join(f"- {c['key']}：{c['hint']}" for c in stds.categories()) or "- 其他"
+
+
 def build_prompt(what, chip="", known=None):
-    return PROMPT.format(what=what, chip=f"芯片和板子：{chip}\n" if chip else "",
+    return PROMPT.format(what=what, categories=_categories(), chip=f"芯片和板子：{chip}\n" if chip else "",
                          known=KNOWN.format(names="、".join(known)) if known else "")
 
 
@@ -230,7 +240,7 @@ def to_page(r, what):
         "main": main_ids, "branch": {"from": branch_from, "nodes": side_steps},
         "dash": [i for i, (a, b) in enumerate(zip(main_ids, main_ids[1:]))
                  if any(g.get("out") and g["a"] == a and g["b"] == b for g in segs)],
-        "server": r.get("outside_note") or "", "mapWhat": what,
+        "server": r.get("outside_note") or "", "mapWhat": what, "category": str(r.get("category") or "").strip(),
         "mapSel": next((s["p"] for s in steps if s["sure"] != "高"), steps[0]["p"]),
         "measure": f"{sname} → {mend}", "mainTitle": f"{mname}：{sname} → {mend}",
         "act": str(r.get("act") or "").strip(), "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "",
@@ -288,7 +298,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None):
 
 def _cache_file(project_dir, fingerprint, what, provider):
     # 找步骤的要求（PROMPT）改了，旧结果按旧要求找的：不沿用
-    key = hashlib.sha1(f"{fingerprint}\0{what.strip()}\0{provider}\0{PROMPT}".encode()).hexdigest()[:12]
+    key = hashlib.sha1(f"{fingerprint}\0{what.strip()}\0{provider}\0{PROMPT}\0{_categories()}".encode()).hexdigest()[:12]
     return Path(project_dir) / "identify" / f"{key}.json"
 
 

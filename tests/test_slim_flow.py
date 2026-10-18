@@ -234,16 +234,18 @@ def test_side_line_points_not_every_round_stay_on_the_side_line():
     assert None in m.compute(cur, spec)["ends"]
 
 
-def test_voice_main_line_gets_the_reference_experience_standard():
-    # 按 AI 标的"怎么感觉到的"（kind）判是不是听到声音，不按步骤名猜词（10-18 用户：通用代码不迁就某一个固件）
+def test_experience_standard_follows_the_device_category_else_nielsen():
+    # 10-18 用户定：AI 读完代码顺手标设备类别，对上体验标准库里的类别用该类标准，对不上用尼尔森三档
     from fsw import standards as stds
     sc = {"lines": [{"name": "回答这条", "segments": ["s"]}], "segments": {"s": {"from": "P1", "to": "P2", "name": "x"}},
-          "point_names": {"P1": "起点", "P2": "终点"}, "point_kinds": {"P2": "声音"}, "experiences": []}
+          "point_names": {"P1": "起点", "P2": "终点"}, "point_kinds": {"P2": "声音"}, "experiences": [], "category": "语音对话"}
     e = stds.with_default_experience(sc)["experiences"]
-    assert e[0]["line"] == "回答这条" and e[0]["fair"] == 1.5 and e[0]["source"]
-    door = {**sc, "point_names": {"P1": "设备听出你说完", "P2": "喇叭出声"}, "point_kinds": {"P2": "动作"}}
-    assert stds.with_default_experience(door)["experiences"] == []  # 名字像语音也不套：看的是 kind
-    assert stds.with_default_experience({**sc, "point_kinds": {}})["experiences"] == []  # 没标的（老的识别结果）不套
+    assert e[0]["line"] == "回答这条" and e[0]["fair"] == 2.0 and "T/CESA" in e[0]["source"] and e[0]["category"] == "语音对话"
+    door = stds.with_default_experience({**sc, "category": "门禁"})["experiences"]
+    assert door[0]["fair"] == 1.0 and "浙江" in door[0]["source"]
+    other = stds.with_default_experience({**sc, "category": "其他"})["experiences"]
+    assert other[0]["fair"] == 1.0 and "尼尔森" in other[0]["source"] and other[0]["category"] == "通用"
+    assert stds.with_default_experience({**sc, "point_kinds": {}})["experiences"] == []  # 终点没标"感觉到的结果"（老的识别结果）不套
 
 
 def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
@@ -340,7 +342,7 @@ def test_felt_roles_split_lines_for_any_device(tmp_path):
     (tmp_path / "main" / "door.c").write_text("\n".join(f"line {i}" for i in range(1, 60)), encoding="utf-8")
     step = lambda i, n, line, **k: {"id": f"P{i}", "name": n, "file": "main/door.c", "line": 10 * i, "line_of": "start" if i == 1 else "main",
                                     "sure": "高", **k}
-    data = {"start": {"name": "读到卡"}, "main": {"name": "开门这条", "end": "门开到位"},
+    data = {"category": "智能门锁", "start": {"name": "读到卡"}, "main": {"name": "开门这条", "end": "门开到位"},
             "steps": [step(1, "读到卡号", 10), step(2, "校验通过", 20), step(3, "锁开始动", 30, felt="first", kind="动作"),
                       step(4, "门开到位", 40, felt="last", kind="动作")],
             "segments": [{"from": "P1", "to": "P2", "name": "校验"}, {"from": "P2", "to": "P3", "name": "驱动锁"},
@@ -348,14 +350,15 @@ def test_felt_roles_split_lines_for_any_device(tmp_path):
     r = idf.parse("```json\n" + json.dumps(data, ensure_ascii=False) + "\n```", tmp_path)
     assert [s["felt"] for s in r["steps"]] == ["", "", "first", "last"]
     page = idf.to_page(r, "全程")
+    assert page["category"] == "智能门锁" and "- 智能门锁：" in idf.build_prompt("全程")  # 类别从体验标准库来，写进找步骤的要求
     sc = stds.with_default_experience(stds.real_scenario(page, None))
     assert [l["name"] for l in sc["lines"]] == ["到锁开始动", "到门开到位"] and sc["lines"][0]["first"]
-    assert sc["experiences"] == []
+    assert [(e["line"], e["fair"]) for e in sc["experiences"]] == [("到锁开始动", 0.8)]
 
 
 def test_stopwatch_ships_no_device_standard_only_the_generic_reference():
     # 10-18 用户：通用代码不迁就某一个固件。码表不再自带小智那份标准（范围、问题规则、要记的附加值都按它来）
     from fsw import standards as stds
     assert stds.load_all() == [] and stds.find([{"p": "P1", "n": "x", "path": "main/application.cc", "l": 1}]) is None
-    ref = stds.reference()
-    assert ref["fair"] == 1.5 and "Hamming" in ref["source"]
+    assert stds.reference("语音对话")["fair"] == 2.0 and stds.reference("没见过的")["short"] == "尼尔森三档"
+    assert all(c["source"].count("http") >= 1 for c in stds.categories())  # 每一类都写了出处链接

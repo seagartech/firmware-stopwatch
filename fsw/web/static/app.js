@@ -181,7 +181,7 @@ function lineCards(D){
       :(inR?'用户等得了，技术上也正常。':'用户还等得了，但比这套做法该有的慢，可能有隐患。');
     const head=ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:`<span class="chip ${c}">${v}</span>`;
     return `<div class="panel card"><h3>${l.name} ${head}</h3><p class="num" style="color:var(--fg)">一般 ${f(l.med)} 秒</p>
-     ${ex&&es?`<p>体验标准：超过 ${es.fair} 秒算差 → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>${es.source?`<p class="note" style="margin:2px 0 0">${htmlEsc(es.source)}</p>`:''}`:jl&&!jl.exp?'<p class="note">体验标准：没有设定（可以在合理范围清单里设定）</p>':''}
+     ${ex&&es?`<p>体验标准${es.category?`（按「${htmlEsc(es.category)}」类设备）`:''}：超过 ${es.fair} 秒算差 → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>${es.source?`<p class="note" style="margin:2px 0 0">${htmlEsc(es.source)}</p>`:''}`:jl&&!jl.exp?'<p class="note">体验标准：没有设定（可以在合理范围清单里设定）</p>':''}
      <p>合理范围：${l.ok?`${l.ok[0]}～${l.ok[1]??'不限'} 秒 → <b class="${inR?'down':'up'}">${inR?'在范围内':v}</b>`:'还没有'}</p>
      <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
 }
