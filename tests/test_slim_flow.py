@@ -461,3 +461,20 @@ def test_page_marks_felt_last_points_to_take_the_last_report():
             "segs": [{"a": "P1", "b": "P2", "t": "等"}, {"a": "P2", "b": "P3", "t": "放"}], "fsegs": [], "ln": {"talk": "回答"}}
     sc = stds.real_scenario(page, None)
     assert sc["last_points"] == ["P3"] and m.Spec.from_scenario(sc).last == {"P3"}
+
+
+def test_line_whose_length_depends_on_content_is_left_out_of_charts():
+    # 10-18 用户：到回答全部放完的长短看回答字数，放在 10 轮图里是干扰，不进图和结论；每轮差不多的（门开到位）照常保留
+    import subprocess
+    js = open("fsw/web/static/app.js", encoding="utf-8").read()
+    i = js.index("function lenByContent(")
+    fn = js[i:js.index("\nfunction repScene(", i)]
+    sc = {"lines": [{"name": "到第一声", "end": "喇叭出第一声", "segments": ["a", "b"], "first": True},
+                    {"name": "到最后一声", "end": "喇叭最后一声", "segments": ["a", "b", "c"]}],
+          "segments": {"a": {}, "b": {}, "c": {}}}
+    run = lambda verdict: json.loads(subprocess.run(
+        ["node", "-e", fn + f"console.log(JSON.stringify(lenByContent({json.dumps({'scenario': sc, 'lines': [{'name': '到最后一声', 'verdict': verdict}]})})))"],
+        capture_output=True, text=True, check=True).stdout)
+    cut = run("看回答长短")
+    assert [l["name"] for l in cut["lines"]] == ["到第一声"] and sorted(cut["segments"]) == ["a", "b"] and cut["cutEnd"] == "喇叭出第一声"
+    assert [l["name"] for l in run("正常")["lines"]] == ["到第一声", "到最后一声"]
