@@ -242,3 +242,16 @@ th.segn{min-width:9em}
 .estgrid>div{border:1px solid var(--soft);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column}
 .estgrid b{font-size:20px}
 .estgrid .hum{border-color:var(--speak)}.estgrid .hum b{color:var(--speak)}
+/* 测量页（决策 158）：执行进度 + 当前要做的事 */
+.bigask .lab{font-size:13px;color:var(--speak);font-weight:500}.bigask.auto{border-color:var(--line)}.bigask.auto .lab{color:var(--muted)}
+.runtl{list-style:none;margin:0;padding:0}
+.runtl li{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:start;padding:8px 0;border-bottom:1px solid var(--soft);font-size:14px}
+.runtl li:last-child{border-bottom:0}
+.runtl .tdot{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);margin-top:4px}
+.runtl li.done .tdot{background:var(--ok);border-color:var(--ok)}
+.runtl li.doing .tdot{border-color:var(--speak);border-top-color:transparent;animation:rspin 1s linear infinite}
+.runtl li.err .tdot{background:var(--bad);border-color:var(--bad)}
+.runtl li.wait{color:var(--muted)}
+.runtl .who{font-size:12px;border-radius:4px;padding:0 6px;margin-left:6px;border:1px solid var(--line);color:var(--muted)}
+.runtl .who.hum{color:var(--speak);border-color:var(--speak)}
+@keyframes rspin{to{transform:rotate(360deg)}}
