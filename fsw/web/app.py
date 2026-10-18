@@ -862,10 +862,19 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job["missing"] = []
 
             def feed(line):
+                p = meas.parse_line(line)
                 if line.strip().startswith("FSW,RESET"):
+                    rounds["prev"] = (rounds["cur"], p[1] if p else None)
                     rounds["cur"] = set()
                     return
-                rounds["cur"] |= ins.count_marks([line]) & want
+                got = ins.count_marks([line]) & want
+                pv = rounds.get("prev")
+                # 设备回到聆听（结束标记）后 1 秒内、下一轮还没开始时才放完的最后一声：补上就收齐的，算上一轮的（和多轮实测同一个做法）
+                if got and not rounds["cur"] and pv and pv[0] and pv[1] is not None and p and 0 <= p[1] - pv[1] <= meas.LATE_US and pv[0] | got == want:
+                    pv[0].update(got)
+                    rounds["best"] = set(pv[0])
+                    return
+                rounds["cur"] |= got
                 if len(rounds["cur"]) >= len(rounds["best"]):
                     rounds["best"] = set(rounds["cur"])
 

@@ -137,12 +137,22 @@ class Collector:
         """设备回到等待（打出结束标记）时，最后一声可能还没放完：这一轮只差最后一两个点时先不判没收全，
         结束标记之后 LATE_US 内到的这几个点算回这一轮（实测：最后一声放完比结束标记晚约 0.13 秒）。"""
         ends = {l["segs"][-1][1] for l in self.spec.lines if l["segs"]}
-        miss = [x for x in self.spec.need if x not in self.cur]
+        miss = self._miss_after()
         if not miss or len(miss) > LATE_MAX or not set(miss) <= ends:  # 只等线的终点（最后一声）：别的点缺了照常判没收全
             return False
         self.prev = {"cur": self.cur, "occ": self.occ, "reset_us": self.reset_us, "miss": set(miss), "until": us + LATE_US,
                      "at": time.monotonic()}
         return True
+
+    def _miss_after(self):
+        """这一轮还差的点：起点之后没记到的都算（起点之前那一次是上一轮剩下的，比如唤醒回应放完的最后一声）。"""
+        if self.spec.start not in self.cur:
+            return [x for x in self.spec.need if x not in self.cur]
+        return [x for x in self.spec.need if x != self.spec.start and not self._after(x)]
+
+    def _bad_or_stale(self):
+        """等尾巴没等到：要的点都有、只是有的只在起点之前记到过，照旧写清"记到的是这一轮开始之前的"；真缺点就判没收全。"""
+        return self._ok_or_stale() if all(x in self.cur for x in self.spec.need) else self._bad()
 
     def _before_end(self, name):
         """name 是某条线的终点时，这条线终点前一个点；不是终点返回 None。"""
@@ -175,11 +185,11 @@ class Collector:
         """这一行是不是上一轮的尾巴：是就记回上一轮，收齐了交出上一轮。返回 (算上一轮的吗, 交出的结果)。"""
         pv = self.prev
         if us > pv["until"]:
-            return False, [self._prev_do(self._bad)]
+            return False, [self._prev_do(self._bad_or_stale)]
         if name not in pv["miss"]:
             return False, []
         if self._before_end(name) in self.cur:  # 这一轮终点前一个点已经到了：这个终点是这一轮的，上一轮等不到了
-            return False, [self._prev_do(self._bad)]
+            return False, [self._prev_do(self._bad_or_stale)]
         pv["cur"].setdefault(name, (us, val))
         pv["occ"].setdefault(name, []).append((us, val))
         pv["miss"].discard(name)
@@ -201,7 +211,7 @@ class Collector:
             return out
         if name == "RESET":
             if self.prev:  # 等尾巴时又一轮结束了：上一轮算没收全
-                out.append(self._prev_do(self._bad))
+                out.append(self._prev_do(self._bad_or_stale))
             if self.ready and not self.done:  # 上一轮已经收全：下一轮开始了，收尾
                 out.append(self._close())
             # 没有起点的一轮不算一轮（比如对话类喊唤醒词那一下：设备进聆听就清零，但没有"你说完"），不报没收全
@@ -210,10 +220,10 @@ class Collector:
                 out.append({"half": True})
             elif self.started and self.cur and not self.done and self.spec.start in self.cur:
                 # 点都记到了、但有的只有起点之前的那一次：是上一轮剩下的，写清楚是哪个点（见 _ok_or_stale）
-                if all(x in self.cur for x in self.spec.need):
+                if not self._miss_after():
                     out.append(self._ok_or_stale())
-                elif not self._park(us):
-                    out.append(self._bad())
+                elif not self._park(us):  # 只差最后一声（哪怕起点之前记到过一次）：等结束标记之后的尾巴
+                    out.append(self._bad_or_stale())
             elif self.started and not self.done and len([x for x in self.spec.need if x in self.cur]) * 2 >= len(self.spec.need):
                 # 大部分点都到了、就是没有起点：是一次真的对话，只是设备没记到起点。不算一轮，但要报出来（决策 133）
                 out.append({"nostart": True})
@@ -234,7 +244,13 @@ class Collector:
     def _after(self, x):
         """这一轮里计时点 x 记在起点之后（容差 STALE_US）的那几次，按时间先后。"""
         t0 = self.cur[self.spec.start][0]
-        return sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - STALE_US)
+        got = sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - STALE_US)
+        b = self._before_end(x)
+        if got and b and b != x:
+            # 线的终点（比如喇叭最后一声）中途可能多打一次（播放卡了一下）：只认它前一步之后的那次，前一步还没到就当还没收到
+            tb = [o[0] for o in ([self.cur[b]] if b == self.spec.start else self._after(b))] if b in self.cur else []
+            got = [o for o in got if o[0] >= tb[0]] if tb else []
+        return got
 
     def _complete(self):
         """起点到了，而且要的每个点在起点之后都记到了。"""
@@ -254,7 +270,7 @@ class Collector:
         """收全了、已经等了 settle 秒（设备可能不再开始下一轮，比如最后一轮）：收尾，交出这一轮。"""
         out = []
         if self.prev and time.monotonic() - self.prev["at"] > LATE_US / 1e6 + 0.5:  # 等尾巴等过了时（设备之后没再输出）
-            out.append(self._prev_do(self._bad))
+            out.append(self._prev_do(self._bad_or_stale))
         if self.ready and not self.done and time.monotonic() - self.ready_at >= settle:
             out.append(self._close())
         return out
@@ -268,7 +284,7 @@ class Collector:
         接着收时，从那一刻起当作新一轮的开头。"""
         out = self.flush()
         if self.prev:
-            out.append(self._prev_do(self._bad))
+            out.append(self._prev_do(self._bad_or_stale))
         self._open()
         return out
 
