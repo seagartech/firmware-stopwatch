@@ -384,3 +384,41 @@ def test_stopwatch_ships_no_device_standard_only_the_generic_reference():
     assert stds.load_all() == [] and stds.find([{"p": "P1", "n": "x", "path": "main/application.cc", "l": 1}]) is None
     assert stds.reference("语音对话")["fair"] == 2.0 and stds.reference("没见过的")["short"] == "尼尔森三档"
     assert all(c["source"].count("http") >= 1 for c in stds.categories())  # 每一类都写了出处链接
+
+
+def test_side_line_that_branches_before_the_start_is_measured_on_its_own():
+    # 第 26 次触屏例子：副线"按下变色"发生在起点"收到点击（松手）"之前，不能把整条主线拼在它前面
+    from fsw import standards as stds
+    steps = [{"p": "P0", "n": "按下", "line": "face"}, {"p": "P1", "n": "收到点击", "line": "start"},
+             {"p": "P2", "n": "新画面首块", "line": "talk", "felt": "first", "kind": "画面"},
+             {"p": "P3", "n": "画面传完", "line": "talk", "felt": "last", "kind": "画面"}, {"p": "P4", "n": "按下变色", "line": "face"}]
+    page = {"steps": steps, "segs": [{"a": "P1", "b": "P2", "t": "画"}, {"a": "P2", "b": "P3", "t": "传"}],
+            "fsegs": [{"a": "P0", "b": "P4", "t": "变色"}], "ln": {"talk": "换画面", "face": "按下变色"}}
+    sc = stds.real_scenario(page, None)
+    side = next(l for l in sc["lines"] if l["name"] == "按下变色")
+    assert side["segments"] == ["P0-P4"]
+    spec = m.Spec.from_scenario(sc)
+    cur = {"P0": (0, 0), "P4": (30_000, 0), "P1": (100_000, 0), "P2": (250_000, 0), "P3": (400_000, 0)}
+    names = [l["name"] for l in sc["lines"]]
+    ends = dict(zip(names, m.compute(cur, spec)["ends"]))
+    assert ends["按下变色"] == 0.03 and ends["到新画面首块"] == 0.15
+
+
+def test_two_points_on_the_same_code_line_are_flagged(tmp_path):
+    from fsw import identify
+    (tmp_path / "a.c").write_text("x();\ny();\n")
+    st = [{"id": "P1", "name": "按下变色", "file": "a.c", "line": 2, "where": "after"},
+          {"id": "P2", "name": "新画面", "file": "a.c", "line": 2, "where": "after"},
+          {"id": "P3", "name": "起点", "file": "a.c", "line": 1, "where": "after"}]
+    r = identify.parse("```json\n" + json.dumps({"steps": st}) + "\n```", tmp_path)
+    p2 = r["steps"][1]
+    assert p2["sure"] == "低" and "按下变色" in p2["doubt"] and r["steps"][0]["sure"] != "低" and r["steps"][2]["sure"] != "低"
+
+
+def test_act_text_keeps_only_what_the_person_does():
+    js = open("fsw/web/static/app.js", encoding="utf-8").read()
+    line = next(x for x in js.splitlines() if x.startswith("const actClean="))
+    import subprocess
+    out = subprocess.run(["node", "-e", line.split("  //")[0] + "console.log(['喊唤醒词，等提示音响后说一句话','刷一次卡'].map(actClean).join('|'))"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert out == "喊唤醒词，说一句话|刷一次卡"

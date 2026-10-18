@@ -55,7 +55,7 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
  "segments": [{{"from": "P1", "to": "P2", "name": "这段在做什么", "who": "固件 / 硬件 / 网络 / 服务器，可以组合", "outside": false}}],
  "side_from": "顺带那条线从哪个计时点分出去，没有就空",
  "side_segments": [{{"from": "P1", "to": "P5", "name": "…", "who": "…", "outside": false}}],
- "act": "人要怎么操作设备，才能走完一轮要测的这条线，一句话、写给操作的人看，比如：喊唤醒词，再说一句话；刷一次卡",
+ "act": "人要怎么操作设备，才能走完一轮要测的这条线，一句话、写给操作的人看，比如：喊唤醒词，再说一句话；刷一次卡。只写人做的动作，不写设备会怎么回应（响一声、亮灯、出提示这类，不同状态下回应不一样）",
  "outside_note": "设备外那段在做什么，12 个字以内，比如：服务器：听写、想回答；没有就空",
  "doubts": [{{"text": "读代码时发现的可能变慢或出错的地方", "sure": "高 / 中 / 低"}}]
 }}
@@ -73,6 +73,7 @@ steps 按发生的先后顺序排；segments 是要测的这条线从起点到�
 - 起点和每一个 always=true 的步骤，在连续使用时（比如连续对话里的第二句、第三句，连续刷第二张卡）也必须每次都经过；只在开机、唤醒、建立连接时走一次的步骤（比如开始连接、连上服务器）always 写 false，不能当起点。
 - 起点是用户做完那件事、设备知道了的时刻（比如判断你说完了、读到卡号），不要选"进入聆听""开始等待"这类事情还没发生的时刻：那样会把等人开口的时间也算进去。
 - 设备自己能察觉人做完的那一下（比如设备自己判断出安静了、按键松开、读卡芯片报卡）优先当起点；要等服务器、手机回话才知道的时刻只在设备自己确实察觉不到时才用，并把 start.late 写 true。
+- 同一行代码只放一个计时点：两个点插在同一处，记到的时间一样，分不出先后。
 - 拿不准就标"低"或"中"，并在 doubt 里写为什么，不要编。
 - 说明文字里不要写 P1、P2 这样的编号，写步骤的中文名。
 - 起点或终点在源码里找不到，就把 start_found / end_found 写 false，并在 missing 里说清楚。
@@ -201,6 +202,10 @@ def parse(text, root):
                 "kind": str(s.get("kind") or "") if s.get("felt") in ("first", "last") else ""}
         if problem:
             step["sure"], step["doubt"] = "低", problem + (("；" + step["doubt"]) if step["doubt"] else "")
+        twin = next((x for x in steps if x["file"] and (x["file"], x["line"], x["where"]) == (step["file"], step["line"], step["where"])), None)
+        if twin:  # 和前面的点插在同一处：记到的时间一样，分不出先后
+            step["sure"] = "低"
+            step["doubt"] = f"和「{twin['name']}」插在同一行代码上，两点记到的时间一样，分不出先后" + (("；" + step["doubt"]) if step["doubt"] else "")
         steps.append(step)
     if len(steps) < 2:
         return _fail("bad_reply", "大模型只给出了不到 2 个步骤，量不出用时。点\"重试\"再找一次，或者换个说法写\"测从什么到什么\"。",

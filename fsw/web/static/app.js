@@ -877,7 +877,7 @@ const realFlash=()=>!!(REAL&&REAL.work&&IDENT&&IDENT.page);
 const tryMissing=()=>{if(!FSWJ||!FSWJ.view)return [];const nm=Object.fromEntries(live().map(x=>[fswId(x.p),x.n]));return (FSWJ.view.steps||[]).filter(k=>!(FSWJ.got||[]).includes(+k.slice(1))).map(k=>nm[k]||k)};
 // 试一次要人做什么：用 AI 读代码写的操作说明；没有就按平常用法用一次（不拿计时点名字当操作说明）
 // 以前找关键步骤时 AI 会把设备的回应写进操作说明（比如"听到'叮'后"），猜错了人会一直等：换成不说设备怎么回应
-const actClean=t=>t.replace(/(等?听到|听见)[^，,；;。]*?叮[^，,；;。]*?(之?后|以后|[，,])/g,(m,a,e)=>'等它有反应后'+(/[，,]/.test(e)?'，':''));
+const actClean=t=>t.replace(/(等到?|听到|听见|看到|看见)[^，,；;。]*?(之?后|以后)[，,]?/g,'').replace(/[，,]\s*([；;。]|$)/,'$1');  // 操作说明只留人做的动作：设备怎么回应（响一声、亮灯）在不同状态下不一样，不写
 const trySay=()=>{if(!realFlash())return FF[scene].big;const act=actClean((IDENT.page.act||'').trim());if(act)return htmlEsc(act);const w=IDENT.page.mapWhat||hSay||'';return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':'按平常的用法完整使用一次设备'};
 // 计时点编号和后台一样：P3 → P3；你自己加的 U1、U2 → P21、P22
 const fswId=p=>{if(/^P\d+$/.test(p))return p;const u=live().filter(x=>!/^P\d+$/.test(x.p)).map(x=>x.p);return 'P'+(20+u.indexOf(p)+1)};
