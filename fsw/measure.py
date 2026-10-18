@@ -32,6 +32,7 @@ class Spec:
     problems: list = field(default_factory=list)
     need: list | None = None
     names: dict = field(default_factory=dict)
+    last: set = field(default_factory=set)  # 一轮里取最后一次的点（比如回答全部放完、门完全打开）：中途可能先报一次
 
     def __post_init__(self):
         if self.need is None:
@@ -53,7 +54,8 @@ class Spec:
             names.setdefault(p["point"], p["name"])
         for g in s["segments"].values():
             names.setdefault(g["to"], g["name"] + "（终点）")
-        spec = cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names)
+        spec = cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names,
+                   last=set(s.get("last_points") or []))
         opt = set(s.get("optional") or [])  # 只在某种触发方式才走的计时点：有就记，一轮收齐不等它
         if opt:
             spec.need = [p for p in spec.need if p not in opt] or spec.need
@@ -113,6 +115,7 @@ def suspects(rnd, scenario):
 STALE_US = 500_000  # 比起点早半秒以上，算这一轮开始之前的
 LATE_US = 1_000_000  # 一轮结束标记之后这么久内到的尾巴点（比如最后一声放完）还算上一轮的
 LATE_MAX = 2         # 上一轮最多差这么几个点，才等它的尾巴
+LAST_QUIET = 10.0    # 有"取最后一次"的点时，下一轮一直没开始，最后一次之后再安静这么久才收尾（实测：回答两句之间服务器停了好几秒）
 
 
 class Collector:
@@ -239,6 +242,8 @@ class Collector:
         self.occ.setdefault(name, []).append((us, val))  # 同一个点一轮里记了几次（"每次都记"的点）：收尾时挑起点之后的第一次
         if not self.ready and self._complete():
             self.ready, self.ready_at = True, time.monotonic()  # 收全了：进度马上显示，收尾等下一轮开始或 flush
+        elif self.ready and name in self.spec.last:
+            self.ready_at = time.monotonic()  # 取最后一次的点又报了一次：这一轮还没完，从这次起重新等
         return out
 
     def _after(self, x):
@@ -260,8 +265,8 @@ class Collector:
         """正在收的这一轮：收到几个 / 共要几个。已经收全、等收尾时算全到；刚收尾、下一轮还没开始时是 0。"""
         if self.done:
             return 0, len(self.spec.need)
-        if self.ready:
-            return len(self.spec.need), len(self.spec.need)
+        if self.ready:  # 有"取最后一次"的点：收尾前那一步不算到，免得中途停顿就显示这一轮记好了
+            return len(self.spec.need) - (1 if self.spec.last & set(self.spec.need) else 0), len(self.spec.need)
         if self.spec.start in self.cur:  # 起点之前记的那次不算（每次都记的点）：不然还差着就显示收全了
             return len([x for x in self.spec.need if x == self.spec.start or self._after(x)]), len(self.spec.need)
         return len([x for x in self.spec.need if x in (self.cur or {})]), len(self.spec.need)
@@ -271,6 +276,8 @@ class Collector:
         out = []
         if self.prev and time.monotonic() - self.prev["at"] > LATE_US / 1e6 + 0.5:  # 等尾巴等过了时（设备之后没再输出）
             out.append(self._prev_do(self._bad_or_stale))
+        if self.spec.last:
+            settle = max(settle, LAST_QUIET)
         if self.ready and not self.done and time.monotonic() - self.ready_at >= settle:
             out.append(self._close())
         return out
@@ -297,7 +304,9 @@ class Collector:
                 continue
             after = self._after(x)
             if after:
-                self.cur[x] = after[0]  # 决策 123：起点之后的第一次才是这一轮的（比如进聆听时先换一次表情，回答来了再换）
+                # 决策 123：起点之后的第一次才是这一轮的（比如进聆听时先换一次表情，回答来了再换）；
+                # 取最后一次的点（回答全部放完）中途停顿时会先报一次，取最后那次
+                self.cur[x] = after[-1] if x in self.spec.last else after[0]
             else:
                 stale.append(x)
         if not stale:

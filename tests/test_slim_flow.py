@@ -422,3 +422,42 @@ def test_act_text_keeps_only_what_the_person_does():
     out = subprocess.run(["node", "-e", line.split("  //")[0] + "console.log(['喊唤醒词，等提示音响后说一句话','刷一次卡'].map(actClean).join('|'))"],
                          capture_output=True, text=True, check=True).stdout.strip()
     assert out == "喊唤醒词，说一句话|刷一次卡"
+
+
+def _last_spec():
+    sc = {"start": {"point": "P1", "name": "你说完"},
+          "segments": {"a": {"from": "P1", "to": "P2", "name": "到开口"}, "b": {"from": "P2", "to": "P3", "name": "放回答"}},
+          "lines": [{"name": "到开口", "segments": ["a"]}, {"name": "到放完", "segments": ["a", "b"]}], "last_points": ["P3"]}
+    return m.Spec.from_scenario(sc)
+
+
+def test_last_point_takes_the_final_report_of_the_round():
+    # 第 27 次真测：回答两句之间服务器停了一下，"回答全部放完"先报了一次；码表拿了第一次，10 轮里 4 轮提前记完
+    c = m.Collector(_last_spec())
+    lines = ["FSW,RESET,0,0", "FSW,P1,1000000,0", "FSW,P2,2250000,0", "FSW,P3,4000000,1", "FSW,P3,9000000,5", "FSW,RESET,9200000,0"]
+    out = []
+    for i, l in enumerate(lines):
+        out += c.feed(l)
+        if l.startswith("FSW,P3,4000000"):
+            assert c.progress() == (2, 3)  # 中途那次不算记好了
+            assert c.flush(1.5) == []      # 停顿 1.5 秒不收尾
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 1 and ok[0]["ends"] == [1.25, 8.0]
+
+
+def test_last_point_round_closes_after_a_long_quiet_when_no_next_round(monkeypatch):
+    c = m.Collector(_last_spec())
+    for l in ["FSW,RESET,0,0", "FSW,P1,1000000,0", "FSW,P2,2250000,0", "FSW,P3,4000000,1"]:
+        c.feed(l)
+    now = time.monotonic()
+    monkeypatch.setattr(m.time, "monotonic", lambda: now + m.LAST_QUIET + 1)
+    got = c.flush(1.5)
+    assert len(got) == 1 and got[0]["ok"] and got[0]["ends"] == [1.25, 3.0]
+
+
+def test_page_marks_felt_last_points_to_take_the_last_report():
+    from fsw import standards as stds
+    page = {"steps": _talk([("P1", "你说完"), ("P2", "喇叭出第一声"), ("P3", "喇叭最后一声")]),
+            "segs": [{"a": "P1", "b": "P2", "t": "等"}, {"a": "P2", "b": "P3", "t": "放"}], "fsegs": [], "ln": {"talk": "回答"}}
+    sc = stds.real_scenario(page, None)
+    assert sc["last_points"] == ["P3"] and m.Spec.from_scenario(sc).last == {"P3"}

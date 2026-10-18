@@ -259,6 +259,7 @@ def real_scenario(page, standard, values=None):
             "point_names": {x["p"]: x["n"] for x in steps},
             "point_kinds": {x["p"]: x.get("kind") or "" for x in steps if x.get("felt")},
             "category": page.get("category") or "",
+            "last_points": [x["p"] for x in steps if x.get("felt") == "last" or x.get("once") == "last"],
             "start_late": bool(page.get("startLate")), "start_note": page.get("startNote") or "",
             "optional": [x["p"] for x in steps if x.get("opt")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
