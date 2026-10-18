@@ -478,3 +478,15 @@ def test_line_whose_length_depends_on_content_is_left_out_of_charts():
     cut = run("看回答长短")
     assert [l["name"] for l in cut["lines"]] == ["到第一声"] and sorted(cut["segments"]) == ["a", "b"] and cut["cutEnd"] == "喇叭出第一声"
     assert [l["name"] for l in run("正常")["lines"]] == ["到第一声", "到最后一声"]
+
+
+def test_long_source_urls_become_a_short_link():
+    # 真测第 29 次：体验标准出处末尾的长网址没有断点，把「依据」卡片撑出页面，出现横向滚动条
+    import subprocess
+    js = open("fsw/web/static/app.js", encoding="utf-8").read()
+    line = next(x for x in js.splitlines() if x.startswith("const srcHtml="))
+    esc = next(x for x in js.splitlines() if x.startswith("const htmlEsc=") or x.startswith("function htmlEsc("))
+    out = subprocess.run(["node", "-e", esc + "\n" + line + "\nconsole.log(srcHtml('6.3.3：≤2.0 秒。https://a.org/x/c3Q(eq) 另有参考'))"],
+                         capture_output=True, text=True, check=True).stdout
+    assert '<a href="https://a.org/x/c3Q(eq)"' in out and "原文链接</a> 另有参考" in out
+    assert "srcHtml(es.source)" in js
