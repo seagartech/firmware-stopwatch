@@ -26,7 +26,7 @@ def test_report_says_how_much_earlier_people_really_stop():
 
 def test_report_uses_the_start_label_and_lag_line():
     assert "startLagLine(D.S.startShort" in JS and "startLabel(P,sc)" in JS
-    assert "startLabel(P,COLJ&&COLJ.scenario||{start:{point:(P.main||[])[0]}})" in grab("realD")  # 多轮实测页"量几条线"也用这个名字
+    assert "startLabel(P,COLJ&&COLJ.scenario||{start:{point:(P.main||[]).find(k=>!(P.steps||[]).some(x=>x.p===k&&x.opt))}})" in grab("realD")  # 多轮实测页"量几条线"也用这个名字
 
 
 def test_beep_keeps_the_original_volume():

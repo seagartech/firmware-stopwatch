@@ -352,7 +352,8 @@ const examples=`<div class="pills"><span class="note">比如：</span>${['从按
 
 // 精简流程（决策 158）：一律测全程；点「开始测量」后自动执行，只在要人工操作或校验没过时停下
 const WHOLE='全程：从设备最早知道被触发，到用户感受到的最后一个结果';
-let AUTO=false,autoHold='',autoBusy='';
+let AUTO=false,autoHold='',autoBusy='',autoT0=0;
+const TRY_SECS=180;  // 和后台 TRY_SECONDS 一致：试一次最多等多久
 const AUTO_ROUNDS=10;
 function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),REAL&&REAL.root].includes(p.path));
  const auto=again?3.5:7.5,human=Math.round((AUTO_ROUNDS*15+45)/60);  // 按验证 14 的实测：大模型三次约 5 分钟，编译烧录约 2.5 分钟；每轮约 15 秒
@@ -375,7 +376,34 @@ function autoTick(){if(!AUTO||pop)return;
 }
 function autoStart(){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-boardq');b&&b.focus();return}
  if(REAL&&!envKey()){pop='env';render();return}
- hSay=WHOLE;AUTO=true;autoHold='';autoBusy='';flowReset();flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render()}
+ hSay=WHOLE;AUTO=true;autoHold='';autoBusy='';autoT0=Date.now();flowReset();flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render()}
+// 测量页（决策 158，原型 ②）：点了「开始测量」就在这一页走到底；要人操作时大字提示，出问题才回到原来的页面让人处理
+function runView(){if(!AUTO||autoHold||pop)return false;
+ if(page==='home')return hStage===3&&stepsRead!==3;
+ if(page==='flash')return fl.st!==5;
+ if(page==='collect')return col.st===1||col.st===2||col.st===4;
+ return false}
+function runAt(){if(page==='home')return 0;if(page==='flash')return fl.step<=1&&fl.st!==3?1:fl.step<4?2:3;return col.st===2?5:4}
+function runPage(){const at=runAt(),used=autoT0?(Date.now()-autoT0)/1000:0;
+ const L=[['找关键步骤','auto',150],['插入计时点','auto',90],['编译、烧录','auto',60],['试测：校验计时点','hum',30],[`多轮实测：${AUTO_ROUNDS} 轮`,'hum',AUTO_ROUNDS*15],['生成分析报告','auto',90]];
+ const left=L.slice(at).reduce((a,x)=>a+x[2],0);
+ const P=REAL&&IDENT&&IDENT.page,n=P?(P.steps||[]).length:0;
+ const done=i=>i===0&&P?`<div class="note">${htmlEsc(P.measure||'')}；${n} 个关键步骤，位置已逐个核对</div>`:i===3?`<div class="note">计时点收到，顺序校验通过</div>`:'';
+ const tl=L.map((x,i)=>{const c=i<at?'done':i===at?(col.st===4&&i===4?'err':'doing'):'wait';
+  return `<li class="${c}"><span class="tdot"></span><div>${x[0]}<span class="who ${x[1]}">${x[1]==='hum'?'人工操作':'自动执行'}</span>${c==='done'?done(i):''}</div><span class="note">${c==='done'?'✓':'约 '+(x[2]>=60?Math.round(x[2]/60)+' 分钟':x[2]+' 秒')}</span></li>`}).join('');
+ let now;
+ if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
+ else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>连接设备到电脑的 USB 口</b><span class="note">计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
+ else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(fl.log||'')}</span></div>`;
+ else if(at===3){const N=FSWJ?FSWJ.total||live().length:live().length,got=FSWJ?(FSWJ.got||[]).length:0;now=tryBox(got,N).replace('<div class="bigask">','<div class="bigask"><span class="lab">人工操作 · 试测（校验计时点，不计入数据）</span>')}
+ else if(col.st===4)now=suspectBox();
+ else if(col.st===2)now=`<div class="bigask auto"><span class="lab">自动执行</span><b><span class="spin"></span> 正在生成分析报告</b></div>`;
+ else now=(col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:'')+colB();
+ return `<div class="stack"><div class="acts" style="justify-content:space-between;align-items:flex-start;margin:0"><div><h1 style="font-size:22px;margin:0">测量：全程</h1><p class="note" style="margin:2px 0 0">已用时 <span class="num">${mmss(used)}</span>　剩余约 <span class="num">${Math.max(1,Math.round(left/60))} 分钟</span></p></div><button class="btn" data-autostop="1">停止测量</button></div>
+ ${now}<section class="panel"><h2>执行进度</h2><ul class="runtl">${tl}</ul></section>
+ <p class="note">计时点变更明细、关键步骤位置在报告「技术细节」中查看</p></div>`}
+function autoStop(){AUTO=false;if(page==='collect'&&col.st===1){const b=document.querySelector('[data-col="stop"]');post('/api/collect/stop',{}).catch(()=>{})}
+ if(page==='home'){hStage=1}render()}
 const suspectBox=()=>{const S=(COLJ&&COLJ.suspect)||[];return `<div class="errbox"><b>第 1 轮自动校验没通过，已暂停</b>${S.map(x=>`<p style="margin:6px 0">「${htmlEsc(x.name)}」这一段 ${fms(Math.abs(x.seconds))} 秒${x.seconds<0?'（先后反了）':''}：${htmlEsc(x.why)}。计时点位置可能不对，接着测的数据不可信。</p>`).join('')}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-autofix="1">查看并修改计时点位置</button><button class="btn" data-col="resume">忽略，继续测量</button></div></div>`};
 
 const HOME={
@@ -887,10 +915,10 @@ const tryAct=()=>{if(realFlash()&&IDENT&&IDENT.page&&(IDENT.page.act||'').trim()
 function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
  if(!up&&J.boot_quiet)return `<div class="bigask"><b>设备可能已经开机了：现在对设备${tryAct()}</b><span class="note">没看到它的开机输出（有的设备开机后不出声，或者开机那几行在码表连上之前就打完了）。看设备已经回到待命画面，就直接做一次；码表收到计时点就算通。</span>${fullLogBtn()}${fullLog()}</div>`;  // 不一直转圈等"开机"
  if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;
- return `<div class="bigask"><b>现在对设备：${tryAct()}</b>
+ return `<div class="bigask"><b>${/^现在/.test(tryAct())?tryAct():'现在对设备：'+tryAct()}</b>
   <span class="note">设备已经开机了。只是确认计时点能收到，不算进数据。</span>
   ${idle?`<span class="note" style="color:var(--warn)">已经 ${since} 秒没收到计时点：设备可能还在联网，或者还没被唤醒。请现在再做一次。</span>`:''}
-  <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span>${got&&got<N&&(J.missing||[]).length?`<span class="note">还差「${J.missing.map(htmlEsc).join('」「')}」：有的步骤只在某些情况下才走到，接着再完整做一次（${tryAct()}），码表会继续收。</span>`:''}${fullLogBtn()}${fullLog()}</div>`}  // 设备原始输出不摆在明面上，想看点"完整日志"（决策 139）
+  <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点${J.try_started?`　剩余 <b class="num">${mmss(Math.max(0,TRY_SECS-(now-J.try_started)))}</b>，超时判未通过`:''}</span>${got&&got<N&&(J.missing||[]).length?`<span class="note">还差「${J.missing.map(htmlEsc).join('」「')}」：有的步骤只在某些情况下才走到，接着再完整做一次（${tryAct()}），码表会继续收。</span>`:''}${fullLogBtn()}${fullLog()}</div>`}  // 设备原始输出不摆在明面上，想看点"完整日志"（决策 139）
 // 完整日志（决策 106）：编译、烧录、试一次时设备和工具的输出，最近 200 行，去掉了控制字符
 let showFull=false;
 const fullLogBtn=()=>realFlash()&&FSWJ&&(FSWJ.tail||[]).length?`<button class="pill" data-fulllog="1">${showFull?'收起日志':'完整日志'}</button>`:'';
@@ -999,8 +1027,8 @@ const realCol=()=>realFlash()&&FSWJ&&FSWJ.status==='done';
 const CX=()=>realCol()&&RCT?RCT:COLLECT[scene];
 async function loadRCT(){const P=IDENT.page,st=(P.measure||'').split('→')[0].trim(),names=Object.fromEntries((P.steps||[]).map(x=>[x.p,x.n]));
  try{const t=await (await fetch('/api/rounds?'+new URLSearchParams({what:hSay===WHOLE?`${P.measure||''} ${P.mainTitle||''}`:hSay||P.mapWhat||'',start:st}))).json();
-  RCT={...t,ph:[...(P.main||[]).filter(k=>live().some(x=>x.p===k)).map(k=>names[k]).filter(Boolean),'这一轮记好了'],probs:(COLJ&&COLJ.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}))};if(page==='collect')render()}catch(e){}}
-function realD(){const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,COLJ&&COLJ.scenario||{start:{point:(P.main||[])[0]}}),sEnd=P.sideAsk?P.sideAsk.q:'';
+  const opt=new Set((P.steps||[]).filter(x=>x.opt).map(x=>x.p));RCT={...t,ph:[...(P.main||[]).filter(k=>!opt.has(k)&&live().some(x=>x.p===k)).map(k=>names[k]).filter(Boolean),'这一轮记好了'],probs:(COLJ&&COLJ.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}))};if(page==='collect')render()}catch(e){}}
+function realD(){const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,COLJ&&COLJ.scenario||{start:{point:(P.main||[]).find(k=>!(P.steps||[]).some(x=>x.p===k&&x.opt))}}),sEnd=P.sideAsk?P.sideAsk.q:'';
  const L=COLJ&&COLJ.lines&&COLJ.lines.length?COLJ.lines:(sEnd?[{name:sEnd},{name:mEnd}]:[{name:mEnd}]);
  const lines=L.map((l,i)=>({name:l.name,end:i<L.length-1?(sEnd||l.name):mEnd,ok:l.range?[l.range[0],l.range[1]??Infinity]:null,slow:l.slow??Infinity,col:LCOL[i]}));
  return {lines,S:{startShort:sShort,exp:COLJ&&COLJ.experience?{fair:COLJ.experience.fair}:null},rounds:okRounds().map(r=>({ends:r.e}))}}
@@ -1365,13 +1393,15 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   if(page==='report'&&JREP&&JREP._key===repKey()&&repKey().startsWith('real')&&!ADV&&D0ok())advStart();
   const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
   document.getElementById('nav-home').toggleAttribute('aria-current',page==='home');document.getElementById('nav-set').toggleAttribute('aria-current',page==='settings');
-  morphHTML(document.getElementById('flowbar'),flowBar());bgPill();
+  morphHTML(document.getElementById('flowbar'),runView()?'':flowBar());bgPill();
   const isReport=page==='report',isHome=page==='home';
   document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
   const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;morphHTML(document.getElementById('crumb'),isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?(RLP?'<button class="lnk2" data-rlback="1">设置</button> › 合理范围清单':`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`):page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'');
   let body;
   if(!isHome)LASTP='';
-  if(isHome)body=(LASTP?`<section class="panel" style="margin-bottom:16px"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span>上次停在「${htmlEsc(PNAME(LASTP))}」</span><button class="btn pri" data-go="${LASTP}" data-keepflow="1">接着看</button></div></section>`:'')+HOME[homeVar].html();
+  const RV=runView();
+  if(RV)body=runPage();
+  else if(isHome)body=(LASTP?`<section class="panel" style="margin-bottom:16px"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span>上次停在「${htmlEsc(PNAME(LASTP))}」</span><button class="btn pri" data-go="${LASTP}" data-keepflow="1">接着看</button></div></section>`:'')+HOME[homeVar].html();
   else if(isReport)body=reportPage(D);
   else if(page==='settings')body=settingsPage();
   else if(page==='steps')body=stepsPage();
@@ -1381,10 +1411,10 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   else if(page==='retest')body=retestPage();
   else if(page==='range')body=rangePage();
   else body=`<div class="panel todo">这一页还没做样子，按顺序下一步做。</div>`;
-  const mEl=document.getElementById('main'),same=mEl.dataset.pg===page+'|'+mode&&mEl.firstElementChild;
+  const PG=(RV?'run':page)+'|'+mode,mEl=document.getElementById('main'),same=mEl.dataset.pg===PG&&mEl.firstElementChild;
   if(same)morphHTML(mEl.firstElementChild,body);else mEl.innerHTML=`<div class="view">${body}</div>`;  // 换页才整页换（带淡入），同一页只改变了的地方
-  if(mEl.dataset.pg!==page+'|'+mode)mEl.dataset.pg=page+'|'+mode;
-  const md=document.getElementById('modal');md.hidden=!(isHome&&hStage>=2);
+  if(mEl.dataset.pg!==PG)mEl.dataset.pg=PG;
+  const md=document.getElementById('modal');md.hidden=RV||!(isHome&&hStage>=2);
   if(!md.hidden)morphHTML(document.getElementById('dlg'),modalHTML());
   const pp=document.getElementById('pop');pp.hidden=!pop;if(pop)morphHTML(document.getElementById('popdlg'),popHTML());
   // 点不了的按钮：包一层，"还差：……"用小字放在按钮正下方（决策 143，全码表统一）
@@ -1476,6 +1506,7 @@ document.addEventListener('click',e=>{
     SAVED=j.settings;const e2=await (await fetch('/api/env')).json();IDFS=(e2.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast('✓ 已记下这个位置');render()});return}
   if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
   if(e.target.closest('[data-autostart]')){autoStart();return}
+  if(e.target.closest('[data-autostop]')){autoStop();return}
   if(e.target.closest('[data-autofix]')){AUTO=false;autoHold='第 1 轮自动校验没通过：'+((COLJ&&COLJ.suspect)||[]).map(x=>`「${x.name}」${fms(Math.abs(x.seconds))} 秒`).join('、')+'。请检查这一段起止两个计时点的位置，改好后重新插入。';page='steps';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-mclose]')){hStage=1;render();return}
   if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}
