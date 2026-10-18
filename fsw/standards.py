@@ -274,8 +274,10 @@ def inserted_page(page, steps=None, inserted=None):
         o = {**orig.get(s["p"], {}), **{f: s[f] for f in ("n", "path", "l", "line") if s.get(f) is not None}}
         kept.append({**o, "p": k, "f": o.get("f") or Path(o.get("path") or "").name})
     keep = set(ren)
-    # 只在某种触发方式才走的计时点（opt）不放进线里：不是每轮都有，放进去整条线常常算不出来；只记"从起点到这一步"
-    keep_line = keep - {s["p"] for s in steps if (orig.get(s["p"]) or s).get("opt")}
+    # 要测的这条线上只在某种触发方式才走的计时点（opt，比如点屏幕开始）不放进线里：只记"从起点到这一步"。
+    # 顺带那条线（比如表情）的点不一定每轮都有也照样留在线上：哪一轮没收到，只是那一轮这条线算不出来
+    keep_line = keep - {s["p"] for s in steps if (orig.get(s["p"]) or s).get("opt")
+                        and (orig.get(s["p"]) or s).get("line") != "face"}
     main = _contract(page.get("segs") or [], keep_line)
     side = list(page.get("fsegs") or [])
     while side and side[0]["a"] not in keep:  # 顺带的线从一个没插的点分出去：往前接到要测的这条线上插了的那个点
