@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fsw import timeline as tln
 from fsw import measure as meas
+from tests.fixtures import XZ  # 小智那份标准：只当测试素材（10-18 起码表不自带任何设备的标准）
 
 
 def tl_first(tmp_path):
@@ -97,7 +98,7 @@ def test_round_times_split_into_speak_react_play():
 def test_collector_records_the_three_device_times():
     from fsw import standards as stds
     from tests.test_standards import PAGE
-    sc = stds.real_scenario(PAGE, stds.find(PAGE["steps"]), None)
+    sc = stds.real_scenario(PAGE, stds.find(PAGE["steps"], [XZ]), None)
     c = meas.Collector(meas.Spec.from_scenario(sc))
     out = []
     lines = ["FSW,RESET,1000000,0"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10)]

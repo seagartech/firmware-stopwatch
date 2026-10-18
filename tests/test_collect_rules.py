@@ -25,6 +25,7 @@ from tests.test_collect_api import wait as wait_col
 from tests.test_fsw_api import FakeDevice, run_to_try, setup, start_insert  # noqa: F401
 from tests.test_fsw_api import wait as wait_fsw
 from tests.test_instrument import PLAN, reply
+from tests.fixtures import XZ  # 小智那份标准：只当测试素材（10-18 起码表不自带任何设备的标准）
 
 
 @pytest.fixture
@@ -50,7 +51,7 @@ def rounds_log(points, n=5, gap=100_000):
 
 
 def spec_of(page):
-    return meas.Spec.from_scenario(stds.real_scenario(page, stds.find(page["steps"])))
+    return meas.Spec.from_scenario(stds.real_scenario(page, stds.find(page["steps"], [XZ])))
 
 
 # ---------- C1：按实际插进去的计时点收点 ----------

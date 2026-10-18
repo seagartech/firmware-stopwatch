@@ -16,8 +16,9 @@ from fsw import standards as stds
 from fsw.web.app import create_app
 from tests.test_collect_api import FakeSerialDevice, wait
 from tests.test_standards import PAGE
+from tests.fixtures import XZ  # 小智那份标准：只当测试素材（10-18 起码表不自带任何设备的标准）
 
-SC = stds.real_scenario(PAGE, stds.find(PAGE["steps"]), None)
+SC = stds.real_scenario(PAGE, stds.find(PAGE["steps"], [XZ]), None)
 ROUND = [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10)]  # 一轮：P1（起点）到 P9 都有
 
 
@@ -142,7 +143,7 @@ def test_today_log_all_rounds_count_after_the_fix():
     if not (f / "raw.log").exists():
         return
     run = _j.loads((f / "run.json").read_text(encoding="utf-8"))
-    sc = stds.real_scenario(run["page"], stds.find(run["page"]["steps"]), run.get("values"))
+    sc = stds.real_scenario(run["page"], stds.find(run["page"]["steps"], [XZ]), run.get("values"))
     c = meas.Collector(meas.Spec.from_scenario(sc))
     out = []
     for l in (f / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines():

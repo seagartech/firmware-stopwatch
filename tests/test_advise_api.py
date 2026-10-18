@@ -10,6 +10,15 @@ from fsw.llm import FakeLLM
 from fsw.web.app import create_app
 from tests.test_collect_api import FakeSerialDevice, wait
 from tests.test_standards import PAGE
+from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _xiaozhi_standard(monkeypatch):
+    """这些测试按"用户放进了小智那份标准"来跑：10-18 起码表不自带任何设备的标准，小智那份只当测试素材。"""
+    from fsw import standards as _stds
+    monkeypatch.setattr(_stds, "HERE", Path(__file__).parent / "fixtures")
+
 
 GOOD = {"fixes": [{"when": ["main"], "seg": "P2-P5", "why": "大模型想回答 1.35 秒，占六成。", "impact": "等 2 秒多才开口。",
                    "opts": [{"name": "换快一点的模型", "how": "固件不改，服务器换模型", "size": "固件 0 行", "rk": "回答质量可能变",

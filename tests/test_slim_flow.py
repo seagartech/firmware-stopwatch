@@ -351,3 +351,11 @@ def test_felt_roles_split_lines_for_any_device(tmp_path):
     sc = stds.with_default_experience(stds.real_scenario(page, None))
     assert [l["name"] for l in sc["lines"]] == ["到锁开始动", "到门开到位"] and sc["lines"][0]["first"]
     assert sc["experiences"] == []
+
+
+def test_stopwatch_ships_no_device_standard_only_the_generic_reference():
+    # 10-18 用户：通用代码不迁就某一个固件。码表不再自带小智那份标准（范围、问题规则、要记的附加值都按它来）
+    from fsw import standards as stds
+    assert stds.load_all() == [] and stds.find([{"p": "P1", "n": "x", "path": "main/application.cc", "l": 1}]) is None
+    ref = stds.reference()
+    assert ref["fair"] == 1.5 and "Hamming" in ref["source"]
