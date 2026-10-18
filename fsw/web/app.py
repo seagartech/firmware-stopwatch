@@ -884,7 +884,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if not job.get("dev_seen") and _plain(line):
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 feed(line)
-                cur = rounds["cur"]
+                # 页面显示收得最多的那一轮：唤醒那一轮（没有起点）结束后计数不清回 0，免得像又从头来了一遍
+                cur = rounds["cur"] if len(rounds["cur"]) >= len(rounds["best"]) else rounds["best"]
                 job["got"] = sorted(cur)
                 job["missing"] = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - cur)] if cur else []
                 _log(job, line[:300])
