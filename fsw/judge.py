@@ -89,6 +89,9 @@ def judge(scenario, rounds):
     segs_def, lines_def = scenario["segments"], scenario["lines"]
     out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": [], "range_list": scenario.get("range_list")}
 
+    # 有"到第一声"那条线时，第一声之后到全部放完的那几段是在放回答：长短跟回答说了多少有关，不算"偶发特别慢"
+    first = next((l for l in lines_def if l.get("first")), None)
+    playing = set(lines_def[-1]["segments"]) - set(first["segments"]) if first else set()
     seg_st = {}
     for k, g in segs_def.items():
         vals = [r["segs"][k] for r in rounds if r["segs"].get(k) is not None]
@@ -96,7 +99,7 @@ def judge(scenario, rounds):
             continue
         st = stats(vals)
         seg_st[k] = st
-        spiky = st["max"] > st["med"] * SPIKE_RATIO and st["max"] - st["med"] > SPIKE_GAP
+        spiky = k not in playing and st["max"] > st["med"] * SPIKE_RATIO and st["max"] - st["med"] > SPIKE_GAP
         out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
                                 "range": g.get("range"), "slow": g.get("slow"), "outside": g.get("side") == "outside",
                                 "verdict": verdict(st, g.get("range"), g.get("slow"), g.get("basis", "measured")),
@@ -125,8 +128,10 @@ def judge(scenario, rounds):
         firsts = [min(x for x in r["ends"] if x is not None) for r in rounds if any(x is not None for x in r["ends"])]
         out["first"] = {"line": first["name"], **stats(firsts)}
     if len(out["lines"]) >= 2:
-        a, b = out["lines"][0], out["lines"][-1]
-        diffs = [r["ends"][-1] - r["ends"][0] for r in rounds if None not in (r["ends"][0], r["ends"][-1])]
+        # 先给的反应比"第一个能感觉到的结果"早多少：有"到第一声"那条就和它比，不和"全部放完"比
+        j = next((i for i, l in enumerate(lines_def) if l.get("first") and i > 0), len(lines_def) - 1)
+        a, b = out["lines"][0], next((x for x in out["lines"] if x["name"] == lines_def[j]["name"]), out["lines"][-1])
+        diffs = [r["ends"][j] - r["ends"][0] for r in rounds if None not in (r["ends"][0], r["ends"][j])]
         out["lead"] = {"first": a["name"], "second": b["name"], **stats(diffs)}
 
     # 要测的那条线（最后一条）里最大头的一段
@@ -162,11 +167,8 @@ def judge(scenario, rounds):
                        "order": (p.get("rule") or {}).get("type") == "line_order",
                        "level": lv, "why": "对错问题，出现就要改" if p.get("level") == "bad" else
                        "超过每 10 次 1 次" if often else "偶尔出现"})
-    # 有"到第一声"那条线时，第一声之后到全部放完的那几段是在放回答：长短跟回答说了多少有关，不算"偶发特别慢"
-    first = next((l for l in lines_def if l.get("first")), None)
-    playing = set(lines_def[-1]["segments"]) - set(first["segments"]) if first else set()
     for g in out["segments"]:
-        if not g["spiky"] or g["k"] in playing:
+        if not g["spiky"]:
             continue
         hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and n >= 10 and l["p90"] > l["slow"]]
         labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
