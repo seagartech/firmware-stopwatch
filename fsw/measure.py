@@ -55,7 +55,7 @@ class Spec:
         for g in s["segments"].values():
             names.setdefault(g["to"], g["name"] + "（终点）")
         spec = cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names,
-                   last=set(s.get("last_points") or []))
+                   last=set(s.get("last_points") or []) & {l["segs"][-1][1] for l in lines if l["segs"]})  # 只认线的终点（起点等别的点"记最后一次"是插点做法，不影响收尾）
         opt = set(s.get("optional") or [])  # 只在某种触发方式才走的计时点：有就记，一轮收齐不等它
         if opt:
             spec.need = [p for p in spec.need if p not in opt] or spec.need

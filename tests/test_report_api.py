@@ -161,3 +161,15 @@ def test_export_to_default_folder_that_does_not_exist_yet(app):
     js = (Path(__file__).parent.parent / "fsw" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     i = js.index("EXP.saved=j.path;EXP.state='ok';")
     assert "t.classList.contains('t-bad'))t.hidden=true" in js[i - 200:i]  # 重试成功后收起上次的红色提示
+
+
+def test_first_run_even_when_a_segment_and_a_line_share_a_name(app):
+    # 真测第 29 次：全新数据第一次测，顶上却写"这次新出现的 12 项……其余照清单判"：按条数比，同名的段和线让条数对不上
+    import copy
+    c, _, _, tmp_path = app
+    page = copy.deepcopy(PAGE)
+    page["segs"][0]["t"] = page["ln"]["talk"]
+    proj = tmp_path / "data" / "xiaozhi-2"
+    c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 20, "project_dir": str(proj)})
+    wait(c, lambda j: j["status"] == "done")
+    assert c.get("/api/report").json()["scenario"]["first_run"]
