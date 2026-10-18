@@ -11,6 +11,15 @@ from tests.test_advise_api import real_log
 from tests.test_collect_api import FakeSerialDevice, wait
 from tests.test_standards import PAGE
 from tests.test_web import SAY20
+from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _xiaozhi_standard(monkeypatch):
+    """这些测试按"用户放进了小智那份标准"来跑：10-18 起码表不自带任何设备的标准，小智那份只当测试素材。"""
+    from fsw import standards as _stds
+    monkeypatch.setattr(_stds, "HERE", Path(__file__).parent / "fixtures")
+
 
 
 @pytest.fixture

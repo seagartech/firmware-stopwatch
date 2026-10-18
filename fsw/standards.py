@@ -16,6 +16,7 @@ from pathlib import Path
 from fsw.scenario import experiences
 
 HERE = Path(__file__).parent / "standards"
+REF_FILE = HERE / "reference.json"  # 通用参考值固定在码表里；HERE 可以换成别的标准文件夹（测试用）
 NEAR = 8  # 行号相差几行以内算同一个位置
 
 
@@ -40,7 +41,18 @@ def changed_at(standard):
 
 
 def load_all():
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(HERE.glob("*.json"))]
+    """码表自带的设备标准。10-18 起不再自带任何设备的（原来那份小智专用的挪到测试素材里）：通用代码不迁就某一个固件；
+    以后用户自己放进来的标准照样能对上。"""
+    out = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(HERE.glob("*.json"))]
+    return [d for d in out if d.get("segments")]
+
+
+def reference():
+    """通用的体验参考值（现在只有对话的 1.5 秒），不属于哪个设备。"""
+    try:
+        return json.loads(REF_FILE.read_text(encoding="utf-8")).get("experience")
+    except (OSError, ValueError):
+        return None
 
 
 def _at(s):
@@ -75,10 +87,10 @@ def match_points(steps, standard):
     return out
 
 
-def find(steps):
-    """挑对得上最多计时点的标准；少于 2 个对上就算没有。"""
+def find(steps, pool=None):
+    """挑对得上最多计时点的标准；少于 2 个对上就算没有。pool 不给就用码表自带的（现在没有）。"""
     best, n = None, 1
-    for s in load_all():
+    for s in (load_all() if pool is None else pool):
         k = len(match_points(steps, s))
         if k > n:
             best, n = s, k
@@ -325,7 +337,7 @@ def with_default_experience(sc):
     end = ((sc.get("segments") or {}).get((line.get("segments") or [""])[-1]) or {}).get("to")
     if kinds.get(end) != "声音":  # 参考值说的是"人说完到听到回答"：只套在终点是听到声音的线上（AI 标的 kind，不按名字猜）
         return sc
-    ref = next((d["experience"] for d in load_all() if (d.get("experience") or {}).get("fair") is not None), None)
-    if not ref:
+    ref = reference()
+    if not ref or ref.get("fair") is None:
         return sc
     return {**sc, "experiences": list(sc.get("experiences") or []) + [{**ref, "line": line["name"]}]}

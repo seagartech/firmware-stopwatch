@@ -5,7 +5,7 @@ from pathlib import Path
 
 from tests.test_boss_short import JS, grab
 
-STD = json.loads((Path(__file__).resolve().parents[1] / "fsw/standards/xiaozhi-c0fe42a.json").read_text(encoding="utf-8"))
+STD = json.loads((Path(__file__).resolve().parents[1] / "tests/fixtures/xiaozhi-c0fe42a.json").read_text(encoding="utf-8"))
 
 
 def test_experience_source_says_what_it_is_and_is_not():

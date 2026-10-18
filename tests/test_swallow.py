@@ -20,6 +20,14 @@ from tests.test_instrument import NEED, PLAN, STEPS, plan_with_value, reply
 from tests.identify_fixtures import door_source
 from tests.test_standards import PAGE
 
+
+@pytest.fixture(autouse=True)
+def _xiaozhi_standard(monkeypatch):
+    """这些测试按"用户放进了小智那份标准"来跑：10-18 起码表不自带任何设备的标准，小智那份只当测试素材。"""
+    from fsw import standards as _stds
+    monkeypatch.setattr(_stds, "HERE", Path(__file__).parent / "fixtures")
+
+
 V07 = Path(__file__).resolve().parent / "fixtures/v07/mock_log.txt"
 # 验证 07 的计时点（标准里的编号）→ 任务 14 真插的编号；真插里没有的（P3、P6、P8）丢掉
 TO_REAL = {"P2": "P1", "P4": "P2", "P11": "P3", "P12": "P4", "P5": "P5", "P13": "P6", "P7": "P7", "P9": "P8", "P10": "P9"}

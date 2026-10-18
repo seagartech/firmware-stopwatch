@@ -2,6 +2,16 @@
 
 from fsw import rangelist as rl
 from tests.test_report_api import app, measured  # noqa: F401  （测试夹具）
+import pytest
+from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _xiaozhi_standard(monkeypatch):
+    """这些测试按"用户放进了小智那份标准"来跑：10-18 起码表不自带任何设备的标准，小智那份只当测试素材。"""
+    from fsw import standards as _stds
+    monkeypatch.setattr(_stds, "HERE", Path(__file__).parent / "fixtures")
+
 
 
 def test_list_api_before_and_after_measuring(app):  # noqa: F811

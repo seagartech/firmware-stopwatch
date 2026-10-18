@@ -8,6 +8,14 @@ import pytest
 from fsw import judge as J
 from fsw import standards as std
 
+
+@pytest.fixture(autouse=True)
+def _xiaozhi_standard(monkeypatch):
+    """这些测试按"用户放进了小智那份标准"来跑：10-18 起码表不自带任何设备的标准，小智那份只当测试素材。"""
+    from fsw import standards as _stds
+    monkeypatch.setattr(_stds, "HERE", Path(__file__).parent / "fixtures")
+
+
 # 任务 13 第二次真识别、任务 14 真插的 9 个计时点（文件、行号）
 REAL_STEPS = [
     {"p": "P1", "n": "本地听到说完", "path": "main/audio/engines/afe_audio_engine.cc", "l": 483, "line": "start"},
