@@ -198,16 +198,16 @@ def real_scenario(page, standard, values=None):
         sl = std_line(items[0][0], items[-1][1])
         lines.append({"name": name, "end": name, "segments": [f"{a}-{b}" for a, b, _ in items],
                       "range": sl["range"] if sl else None, "slow": sl["slow"] if sl else None, "std": sl["name"] if sl else None})
-    # 要测的这条线终点是"全部放完"（比如喇叭最后一声），中途有"第一个能感觉到的结果"（喇叭出第一声）：
-    # 另记一条到那一步的线。体验标准（说完到听到回答开头）只能套在这条上，全部放完的长短取决于回答有多长
+    # 要测的这条线中途有"第一下感觉到的结果"（AI 标的 felt=first，比如开始出声、锁开始动）、终点在它之后：
+    # 另记一条到那一步的线。体验标准只套在这条上；到最后一下的长短常常取决于内容多少（回答多长、门多重）
     pn = {x["p"]: x["n"] for x in steps}
-    if len(main) > 1 and any(w in pn.get(main[-1][1], "") for w in LAST_WORDS):
-        cut = next((i for i, (_, b, _) in enumerate(main[:-1]) if any(w in pn.get(b, "") for w in FIRST_WORDS)), None)
-        if cut is not None:
-            end = pn[main[cut][1]]
-            lines[-1].update(name=f"到{pn[main[-1][1]]}", end=pn[main[-1][1]])  # 两条都按终点叫，免得"开口这条"其实量到全部放完
-            lines.insert(len(lines) - 1, {"name": f"到{end}", "end": end, "first": True, "range": None, "slow": None, "std": None,
-                                          "segments": [f"{a}-{b}" for a, b, _ in main[:cut + 1]]})
+    felt = {x["p"]: x.get("felt") for x in steps}
+    cut = next((i for i, (_, b, _) in enumerate(main[:-1]) if felt.get(b) == "first"), None)
+    if cut is not None:
+        end = pn[main[cut][1]]
+        lines[-1].update(name=f"到{pn[main[-1][1]]}", end=pn[main[-1][1]])  # 两条都按终点叫，免得"开口这条"其实量到全部放完
+        lines.insert(len(lines) - 1, {"name": f"到{end}", "end": end, "first": True, "range": None, "slow": None, "std": None,
+                                      "segments": [f"{a}-{b}" for a, b, _ in main[:cut + 1]]})
     exps = []  # 体验标准每条线一条：标准里那条线对上了真线，就挂到真线上
     for e in experiences(standard or {}):
         hit = [l for l in lines if l["std"] == e.get("line")]
@@ -229,6 +229,7 @@ def real_scenario(page, standard, values=None):
             "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
             "experiences": exps, "problems": problems, "standard": (standard or {}).get("name"),
             "point_names": {x["p"]: x["n"] for x in steps},
+            "point_kinds": {x["p"]: x["kind"] for x in steps if x.get("felt") and x.get("kind")},
             "optional": [x["p"] for x in steps if x.get("opt")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
             "matched": mp}
@@ -309,31 +310,20 @@ def inserted_page(page, steps=None, inserted=None):
             "main": [s["p"] for s in kept if s.get("line") != "face"]}
 
 
-VOICE_WORDS = ("说", "声", "听", "喇叭", "回答", "语音", "开口")
-FIRST_WORDS = ("第一声", "出第一", "首声")  # 不用"开口"：会撞上"收到开口通知"这种服务器消息
-DONE_WORDS = ("说完", "停下", "讲完", "听出", "说话结束", "静音")  # 起点是"设备判断出人说完了"的说法
-LAST_WORDS = ("最后", "放完")
 
 
 def with_default_experience(sc):
-    """语音对话类的设备，要测的这条线（最后一条，终点是用户听到回答）还没有体验标准时，挂上码表自带标准里的
-    对话体验参考值（1.5 秒，出处写在标准里）。不是语音的、或已经有体验标准的不动。"""
+    """第一下感觉到的结果是声音的（AI 标的 kind），那条线还没有体验标准时，挂上码表自带标准里的
+    对话体验参考值（1.5 秒，出处写在标准里）。不是声音的、或已经有体验标准的不动。"""
     from fsw.scenario import experience_of
     lines = sc.get("lines") or []
-    names = sc.get("point_names") or {}
-    # 套在终点是"第一个能感觉到的结果"的线上：有"到第一声"那条就用它；要测的这条终点是"全部放完"的不套
-    line = next((l for l in lines if l.get("first")), None) or (lines[-1] if lines and not any(
-        w in names.get(((sc.get("segments") or {}).get(lines[-1]["segments"][-1]) or {}).get("to", ""), "") for w in LAST_WORDS) else None)
+    kinds = sc.get("point_kinds") or {}
+    # 套在终点是"第一下感觉到的结果"的线上：有"到第一下"那条就用它；没有就用要测的这条（它的终点就是唯一那一下）
+    line = next((l for l in lines if l.get("first")), None) or (lines[-1] if lines else None)
     if not line or any(experience_of(sc, l["name"]) for l in lines):
         return sc
-    pts = {x for k in line.get("segments") or [] for x in ((sc.get("segments") or {}).get(k) or {}).values()
-           if isinstance(x, str) and x in names}
-    if not any(w in names[p] for p in pts for w in VOICE_WORDS):
-        return sc
-    # 参考值说的是"人说完到听到回答"：起点要是设备判断出人说完的那一刻。起点是之后才到的（比如收到听写文字），
-    # 少算了上传、听写那段，套上去会把慢的判成"可以"（10-18 真机：同一台设备 1.62 秒判差、换了起点 1.20 秒判可以）
-    st = sc.get("start") or {}
-    if not any(w in f"{st.get('name') or ''}{names.get(st.get('point'), '')}" for w in DONE_WORDS):
+    end = ((sc.get("segments") or {}).get((line.get("segments") or [""])[-1]) or {}).get("to")
+    if kinds.get(end) != "声音":  # 参考值说的是"人说完到听到回答"：只套在终点是听到声音的线上（AI 标的 kind，不按名字猜）
         return sc
     ref = next((d["experience"] for d in load_all() if (d.get("experience") or {}).get("fair") is not None), None)
     if not ref:

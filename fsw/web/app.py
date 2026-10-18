@@ -834,7 +834,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
         def ready():
             """烧完先停下：设备会重启、连网，人要先喊唤醒词再说一句，等点了"准备好了"才开始试一次。"""
-            job.update(phase="try", status="ready_try", pct=0, got=[], log="等你准备好：先喊唤醒词，再说一句", ready_at=time.time())
+            job.update(phase="try", status="ready_try", pct=0, got=[], log="等你准备好：完整做一次要测的事", ready_at=time.time())
             return None
 
         def try_once():
@@ -939,7 +939,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if got and len(got) < need_n:  # 只收到零星几个：不算试通（决策 124）
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 return _fail(job, "try", f"只收到 {len(got)} / {len(want)} 个计时点，这一次没走完。点「再试一次」，然后完整做一次要测的事。",
-                             why="可能刚才只唤醒了设备、还没说那句话，或者设备还没准备好。", error=f"（收到 {len(got)} / {len(want)} 个）",
+                             why="可能刚才只做了一半（比如只让设备准备好、还没真正做那件事），或者设备还没准备好。", error=f"（收到 {len(got)} / {len(want)} 个）",
                              offer_restore=job["try_fails"] >= 2)
             if not got:
                 job["try_fails"] = job.get("try_fails", 0) + 1
@@ -1147,7 +1147,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if r.get("half"):  # 开始读时这一次已经过了起点：不算，提示再做一次（决策 101）
                     job["half"] = job.get("half", 0) + 1
                     job["half_hint"] = ("这一次开头没收到（码表开始听的时候它已经开始了），不算。"
-                                        "刚才要是在做要测的事，再做一次；只是唤醒设备的话，不用管。")
+                                        "刚才要是在做要测的事，再做一次；只是让设备准备好（比如唤醒）的话，不用管。")
                     continue
                 if r.get("nostart"):  # 设备没记到起点：不算一轮，不出格子，报告的数据检查里写上（决策 133）
                     job["nostart"] = job.get("nostart", 0) + 1
@@ -1170,7 +1170,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     worst = max(run.items(), key=lambda kv: kv[1])
                     if worst[1] >= 2:
                         name = worst[0].split("（")[0]
-                        job["half_hint"] = (f"「{name}」连着 {worst[1]} 轮都记在你说完之前，不像是这一轮的事，再测也一样。"
+                        job["half_hint"] = (f"「{name}」连着 {worst[1]} 轮都记在起点之前，不像是这一轮的事，再测也一样。"
                                             "多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 job["rounds"].append(r)
                 if r["ok"] and not job.get("_checked"):  # 第 1 轮收齐：自动校验计时点位置，不对就停下，不让后面白测（决策 158）

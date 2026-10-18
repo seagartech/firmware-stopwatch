@@ -356,8 +356,8 @@ function chips(){const C=(t,x)=>`<button class="pill" data-fill="${x}">${x}</but
 const examples=`<div class="pills"><span class="note">比如：</span>${['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'].map(x=>`<button class="pill" data-fill="${x}">${x}</button>`).join('')}</div>`;
 
 // 精简流程（决策 158）：一律测全程；点「开始测量」后自动执行，只在要人工操作或校验没过时停下
-// 10-18 真机：只写"最早""最后"时，大模型有一次把起点放到"收到听写文字"、终点放到"设备开口"，少了前后两头；写了"中间的结果都要有"，又把同时走的表情串进了主线（等服务器那段被拆开，还会出负数）。写明两头和中间各怎么放（举几种设备的例子）
-const WHOLE='全程：起点是用户做完那件事、设备自己察觉到的那一刻（比如设备判断出你说完了、读到卡号），不要用之后才收到的服务器消息当起点；终点是用户感受到的最后一个结果（比如喇叭把回答整段放完、门锁打开到位）；同一路上先出现的结果（比如喇叭出第一声）放在要测的这条线中间；和它同时、分开走的另一路结果（比如换上表情、灯亮）不要串进来，单独作为顺带发现的线';
+// 结构由码表定（起点、第一下和最后一下感觉到的结果，见找步骤的要求），这里只说测哪一段，不靠措辞去纠正某个固件（10-18 用户：通用代码不迁就某一个固件）
+const WHOLE='全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果';
 let AUTO=false,autoHold='',autoBusy='',autoT0=0;
 const TRY_SECS=180;  // 和后台 TRY_SECONDS 一致：试一次最多等多久
 const AUTO_ROUNDS=10;
@@ -938,7 +938,7 @@ function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=
  if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;
  return `<div class="bigask"><b>${/^现在/.test(tryAct())?tryAct():'现在对设备：'+tryAct()}</b>
   <span class="note">设备已经开机了。只是确认计时点能收到，不算进数据。</span>
-  ${idle?`<span class="note" style="color:var(--warn)">已经 ${since} 秒没收到计时点：设备可能还在联网，或者还没被唤醒。请现在再做一次。</span>`:''}
+  ${idle?`<span class="note" style="color:var(--warn)">已经 ${since} 秒没收到计时点：设备可能还在联网，或者还没准备好。请现在再做一次。</span>`:''}
   <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点${J.try_started?`　剩余 <b class="num">${mmss(Math.max(0,TRY_SECS-(now-J.try_started)))}</b>，超时判未通过`:''}</span>${got>=Math.max(2,N/2)&&got<N&&(J.missing||[]).length?`<span class="note">还差「${J.missing.map(htmlEsc).join('」「')}」：有的步骤只在某些情况下才走到，接着再完整做一次（${tryAct()}），码表会继续收。</span>`:''}${fullLogBtn()}${fullLog()}</div>`}  // 设备原始输出不摆在明面上，想看点"完整日志"（决策 139）
 // 完整日志（决策 106）：编译、烧录、试一次时设备和工具的输出，最近 200 行，去掉了控制字符
 let showFull=false;
