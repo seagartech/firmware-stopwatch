@@ -92,7 +92,7 @@ function decisionsJ(D){const J=D.J,out=[];
   for(const x of J.labels){const lv=['必须改','建议改','可以不改'].indexOf(x.level);
    if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=D.biggest,share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
     out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:isMain?`${l.end}要 ${f(l.med,1)} 秒，大头是"${b.name}"`:`${l.end}要 ${f(l.med,1)} 秒`,
-     d:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`:`${x.why}。`,who:x.level==='可以不改'?(v==='还没有合理范围'?'还没有合理范围，先只记用时':'在合理范围里，不用改'):`找${b.owner}`})}
+     d:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`:`${x.why}。`,who:x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
    else if(x.kind==='spiky'){const s=D.allSegs.find(y=>y.k===x.segment);if(!s||x.with)continue;  // 和对错问题同一根因的，合并到那条里
     out.push({k:x.k,seg:x.segment,lv,src:src.spiky,tag:['偶发','c-warn'],t:`"${s.name}"偶尔特别慢`,d:`平时 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒（${roundList(x.rounds.map(n=>({n})))}）。`,who:`找${s.owner}`})}
    else if(x.order&&D.lines.length>1)out.push({k:'reversed',lv,src:src.order,tag:['要查','c-bad'],t:`${x.rounds.length} 轮${D.lines[0].end}反而比${D.lines[1].end}晚`,d:`${roundList(x.rounds.map(n=>({n})))}。"先给反应"这个设计在这几轮白做了。`,who:'先查是哪一段变慢'});
@@ -130,23 +130,25 @@ function timeline(D){
    g+=`<line x1="${x}" x2="${x}" y1="${below?y-4:y-16}" y2="${below?y+h+18:y+h+10}" stroke="var(--warn)" stroke-dasharray="3 4" stroke-width="1.5"/><text x="${x+4}" y="${below?y+h+16:y-6}" font-size="11.5" fill="var(--warn)">${l.name}：超过 ${es.fair} 秒算体验差（${htmlEsc(es.short||(es.source&&es.source.startsWith('用户设定')?'用户设定':'参考值'))}）</text>`});
   else if(D.S.exp&&D.S.exp.fair<=T)g+=`<line x1="${sx(D.S.exp.fair)}" x2="${sx(D.S.exp.fair)}" y1="30" y2="${H-30}" stroke="var(--warn)" stroke-dasharray="3 4"/><text x="${sx(D.S.exp.fair)+4}" y="40" font-size="11.5" fill="var(--warn)">${D.S.exp.label}</text>`;
   g+=`<text x="${sx(0)}" y="22" text-anchor="middle" font-size="12" fill="var(--muted)">${D.S.start}</text>`;
-  g+=`<line x1="${sx(0)-60}" x2="${sx(0)}" y1="${top+h/2}" y2="${top+h/2}" stroke="var(--est)" stroke-dasharray="4 4" stroke-width="2"/><text x="${sx(0)-64}" y="${top-6}" font-size="11.5" fill="var(--est)">推算段</text>`;
+  const shown=new Map();let merged=false;  // 图例只列图上画成单独一块的段；合并了的几段另列一项
   D.lines.forEach((l,i)=>{const y=top+i*gap;let t0=0;
     g+=`<text x="${X0-14}" y="${y+h/2+5}" text-anchor="end" font-size="14" font-weight="700" fill="${l.col}">${l.name}</text>`;
+    if(D.rep.ends[i]==null){g+=`<text x="${sx(0)+8}" y="${y+h/2+5}" font-size="12" fill="var(--muted)">这一轮没收到</text>`;return}
     // 几段连着都很短（画出来不到 8 像素）：合成一小块、用灰色，鼠标移上去看是哪几段；段与段之间留一道缝（决策 139）
-    let tiny=null;const flush=()=>{if(!tiny)return;const n=tiny.n.length;g+=`<rect x="${sx(tiny.a)}" y="${y}" width="${Math.max(3,sx(tiny.b)-sx(tiny.a))}" height="${h}" fill="var(--est)" opacity=".6" stroke="var(--panel)" stroke-width="1" rx="1"><title>${n>1?`${n} 段很短，共 ${f(tiny.b-tiny.a)} 秒：`:''}${tiny.n.join('；')}</title></rect>`;tiny=null};
+    let tiny=null;const flush=()=>{if(!tiny)return;const n=tiny.n.length;merged=true;g+=`<rect x="${sx(tiny.a)}" y="${y}" width="${Math.max(3,sx(tiny.b)-sx(tiny.a))}" height="${h}" fill="var(--est)" opacity=".6" stroke="var(--panel)" stroke-width="1" rx="1"><title>${n>1?`${n} 段很短，共 ${f(tiny.b-tiny.a)} 秒：`:''}${tiny.n.join('；')}</title></rect>`;tiny=null};
     l.segs.forEach((k,j)=>{const d=D.S.segs[k].v[R],a=t0,b=t0+d;t0=b;const last=j===l.segs.length-1;const shared=D.use[k]>1;
       if(!last&&sx(b)-sx(a)<8){tiny=tiny||{a,b,n:[]};tiny.b=b;tiny.n.push(`${D.S.segs[k].name} ${f(d)} 秒`);return}
       flush();
-      const c=last?l.col:shared?'var(--soft)':l.soft;
+      const c=last?l.col:shared?'var(--soft)':l.soft;if(!shown.has(k))shown.set(k,c);
       g+=`<rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"><title>${D.S.segs[k].name} ${f(d)} 秒</title></rect>`;
-      if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(d)}<title>${nm}</title></text>`}});flush();
+      if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(d)}<title>${nm}</title></text>`}
+      else if(sx(b)-sx(a)>34&&!last)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)" class="num">${f(d)}<title>${D.S.segs[k].name}</title></text>`});flush();
     g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(D.rep.ends[i])} 秒</text>`;});
-  if(D.lines.length>1){const a=D.rep.ends[0],b=D.rep.ends[1],y=top+gap-12;
+  if(D.lines.length>1&&D.rep.ends[0]!=null&&D.rep.ends[1]!=null){const a=D.rep.ends[0],b=D.rep.ends[1],y=top+gap-12;
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(b-a,2)} 秒</text>`;}
-  const segLegend=Object.entries(D.S.segs).filter(([k])=>D.lines.some(l=>l.segs.slice(0,-1).includes(k))).map(([k,s])=>{const c=D.use[k]>1?'var(--soft)':D.lines.find(l=>l.segs.includes(k)).soft;return `<span><i class="sw" style="background:${c}"></i>${s.name}${D.use[k]>1?'（共用）':''}</span>`}).join('');
+  const segLegend=[...shown].map(([k,c])=>`<span><i class="sw" style="background:${c}"></i>${D.S.segs[k].name}${D.use[k]>1?'（共用）':''}</span>`).join('')+(merged?`<span><i class="sw" style="background:var(--est);opacity:.6"></i>几段很短、合成一块（鼠标移上去看是哪几段）</span>`:'');
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
-  <div class="legend">${segLegend}<span><i class="sw" style="background:none;border-top:2px dashed var(--est);height:0"></i>${D.S.est.label}（${D.S.est.note}）</span></div>`;
+  <div class="legend">${segLegend}</div>`;
 }
 function roundsChart(D){
   const T=niceT(Math.max(...D.rounds.flatMap(r=>r.ends))/1.2);const W=900,X0=70,X1=820,sx=t=>X0+(X1-X0)*t/T,rh=20,top=34,st=step(T);
@@ -189,7 +191,7 @@ function bossSplit(ds){const by=lv=>ds.filter(x=>x.lv===lv);return {open:[...by(
 function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;return o?`建议：${o.name}，预计${o.effect}。`:''}
 function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
   const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li>${lvTag(x.lv)}<span><b>${x.t}</b>　${x.d}${x.who}。${r?`<br><b>${r}</b>`:''}<br><span class="src">出处：${jump('sec-'+x.src[0],'见下方'+x.src[1])}${n>=0?`　为什么、怎么改：${jump('fix-'+n,'问题 '+(n+1))}`:''}</span></span></li>`};
-  return `<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条在合理范围里，不用改</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
+  return `<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条不用改</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
   <details class="lvwhy"><summary>数字从哪来、标签规则</summary><ul class="notes"><li>这里的数字都是码表按这次 ${D.n} 轮数据直接算出来的，不经过 AI。</li><li>"为什么、怎么改"的文字是 AI 读代码写的。</li><li>要做哪些方案：在下方每个问题的方案表里勾选，结果汇总在 ${jump('my-pick','你的决定')}。</li></ul>
   <ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
   <li><b class="lvtag lv-must">必须改</b>中位数超过慢阈值，或体验标准判"差"，或"10 次里最慢"超过慢阈值（每 10 次就有 1 次让人等太久）。</li>
@@ -539,7 +541,7 @@ function prevLine(){const P=JREP&&JREP.prev;if(!P)return '';if(P.why)return `<p 
  return `<p style="margin:0"><b>比上次（${htmlEsc(P.measured_at)}，${P.n} 轮）：</b>${htmlEsc(endName)} ${f(p)} → ${f(m.med)} 秒　${cmpTxt(m.med,p,(P.noise_lines||{})[m.name])}<span class="note">　各段见「技术细节」的"上次"一栏</span></p>`}
 function staleBar(){if(!(JREP&&!JREP._none&&repKey().startsWith('real')))return '';const RL=JREP.scenario&&JREP.scenario.range_list,F=JREP.list_filled,PL=prevLine();
  if(RL&&RL.broken)return PL+`<section class="panel stale"><p style="margin:0"><b>⚠ 合理范围清单格式不对，这次按码表自带的范围判。</b></p><p class="note" style="margin:4px 0 0">${htmlEsc(RL.broken)}</p></section>`;
- return PL+(F&&F.length?`<p class="note" style="margin:0">✓ 已按这次 ${JREP.n} 轮实测把合理范围清单填好（${F.length} 项）。想改就点「技术细节」→「合理范围清单」。</p>`:'')}
+ return PL+(F&&F.length?(JREP.scenario&&JREP.scenario.first_run?`<section class="panel"><p style="margin:0"><b>第一次测量：这次的结果已存为合理范围（${F.length} 项），下次改完再测就和它比。</b></p><p class="note" style="margin:4px 0 0">这次不拿自己判自己，快慢只按体验标准看；没有体验标准的线只记用时。想改合理范围就点「技术细节」→「合理范围清单」。</p></section>`:`<p class="note" style="margin:0">✓ 已按这次 ${JREP.n} 轮实测把合理范围清单填好（${F.length} 项）。想改就点「技术细节」→「合理范围清单」。</p>`):'')}
 // 负责人看的文字不出现代码：括号里带文件名、行号、函数名的整段去掉（码表格式检查也会拦，这里兜底早先存下的建议）
 const noCode=t=>String(t||'').replace(/\s*[（(][^（）()]*?(?:[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\))[^（）()]*?[）)]/g,'');
 function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:noCode(plain(F.why)),impact:noCode(plain(F.impact)),rec:noCode(plain(F.rec)),opts:F.opts.map(o=>({...o,name:noCode(plain(o.name)),effect:noCode(plain(o.effect)),cost:noCode(plain(o.cost)),wn:noCode(plain(o.wn))}))})});return out}
@@ -572,6 +574,10 @@ let EXP={dir:'',saved:null};
 const expWhat=()=>realFlash()?(IDENT.page.mapWhat||hSay||''):'';  // 文件名用你自己写的场景说法
 function expDone(){return EXP.saved?`<section class="panel expdone" role="status"><div class="acts" style="justify-content:space-between;align-items:center;margin:0;flex-wrap:wrap"><span>✓ 已导出：<span class="code">${htmlEsc(EXP.saved)}</span></span><span style="display:flex;gap:8px"><button class="pill" data-expshow="1">在访达里显示</button><button class="pill" data-expclose="1">关掉</button></span></div></section>`:''}
 async function exportStart(){EXP.state='';EXP.err='';try{EXP.dir=(await (await fetch('/api/report/export-dir'+(repKey().startsWith('real')?'':'?demo='+encodeURIComponent(scene)))).json()).dir}catch(e){}pop='export';render()}
+// 测完自动存一份报告（报告关掉、码表重启后，「以前测过的」里还能打开）：等"为什么、怎么改"写完再存，每次测量只存一次
+let AUTOSAVED='';
+function autoSave(){if(page!=='report'||!repKey().startsWith('real')||!JREP||JREP._none||!JREP.measured_at||AUTOSAVED===JREP.measured_at)return;
+ if(ADV?ADV.status==='running':D0ok())return;AUTOSAVED=JREP.measured_at;if(EXP.state==='ok'&&EXP.saved)return;setTimeout(()=>exportReport(),300)}
 async function exportReport(folder){
   const keep={mode,fixTodo},m=document.getElementById('main');
   mode='boss';fixTodo=false;render();const boss=m.innerHTML;mode='dev';render();const dev=m.innerHTML;mode=keep.mode;fixTodo=keep.fixTodo;render();
@@ -1429,7 +1435,7 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   {const m=document.getElementById('main');const need=page==='steps'&&stepsRead===2&&alsoFace===null?'#sideask':null;const el=need&&m.querySelector(need);if(el)el.classList.add('need')}
   document.getElementById('v-boss').setAttribute('aria-pressed',String(mode==='boss'));
   document.getElementById('v-dev').setAttribute('aria-pressed',String(mode==='dev'));
-  syncFlow();syncHash();uiSave();autoTick();
+  syncFlow();syncHash();uiSave();autoTick();autoSave();
 }
 // 步骤条同步给后台：后台记下走到哪一步、哪步出错、哪些跳过（刷新网页、以后接真功能都靠它）
 let lastKind='',lastSync='';

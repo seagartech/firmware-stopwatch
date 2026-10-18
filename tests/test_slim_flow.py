@@ -226,3 +226,13 @@ def test_side_line_points_not_every_round_stay_on_the_side_line():
     assert len(spec.lines) == 2 and "P6" not in spec.need  # 没换表情的那一轮照样收齐，只是表情线那一轮算不出来
     cur = {"P2": (1_000_000, 0), "P3": (2_000_000, 0), "P4": (3_000_000, 0)}
     assert None in m.compute(cur, spec)["ends"]
+
+
+def test_voice_main_line_gets_the_reference_experience_standard():
+    from fsw import standards as stds
+    sc = {"lines": [{"name": "回答这条", "segments": ["s"]}], "segments": {"s": {"from": "P1", "to": "P2", "name": "x"}},
+          "point_names": {"P1": "收到听写文字", "P2": "喇叭最后一声"}, "experiences": []}
+    e = stds.with_default_experience(sc)["experiences"]
+    assert e[0]["line"] == "回答这条" and e[0]["fair"] == 1.5 and e[0]["source"]
+    door = {**sc, "point_names": {"P1": "刷卡", "P2": "开门"}}
+    assert stds.with_default_experience(door)["experiences"] == []  # 不是语音的不乱套
