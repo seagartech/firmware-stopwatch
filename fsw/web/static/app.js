@@ -55,7 +55,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const sc=J.scenario,st={...Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),...(sc.points||{})},rng=r=>r?`${r[0]}～${r[1]??'不限'}`:'—';
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,ok:rng(g.range),slow:g.slow,v:val(k)}]));
  const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
- const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
+ const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first?l.end:side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
