@@ -52,7 +52,6 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
  "side_from": "顺带那条线从哪个计时点分出去，没有就空",
  "side_segments": [{{"from": "P1", "to": "P5", "name": "…", "who": "…", "outside": false}}],
  "outside_note": "设备外那段在做什么，12 个字以内，比如：服务器：听写、想回答；没有就空",
- "wake_word": "要先喊唤醒词才开始听的语音设备，写出代码里配置的中文唤醒词（比如：你好小智）；不需要唤醒词或不是语音设备就空着",
  "doubts": [{{"text": "读代码时发现的可能变慢或出错的地方", "sure": "高 / 中 / 低"}}]
 }}
 ```
@@ -63,6 +62,7 @@ steps 按发生的先后顺序排；segments 是要测的这条线从起点到�
 - "收到"类的计时点放在任何条件判断（比如"状态不对就丢掉"）之前，被丢掉的也要能记到。
 - "切换完成""生效"类的计时点放在这次切换引起的动作（比如清空缓存、关掉录音）都做完之后。
 - 设备有几种触发方式（比如点屏幕、喊唤醒词、接着上一句说）时，起点选几种方式汇合后、每一轮都会经过的那一步；只在某一种方式才走的步骤可以列，但 always 写 false。
+- 起点是用户做完那件事、设备知道了的时刻（比如判断你说完了、读到卡号），不要选"进入聆听""开始等待"这类事情还没发生的时刻：那样会把等人开口的时间也算进去。
 - 拿不准就标"低"或"中"，并在 doubt 里写为什么，不要编。
 - 说明文字里不要写 P1、P2 这样的编号，写步骤的中文名。
 - 起点或终点在源码里找不到，就把 start_found / end_found 写 false，并在 missing 里说清楚。
@@ -224,7 +224,7 @@ def to_page(r, what):
         "server": r.get("outside_note") or "", "mapWhat": what,
         "mapSel": next((s["p"] for s in steps if s["sure"] != "高"), steps[0]["p"]),
         "measure": f"{sname} → {mend}", "mainTitle": f"{mname}：{sname} → {mend}",
-        "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "wake": str(r.get("wake_word") or "").strip(), "warn": r.get("warn"), "startNote": start.get("note") or "",
+        "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "",
         "sideAsk": None, "sideTitle": "", "sideLbl": "",
     }
     if side:
