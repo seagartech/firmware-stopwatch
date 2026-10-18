@@ -205,6 +205,7 @@ def real_scenario(page, standard, values=None):
         cut = next((i for i, (_, b, _) in enumerate(main[:-1]) if any(w in pn.get(b, "") for w in FIRST_WORDS)), None)
         if cut is not None:
             end = pn[main[cut][1]]
+            lines[-1].update(name=f"到{pn[main[-1][1]]}", end=pn[main[-1][1]])  # 两条都按终点叫，免得"开口这条"其实量到全部放完
             lines.insert(len(lines) - 1, {"name": f"到{end}", "end": end, "first": True, "range": None, "slow": None, "std": None,
                                           "segments": [f"{a}-{b}" for a, b, _ in main[:cut + 1]]})
     exps = []  # 体验标准每条线一条：标准里那条线对上了真线，就挂到真线上

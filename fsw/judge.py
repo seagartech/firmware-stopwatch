@@ -62,14 +62,25 @@ def experience(line_name, st, exp):
     return "差" if st["med"] > exp["fair"] else "可以"
 
 
-def combo(exp, inside, verdict="正常"):
+def combo(exp, inside, verdict="正常", big=None):
     if verdict == "没有范围" and exp is None:
         return "还没有合理范围：只记下用时，先不判快慢"
+    if verdict == "没有范围" and exp == "差" and big:  # 第一次测：没有范围可查"哪段做坏了"，直接说慢在哪一段
+        return f"体验差：慢在「{big[0]}」（{big[1]:.2f} 秒，占 {big[2]}%）"
     if exp is None:
         return "只按合理范围判：正常" if inside else "只按合理范围判：先查哪段做坏了"
     if exp == "差":
         return "每段都没做坏，是做法本身慢，要换做法才会快" if inside else "先查哪段做坏了"
     return "正常" if inside else "可能有隐患"
+
+
+def _big(line, seg_st, segs_def, st):
+    """这条线里用时最大的一段：(名字, 中位数, 占这条线中位数的百分比)。"""
+    mine = [k for k in line["segments"] if k in seg_st]
+    if not mine or not st["med"]:
+        return None
+    k = max(mine, key=lambda k: seg_st[k]["med"])
+    return segs_def[k]["name"], seg_st[k]["med"], round(seg_st[k]["med"] / st["med"] * 100)
 
 
 def judge(scenario, rounds):
@@ -104,7 +115,7 @@ def judge(scenario, rounds):
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
                              "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常",
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short")} if es else None,
-                             "combo": combo(e, v == "正常", v),
+                             "combo": combo(e, v == "正常", v, _big(l, seg_st, segs_def, st)),
                              "over_slow": sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
                              "segments": l["segments"]})
 
