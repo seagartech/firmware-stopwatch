@@ -249,6 +249,7 @@ class FswInsertBody(BaseModel):
 
 
 NO_DATA_SECS = 20  # 多轮实测：调试口开着，这么久没收到计时点就说人话提示（不停下，做了就接着收）
+CARRY_SECS = 30  # 试通后这么久内开始多轮实测，才接着算试通时正在进行的那一轮
 ROUND_SETTLE = 1.5  # 多轮实测：一轮收全后，下一轮一直没开始，再等这么久就收尾（最后一轮、或设备不再开始下一轮）
 MISS_RUN = 3       # 多轮实测：同一个计时点连着这么多轮没收到，就在提示里点名
 
@@ -871,7 +872,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if line.strip().startswith("FSW,RESET"):
                     rounds["prev"] = (rounds["cur"], p[1] if p else None)
                     rounds["cur"] = set()
+                    rounds["tail"] = []
                     return
+                if p:
+                    rounds.setdefault("tail", []).append(line)  # 这一轮到现在的计时点：试通时交给多轮实测，这一轮接着算（不用再多说一句）
                 got = ins.count_marks([line]) & want
                 rounds["seen"] |= got
                 pv = rounds.get("prev")
@@ -949,6 +953,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "try", f"{TRY_SECONDS // 60} 分钟里没收到计时点。点「再试一次」，然后做一次要测的事。", why=why,
                              error=f"（{TRY_SECONDS} 秒内没有计时点输出）", offer_restore=job["try_fails"] >= 2)
             job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
+            fsw["carry"] = {"lines": list(rounds.get("tail") or []), "at": time.time()}  # 试通那一刻正在进行的这一轮
             T().end("try")
             return True
 
@@ -1225,6 +1230,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["hint"] = ""
                 time.sleep(min(1.0, NO_DATA_SECS / 3))
 
+        carry = fsw.pop("carry", None) if body.source == "device" and not body.resume else None
+        if carry and time.time() - carry["at"] < CARRY_SECS:
+            # 试通时这一轮已经过了起点（比如唤醒后说的那一句，起点一到就试通了）：把已收到的计时点先喂进来，这一轮照样算，
+            # 不再当"开头没收到"白说（真测第 29 次）。不喂结束标记：这一轮后面的点要是在换调试口时丢了，照旧算开头没收到，不算没收全
+            for l in carry["lines"]:
+                on_line(l)
+
         def run_device():
             def helper_crashed(e):  # 看收尾、看安静的小线程出错：停下这次实测（已测的留着），不让最后一轮一直收不了尾
                 job["_stop"] = True
@@ -1409,10 +1421,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 name = json.loads((d / "project.json").read_text(encoding="utf-8")).get("name")
             except (OSError, ValueError):
                 name = None
+            fresh = not lst or not any(x.get("range") for x in list(lst["segments"].values()) + lst["lines"])
             lst, filled = rl.fill(lst, sc, ok, project=name or d.name)
             if filled:
                 rl.save(d, lst)
                 job["_filled"] = filled
+                job["_fresh"] = fresh  # 填之前清单里一个数都没有：这次就是第一次测
                 job["_filled_vals"] = {x["name"]: (x.get("range"), x.get("slow"))
                                        for x in list(lst["segments"].values()) + lst["lines"] if x["name"] in filled}
         out = rl.apply(sc, lst) if lst else sc
@@ -1421,7 +1435,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             for x in list(out["segments"].values()) + out["lines"]:
                 if x.get("name") in auto and (x.get("range"), x.get("slow")) == auto[x["name"]]:
                     x.update(range=None, slow=None, new=True)
-            out["first_run"] = len(auto) >= len(out["segments"]) + len(out["lines"])  # 全是这次新填的才算第一次测；只补了新出现的几项照常判其余的
+            # 填之前清单里没有任何数才算第一次测（按条数比会错：同名的段和线、没测到的段都会让条数对不上，真测第 29 次）；只补了新出现的几项照常判其余的
+            out["first_run"] = bool(job.get("_fresh"))
         return stds.with_default_experience(out)
 
     def _list_dir(project_dir=None):

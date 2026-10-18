@@ -398,3 +398,35 @@ def test_try_counts_the_last_sound_that_ends_just_after_the_round_marker(setup):
     wait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
     assert j["status"] == "done" and j["got"] == [1, 2, 5]
+
+
+class WakeThenStream(WakeRoundNoStartDevice):
+    """试通那一刻（起点刚到）这一轮还在进行：多轮实测接着收这一轮后面的点。"""
+    def stream(self, port, on_line, stop):
+        for l in ["FSW,P2,150,0", "FSW,P5,160,0", "FSW,RESET,300,0", "FSW,P1,310,1", "FSW,P2,350,0", "FSW,P5,360,0", "FSW,RESET,500,0",
+                  "FSW,P1,510,1", "FSW,P2,550,0", "FSW,P5,560,0", "FSW,RESET,700,0"]:
+            if stop():
+                return
+            on_line(l)
+        while not stop():
+            time.sleep(0.01)
+
+
+def test_round_running_when_try_passes_counts_in_measurement(setup):
+    # 真测第 29 次：唤醒后说的那句，起点一到就试通、转进多轮实测，这句被算"开头没收到"白说了
+    c, r, *_ = setup(device=WakeThenStream())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    assert run_to_try(c)["status"] == "done"
+    page = {"steps": [{"p": s["p"], "n": s["n"], "line": s["line"]} for s in STEPS],
+            "segs": [{"a": "P1", "b": "P2", "t": "读卡号"}, {"a": "P2", "b": "P5", "t": "开锁"}], "fsegs": [], "ln": {"talk": "开锁这条"}}
+    res = c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3})
+    assert res.status_code == 200, res.text
+    t = time.time()
+    while time.time() - t < 10:
+        j = c.get("/api/collect").json()
+        if j["status"] in ("done", "stopped"):
+            break
+        time.sleep(0.02)
+    assert j["status"] == "done" and not j.get("half")
+    assert [x["ok"] for x in j["rounds"]] == [True, True, True]

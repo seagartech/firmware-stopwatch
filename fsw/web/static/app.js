@@ -1111,12 +1111,12 @@ function tipOf(x){const C=CX(),L=DX().lines,at=t=>t.replace(/&/g,'&amp;').replac
  if(x.bad)return at(`<b>第 ${x.att} 次：${missTxt(x)}</b><br>不计入，已自动补测一轮`);
  return at(`<b>第 ${x.n} 轮</b>　${C.said}“${C.items[(x.n-1)%C.items.length]}”<br>`+L.map((l,i)=>`${l.end}：<b>${f(x.e[i])} 秒</b>${l.ok&&x.e[i]>l.ok[1]?`（超出合理范围 ${l.ok[0]}～${l.ok[1]} 秒）`:''}`).join('<br>')+'<br>'+(x.probs.length?x.probs.map(p=>'⚠ '+p.t).join('　'):'✓ 没出问题'))}
 function colB(){const k=okRounds().length,cur=Math.min(k,colN-1),C=CX();
- const sq=x=>{const p=x.probs&&x.probs[0];return `<i class="sq" tabindex="0" data-tip="${tipOf(x)}" style="background:${x.bad?'var(--soft)':p?`var(--${p.c})`:'var(--ok)'}"></i>`};
+ const sq=x=>{const p=x.probs&&x.probs[0];return x.bad?`<i class="sq bad" tabindex="0" data-tip="${tipOf(x)}"></i>`:`<i class="sq" tabindex="0" data-tip="${tipOf(x)}" style="background:${p?`var(--${p.c})`:'var(--ok)'}"></i>`};  // 没收全的格子画斜线，和还没测的空格分得开（真测第 29 次：以为还差一格没测）
  return `<section class="panel" style="text-align:center">
  ${col.st===1?`<p class="note" style="margin:0">第 ${cur+1} 轮 / 共 ${colN} 轮</p><p style="font-size:15px;margin:10px 0 4px">${col.phase===0?C.say:C.said}</p><p style="font-size:26px;font-weight:600;margin:0 0 16px">"${C.items[cur%C.items.length]}"</p>
  <div class="phs">${PH().map((p,i)=>`<span class="${i<col.phase?'ok':i===col.phase?'cur':''}">${p}</span>`).join('<b>→</b>')}</div>`:col.st===4?`<p style="font-size:20px;font-weight:600">已暂停：第 1 轮自动校验没通过</p>`:col.st===3?`<p style="font-size:20px;font-weight:600">已停止：测了 ${k} / ${colN} 轮</p>`:`<p style="font-size:20px;font-weight:600">测完了</p>`}
  <div class="sqs">${col.got.map(sq).join('')}${[...Array(Math.max(0,colN-k))].map(()=>'<i class="sq"></i>').join('')}</div>
- <p class="note" style="margin-bottom:2px">一格是一轮，颜色表示这轮有没有出问题（不是快慢）。鼠标移到格子上看这轮各段用时。</p><p class="note"><i class="dot" style="background:var(--ok)"></i>正常　${C.probs.map(p=>`<i class="dot" style="background:var(--${p.c})"></i>${p.t}　`).join('')}<i class="dot" style="background:var(--soft)"></i>没收全，自动补一轮</p>
+ <p class="note" style="margin-bottom:2px">一格是一轮，颜色表示这轮有没有出问题（不是快慢）。鼠标移到格子上看这轮各段用时。</p><p class="note"><i class="dot" style="background:var(--ok)"></i>正常　${C.probs.map(p=>`<i class="dot" style="background:var(--${p.c})"></i>${p.t}　`).join('')}<i class="sq bad" style="width:10px;height:10px;vertical-align:-1px"></i> 没收全，不计入，自动补一轮　<i class="sq" style="width:10px;height:10px;vertical-align:-1px"></i> 还没测</p>
  ${col.got.filter(x=>x.bad||x.probs.length).slice(-3).reverse().map(x=>`<p class="note" style="margin:2px 0">${x.bad?'第 '+x.att+' 次':'第 '+x.n+' 轮'}：${issues(x)}</p>`).join('')}
  <details style="text-align:left;margin-top:10px"><summary class="note" >逐轮明细（${okRounds().length} 轮）</summary>${colA().replace(/^<section class="panel">/,'<div>').replace(/<\/section>$/,'</div>')}</details></section>`}
 function colC(){const g=okRounds(),D=DX(),L=D.lines,main=L[L.length-1],W=720,H=230,Lp=46,R=12,T=14,B=30;
