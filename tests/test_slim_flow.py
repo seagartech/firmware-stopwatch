@@ -248,6 +248,28 @@ def test_experience_standard_follows_the_device_category_else_nielsen():
     assert stds.with_default_experience({**sc, "point_kinds": {}})["experiences"] == []  # 终点没标"感觉到的结果"（老的识别结果）不套
 
 
+def test_start_later_than_the_person_skips_the_experience_standard():
+    # 第 25 次：AI 把起点放在"收到服务器听写文字"，少算了上传和听写，拿"语音输入结束起算"的标准比会判轻
+    from fsw import standards as stds
+    from fsw.identify import PROMPT
+    sc = {"lines": [{"name": "回答这条", "segments": ["s"]}], "segments": {"s": {"from": "P1", "to": "P2", "name": "x"}},
+          "point_names": {"P1": "起点", "P2": "终点"}, "point_kinds": {"P2": "声音"}, "experiences": [], "category": "语音对话",
+          "start_late": True, "start_note": "上传录音、服务器听写"}
+    out = stds.with_default_experience(sc)
+    assert out["experiences"] == [] and "上传录音、服务器听写" in out["exp_skip"] and "不拿体验标准比" in out["exp_skip"]
+    page = {"steps": _talk([("P1", "收到听写"), ("P2", "喇叭出声")]), "segs": [{"a": "P1", "b": "P2", "t": "等"}], "fsegs": [],
+            "ln": {"talk": "回答这条"}, "startLate": True, "startNote": "上传录音"}
+    assert stds.real_scenario(page, None)["start_late"] is True
+    assert '"late"' in PROMPT and "设备自己能察觉人做完" in PROMPT  # 有设备自己察觉的点时优先拿它当起点（通用说法，不点名任何设备）
+
+
+def test_touch_category_uses_google_inp():
+    # 第 25 次：触屏例子落到尼尔森 1 秒太松；按键/触摸后屏幕或灯反应用谷歌 INP 0.2/0.5 秒
+    from fsw import standards as stds
+    ref = stds.reference("按键或触摸后屏幕/灯反应")
+    assert ref["fair"] == 0.5 and ref["good"] == 0.2 and "web.dev" in ref["source"]
+
+
 def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
     # 亲测第 11 次：全程的终点是"喇叭最后一声"，回答越长越久；1.5 秒参考值说的是"说完到听到回答开头"
     from fsw import standards as stds
