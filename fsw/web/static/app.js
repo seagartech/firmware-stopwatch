@@ -49,12 +49,19 @@ function advBox(){if(!ADV||ADV.status==='done')return '';
 const repKey=()=>(realFlash()&&FSWJ&&FSWJ.status==='done'?'real':'demo:'+scene)+':'+okRounds().length;
 async function fetchReport(){const key=repKey(),u=key.startsWith('real')?'/api/report':'/api/report?demo='+encodeURIComponent(scene);
  try{const r=await fetch(u);JREP=r.ok?{...(await r.json()),_key:key}:{_key:key,_none:true}}catch(e){JREP={_key:key,_none:true}}if(page==='report')render()}
+// 长短取决于内容的线（比如到回答全部放完：回答多少字决定多长）不判快慢，也不进图和结论：拉开刻度、看着像不稳定（10-18 用户定）。
+// 码表按数据判（每轮差很多才算），门"开到位"这类每轮差不多的照常保留；原始数据还在调试日志里
+function lenByContent(J){const sc=J.scenario,hide=new Set((J.lines||[]).filter(x=>x.verdict==='看回答长短').map(x=>x.name)),keep=sc.lines.filter(l=>!hide.has(l.name));
+ if(!hide.size||!keep.length)return sc;
+ const used=new Set(keep.flatMap(l=>l.segments)),gone=new Set(sc.lines.filter(l=>hide.has(l.name)).flatMap(l=>l.segments).filter(k=>!used.has(k)));
+ const main=keep[keep.length-1];
+ return {...sc,lines:keep,segments:Object.fromEntries(Object.entries(sc.segments).filter(([k])=>!gone.has(k))),cutEnd:main.end||main.name}}
 function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.status==='done';
  const val=k=>J.rounds.map(r=>r.segs[k]);
  if(!real){const S={...S0,segs:Object.fromEntries(Object.entries(S0.segs).map(([k,g])=>[k,{...g,v:J.rounds.map(r=>r.segs[k]??g.v[0])}])),J};return S}
- const sc=J.scenario,st={...Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),...(sc.points||{})},rng=r=>r?`${r[0]}～${r[1]??'不限'}`:'—';
+ const sc=lenByContent(J),st={...Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),...(sc.points||{})},rng=r=>r?`${r[0]}～${r[1]??'不限'}`:'—';
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,ok:rng(g.range),slow:g.slow,v:val(k)}]));
- const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
+ const P=IDENT.page,mEnd=sc.cutEnd||(P.measure||'起点 → 终点').split('→').map(x=>x.trim())[1],sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
  const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first?l.end:side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side&&!l.first?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
