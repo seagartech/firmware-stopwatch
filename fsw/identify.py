@@ -84,6 +84,7 @@ def build_prompt(what, chip="", known=None):
 def found_names(text, with_at=False):
     """从边找边报的文字里数出已找到的步骤名（和"文件:行号"）。"""
     out, at = [], []
+    text = text[:text.rfind("\n") + 1]  # 最后一行可能还没写完（AI 一段段往外吐）：只数写完的行，不然半截名字（"听""设"）也算一步
     for m in FOUND.finditer(text):
         n = m.group(1).strip()
         if n and n not in out:
