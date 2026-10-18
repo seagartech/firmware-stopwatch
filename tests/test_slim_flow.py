@@ -170,3 +170,36 @@ def test_give_up_hint_names_the_button_of_the_page():
     voice.drive(lambda t: None, lambda: "一加一等于几", lambda: True, lambda: 0, lambda: False, hints.append,
                 sleep=clk.sleep, clock=clk, again="再试一次")
     assert "「再试一次」" in hints[-1]
+
+
+def _page_with_touch_start():
+    # 点屏幕开始（P1）只在点屏幕时才走；语音一轮从"你说完"（P2）起
+    steps = [{"p": "P1", "n": "点屏幕开始", "line": "talk", "opt": True},
+             {"p": "P2", "n": "你说完", "line": "talk"},
+             {"p": "P3", "n": "收到回答", "line": "talk"},
+             {"p": "P4", "n": "开口", "line": "talk"}]
+    segs = [{"a": "P1", "b": "P2", "t": "听你说"}, {"a": "P2", "b": "P3", "t": "服务器", "out": True},
+            {"a": "P3", "b": "P4", "t": "放声音"}]
+    return {"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "开口这条"}}
+
+
+def test_trigger_only_point_is_not_on_the_line_and_not_required():
+    from fsw import standards as stds
+    page = stds.inserted_page(_page_with_touch_start())
+    assert [g["a"] for g in page["segs"]] == ["P2", "P3"]  # 线从每轮都经过的那一步起
+    sc = stds.real_scenario(page, None)
+    assert sc["start"]["point"] == "P2" and sc["optional"] == ["P1"]
+    spec = m.Spec.from_scenario(sc)
+    assert "P1" not in spec.need and {"P2", "P3", "P4"} <= set(spec.need)
+
+
+def test_identify_marks_trigger_only_steps_optional():
+    from fsw import identify
+    assert '"always"' in identify.PROMPT
+    r = {"steps": [{"id": "P1", "name": "点屏幕", "file": "a.c", "line": 1, "line_of": "main", "why": "", "sure": "高",
+                    "code": "", "loc_ok": True, "where": "", "once": "", "func": "", "doubt": "", "always": False},
+                   {"id": "P2", "name": "你说完", "file": "a.c", "line": 2, "line_of": "main", "why": "", "sure": "高",
+                    "code": "", "loc_ok": True, "where": "", "once": "", "func": "", "doubt": "", "always": True}],
+         "segments": [{"from": "P1", "to": "P2", "name": "x"}]}
+    steps = identify.to_page(r, "全程")["steps"]
+    assert steps[0].get("opt") is True and "opt" not in steps[1]

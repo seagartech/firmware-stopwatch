@@ -219,6 +219,7 @@ def real_scenario(page, standard, values=None):
             "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
             "experiences": exps, "problems": problems, "standard": (standard or {}).get("name"),
             "point_names": {x["p"]: x["n"] for x in steps},
+            "optional": [x["p"] for x in steps if x.get("opt")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
             "matched": mp}
 
@@ -273,14 +274,16 @@ def inserted_page(page, steps=None, inserted=None):
         o = {**orig.get(s["p"], {}), **{f: s[f] for f in ("n", "path", "l", "line") if s.get(f) is not None}}
         kept.append({**o, "p": k, "f": o.get("f") or Path(o.get("path") or "").name})
     keep = set(ren)
-    main = _contract(page.get("segs") or [], keep)
+    # 只在某种触发方式才走的计时点（opt）不放进线里：不是每轮都有，放进去整条线常常算不出来；只记"从起点到这一步"
+    keep_line = keep - {s["p"] for s in steps if (orig.get(s["p"]) or s).get("opt")}
+    main = _contract(page.get("segs") or [], keep_line)
     side = list(page.get("fsegs") or [])
     while side and side[0]["a"] not in keep:  # 顺带的线从一个没插的点分出去：往前接到要测的这条线上插了的那个点
         prev = next((g for g in page.get("segs") or [] if g["b"] == side[0]["a"]), None)
         if not prev:
             break
         side.insert(0, prev)
-    side = _contract(side, keep)
+    side = _contract(side, keep_line)
     if side and side[-1]["b"] in {x for g in main for x in (g["a"], g["b"])}:
         side = []  # 顺带那条线自己的点一个都没插（不测这条线）：只剩和要测的这条重合的那段，不算一条线
 

@@ -835,7 +835,7 @@ const tryMissing=()=>{if(!FSWJ||!FSWJ.view)return [];const nm=Object.fromEntries
 const trySay=()=>{if(!realFlash())return FF[scene].big;const w=IDENT.page.mapWhat||hSay||'';const st=(IDENT.page.measure||'').split('→')[0].trim();return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':`先做一次：${htmlEsc(st||w)}`};
 // 计时点编号和后台一样：P3 → P3；你自己加的 U1、U2 → P21、P22
 const fswId=p=>{if(/^P\d+$/.test(p))return p;const u=live().filter(x=>!/^P\d+$/.test(x.p)).map(x=>x.p);return 'P'+(20+u.indexOf(p)+1)};
-const fswSteps=()=>live().map(x=>({p:x.p,n:x.n,path:x.path||x.f,l:x.l,line:x.line,why:x.why||'',where:x.where||'',once:x.once||''}));
+const fswSteps=()=>live().map(x=>({p:x.p,n:x.n,path:x.path||x.f,l:x.l,line:x.line,why:x.why||'',where:x.where||'',once:x.once||'',...(x.opt?{opt:true}:{})}));
 function fswApply(j){FSWJ=j;const PH={insert:1,build:2,flash:3,try:4};
  fl.step=PH[j.phase]||1;fl.pct=j.pct||0;fl.log=j.log||'';fl.wait=false;fl.to=4;
  if(j.status==='running')fl.st=1;else if(j.status==='waiting_device'){fl.st=4;fl.log='没看到设备'}

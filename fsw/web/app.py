@@ -860,8 +860,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             # 和多轮实测同一个标准：有一轮（从一个起点到下一个起点）插上的计时点全部收到，才算试通。
             # 有的点只在某些情况下才走到（比如只喊唤醒词时，设备不会判断"你说完了"），所以某一轮没收全不马上判失败：
             # 接着听，人可以再做一次，直到有一轮收齐或时间到
-            need_n = max(1, len(want) - min(2, len(want) // 4))
             names = {ins.point_id(x, a.steps): x.get("n") for x in a.steps}
+            # 只在某种触发方式才走的计时点（比如点屏幕开始、喊唤醒词那一下）：每轮不一定有，不算必收
+            want = (want - {int(ins.point_id(x, a.steps)[1:]) for x in a.steps if x.get("opt")}) or want
+            need_n = max(1, len(want) - min(2, len(want) // 4))
             rounds = {"cur": set(), "best": set()}  # 这一轮收到的、收得最多的那一轮
             job["missing"] = []
 

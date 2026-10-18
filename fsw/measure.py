@@ -53,7 +53,11 @@ class Spec:
             names.setdefault(p["point"], p["name"])
         for g in s["segments"].values():
             names.setdefault(g["to"], g["name"] + "（终点）")
-        return cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names)
+        spec = cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names)
+        opt = set(s.get("optional") or [])  # 只在某种触发方式才走的计时点：有就记，一轮收齐不等它
+        if opt:
+            spec.need = [p for p in spec.need if p not in opt] or spec.need
+        return spec
 
     @classmethod
     def from_page(cls, page, standard=None):
