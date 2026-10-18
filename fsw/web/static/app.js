@@ -828,7 +828,8 @@ const realFlash=()=>!!(REAL&&REAL.work&&IDENT&&IDENT.page);
 // 试一次要人做的事：真流程按你写的"测什么"说（对话类：先喊唤醒词，再说一句）；演示数据用它自己的说法
 // 试一次没收到的计时点叫什么（页面上写出来，说清为什么少）
 const tryMissing=()=>{if(!FSWJ||!FSWJ.view)return [];const nm=Object.fromEntries(live().map(x=>[fswId(x.p),x.n]));return (FSWJ.view.steps||[]).filter(k=>!(FSWJ.got||[]).includes(+k.slice(1))).map(k=>nm[k]||k)};
-const trySay=()=>{if(!realFlash())return FF[scene].big;const w=IDENT.page.mapWhat||hSay||'';const st=(IDENT.page.measure||'').split('→')[0].trim();return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':`先做一次：${htmlEsc(st||w)}`};
+// 试一次要人做什么：用 AI 读代码写的操作说明；没有就按平常用法用一次（不拿计时点名字当操作说明）
+const trySay=()=>{if(!realFlash())return FF[scene].big;const act=(IDENT.page.act||'').trim();if(act)return htmlEsc(act);const w=IDENT.page.mapWhat||hSay||'';return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':'按平常的用法完整使用一次设备'};
 // 计时点编号和后台一样：P3 → P3；你自己加的 U1、U2 → P21、P22
 const fswId=p=>{if(/^P\d+$/.test(p))return p;const u=live().filter(x=>!/^P\d+$/.test(x.p)).map(x=>x.p);return 'P'+(20+u.indexOf(p)+1)};
 const fswSteps=()=>live().map(x=>({p:x.p,n:x.n,path:x.path||x.f,l:x.l,line:x.line,why:x.why||'',where:x.where||'',once:x.once||'',...(x.opt?{opt:true}:{})}));
@@ -882,7 +883,7 @@ function flList(from=0,to=4){const n=to-from+1;
  return `<ol class="isteps">${li}</ol>${big}`}
 const stepLog=()=>`<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`;
 // 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
-const tryAct=()=>{const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
+const tryAct=()=>{if(realFlash()&&IDENT&&IDENT.page&&(IDENT.page.act||'').trim())return trySay();const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
 function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
  if(!up&&J.boot_quiet)return `<div class="bigask"><b>设备可能已经开机了：现在对设备${tryAct()}</b><span class="note">没看到它的开机输出（有的设备开机后不出声，或者开机那几行在码表连上之前就打完了）。看设备已经回到待命画面，就直接做一次；码表收到计时点就算通。</span>${fullLogBtn()}${fullLog()}</div>`;  // 不一直转圈等"开机"
  if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;

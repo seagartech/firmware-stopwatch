@@ -51,6 +51,7 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
  "segments": [{{"from": "P1", "to": "P2", "name": "这段在做什么", "who": "固件 / 硬件 / 网络 / 服务器，可以组合", "outside": false}}],
  "side_from": "顺带那条线从哪个计时点分出去，没有就空",
  "side_segments": [{{"from": "P1", "to": "P5", "name": "…", "who": "…", "outside": false}}],
+ "act": "人要怎么操作设备，才能走完一轮要测的这条线，一句话、写给操作的人看，比如：喊唤醒词，再说一句话；刷一次卡",
  "outside_note": "设备外那段在做什么，12 个字以内，比如：服务器：听写、想回答；没有就空",
  "doubts": [{{"text": "读代码时发现的可能变慢或出错的地方", "sure": "高 / 中 / 低"}}]
 }}
@@ -62,6 +63,7 @@ steps 按发生的先后顺序排；segments 是要测的这条线从起点到�
 - "收到"类的计时点放在任何条件判断（比如"状态不对就丢掉"）之前，被丢掉的也要能记到。
 - "切换完成""生效"类的计时点放在这次切换引起的动作（比如清空缓存、关掉录音）都做完之后。
 - 设备有几种触发方式（比如点屏幕、喊唤醒词、接着上一句说）时，起点选几种方式汇合后、每一轮都会经过的那一步；只在某一种方式才走的步骤可以列，但 always 写 false。
+- 起点和每一个 always=true 的步骤，在连续使用时（比如连续对话里的第二句、第三句，连续刷第二张卡）也必须每次都经过；只在开机、唤醒、建立连接时走一次的步骤（比如开始连接、连上服务器）always 写 false，不能当起点。
 - 起点是用户做完那件事、设备知道了的时刻（比如判断你说完了、读到卡号），不要选"进入聆听""开始等待"这类事情还没发生的时刻：那样会把等人开口的时间也算进去。
 - 拿不准就标"低"或"中"，并在 doubt 里写为什么，不要编。
 - 说明文字里不要写 P1、P2 这样的编号，写步骤的中文名。
@@ -224,7 +226,7 @@ def to_page(r, what):
         "server": r.get("outside_note") or "", "mapWhat": what,
         "mapSel": next((s["p"] for s in steps if s["sure"] != "高"), steps[0]["p"]),
         "measure": f"{sname} → {mend}", "mainTitle": f"{mname}：{sname} → {mend}",
-        "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "",
+        "act": str(r.get("act") or "").strip(), "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "",
         "sideAsk": None, "sideTitle": "", "sideLbl": "",
     }
     if side:
@@ -278,7 +280,8 @@ def identify(llm, root, what, chip="", known=None, on_progress=None):
 
 
 def _cache_file(project_dir, fingerprint, what, provider):
-    key = hashlib.sha1(f"{fingerprint}\0{what.strip()}\0{provider}".encode()).hexdigest()[:12]
+    # 找步骤的要求（PROMPT）改了，旧结果按旧要求找的：不沿用
+    key = hashlib.sha1(f"{fingerprint}\0{what.strip()}\0{provider}\0{PROMPT}".encode()).hexdigest()[:12]
     return Path(project_dir) / "identify" / f"{key}.json"
 
 
