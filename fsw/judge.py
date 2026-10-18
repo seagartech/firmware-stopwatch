@@ -40,6 +40,10 @@ def stats(vals):
     return {"med": round(med(vals), 6), "p90": round(p90(vals), 6), "max": round(max(vals), 6), "min": round(min(vals), 6)}
 
 
+ANSWER = "看回答长短"  # 放回答的几段、到全部放完那条：长短跟这次回答说了多少字有关，不判快慢
+ANSWER_TXT = "取决于回答长短，不判快慢"
+
+
 def verdict(st, rng, slow, basis="measured"):
     """每段 / 每条线按中位数判：正常（不超过合理范围上限）、偏慢（超过上限、未超过慢阈值）、超过慢阈值；
     推算的段只标"推算"；没有范围的不判。"""
@@ -102,7 +106,7 @@ def judge(scenario, rounds):
         spiky = k not in playing and st["max"] > st["med"] * SPIKE_RATIO and st["max"] - st["med"] > SPIKE_GAP
         out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
                                 "range": g.get("range"), "slow": g.get("slow"), "outside": g.get("side") == "outside",
-                                "verdict": verdict(st, g.get("range"), g.get("slow"), g.get("basis", "measured")),
+                                "verdict": ANSWER if k in playing else verdict(st, g.get("range"), g.get("slow"), g.get("basis", "measured")),
                                 "spiky": spiky,
                                 "spiky_rounds": [r["n"] for r in rounds if r["segs"].get(k) is not None
                                                  and r["segs"][k] > st["med"] * SPIKE_RATIO] if spiky else []})
@@ -112,14 +116,16 @@ def judge(scenario, rounds):
         if not ends:
             continue
         st = stats(ends)
-        v = verdict(st, l.get("range"), l.get("slow"))
+        # 有"到第一声"那条时，"到全部放完"那条主要看回答说了多少字：不按合理范围判快慢
+        by_answer = bool(first) and l is lines_def[-1] and l is not first
+        v = ANSWER if by_answer else verdict(st, l.get("range"), l.get("slow"))
         es = experience_of(scenario, l["name"])
         e = experience(l["name"], st, es)
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
                              "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常", "new": bool(l.get("new")),
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short")} if es else None,
-                             "combo": combo(e, v == "正常", v, _big(l, seg_st, segs_def, st)),
-                             "over_slow": sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
+                             "combo": ANSWER_TXT if by_answer and e is None else combo(e, v == "正常", v, _big(l, seg_st, segs_def, st)),
+                             "over_slow": 0 if by_answer else sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
                              "segments": l["segments"]})
 
     # 第一次反应：每轮几条线里最早到的那一下
@@ -143,7 +149,7 @@ def judge(scenario, rounds):
     labels = []
     line_by = {l["name"]: l for l in out["lines"]}
     for l in out["lines"]:
-        slow = l["slow"]
+        slow = None if l["verdict"] == ANSWER else l["slow"]
         p90_ok = n >= 10  # 少于 10 轮，"10 次里最慢"没意义，不拿它判
         if (slow is not None and (l["med"] > slow or (p90_ok and l["p90"] > slow))) or l["exp"] == "差":
             lv = "必须改"
@@ -151,10 +157,11 @@ def judge(scenario, rounds):
             lv = "建议改"
         else:
             lv = "可以不改"
-        if l is main or lv != "可以不改":  # 别的线没问题就不单列
+        if True:  # 每条线都列：没问题的收在"另有 N 条不用改"里，条数才对得上
             why = ("体验标准判差" if l["exp"] == "差" else "中位数超过慢阈值" if slow is not None and l["med"] > slow
                    else "10 次里最慢超过慢阈值" if slow is not None and p90_ok and l["p90"] > slow
                    else "超出合理范围但未超过慢阈值" if lv == "建议改" else "还没有合理范围" if l["verdict"] == "没有范围"
+                   else ANSWER_TXT if l["verdict"] == ANSWER
                    else "在合理范围内")
             labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
     for p in scenario.get("problems") or []:
@@ -170,7 +177,7 @@ def judge(scenario, rounds):
     for g in out["segments"]:
         if not g["spiky"]:
             continue
-        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and n >= 10 and l["p90"] > l["slow"]]
+        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and l["verdict"] != ANSWER and n >= 10 and l["p90"] > l["slow"]]
         labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
                        "level": "必须改" if hit else "建议改",
                        "why": "偶发特别慢，而且每 10 次就有 1 次让人等太久" if hit else "偶发特别慢"})

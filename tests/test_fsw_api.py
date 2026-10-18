@@ -293,7 +293,7 @@ def test_try_keeps_listening_when_wake_alone_misses_a_step(setup, monkeypatch):
 class SplitAcrossRoundsDevice(FakeDevice):
     """每一轮都缺一个点、合起来才齐：不算试通（多轮实测每一轮都要全部收到）。"""
     def read(self, port, seconds, on_line, stop=None):
-        out = ["FSW,RESET,1,0", "FSW,P1,10,1", "FSW,P2,20,0", "FSW,RESET,100,0", "FSW,P2,120,0", "FSW,P5,130,0"]
+        out = ["FSW,RESET,1,0", "FSW,P1,10,1", "FSW,P2,20,0", "FSW,RESET,100,0", "FSW,P1,110,1", "FSW,P5,130,0"]
         for l in out:
             on_line(l)
         return out
@@ -305,6 +305,26 @@ def test_try_needs_one_complete_round_not_points_from_different_rounds(setup):
     wait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
     assert j["status"] == "failed" and j["err"]["kind"] == "try"
+
+
+class WakeRoundNoStartDevice(FakeDevice):
+    """10-18 真机：喊唤醒词那一轮没有起点（"设备听出你说完"），其余都齐；人接着说的那一轮起点有了，回答还没放完。
+    起点收到过、其余有一轮收齐，就算试通，不用人再说一句。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,RESET,1,0", "FSW,P2,20,0", "FSW,P5,30,0", "FSW,RESET,100,0", "FSW,P1,110,1"]
+        for l in out:
+            on_line(l)
+            if stop and stop():
+                break
+        return out
+
+
+def test_try_wake_round_without_start_point_passes(setup):
+    c, r, *_ = setup(device=WakeRoundNoStartDevice())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "done" and sorted(j["got"]) == [1, 2, 5]
 
 
 def test_new_run_stops_the_old_try_and_frees_the_port(setup):

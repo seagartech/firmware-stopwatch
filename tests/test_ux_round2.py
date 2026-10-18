@@ -381,12 +381,12 @@ def test_project_name_follows_the_chosen_source_not_demo():
     assert "pName=REAL.name+(REAL.board?" in code
 
 
-def test_ding_when_round_is_all_in_not_when_it_is_filed():
-    """10-17 走查：收尾改成"收全后再等 1.5 秒"以后，"叮"比设备出声晚。改成计时点全部收到就响，收尾时不再重复响；没收全的轮照样响提示音。"""
+def test_ding_only_when_a_round_is_not_all_in():
+    """10-18 真机：测全程时一轮要等设备把回答整段放完才算收好，那时"叮"一声人只觉得提示音晚。改成收好不响，只有没收全低响一声。"""
     from tests.test_boss_short import grab
     f = grab("colApply")
-    assert "if(j.status==='running'&&need>0&&got>=need&&!col.rd){col.rd=true;ding(false)}" in f
-    assert "if(!x.bad&&col.rd){col.rd=false;continue}ding(!!x.bad)" in f
+    assert "for(const x of col.got.slice(before))if(x.bad)ding(true)" in f
+    assert "ding(false)" not in f
 
 
 def test_resume_clears_the_ding_mark():
