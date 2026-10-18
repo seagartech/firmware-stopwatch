@@ -1354,7 +1354,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 continue
             if len(rounds) < rl.MIN_ROUNDS:
                 continue
-            if {(g.get("from"), g.get("to")) for g in psc["segments"].values()} != set(pts) or [l["name"] for l in psc["lines"]] != names:
+            # 码表新加了线、段（比如表情线、到第一声那条）时，两次都有的段和线照样比；一段都对不上才不比
+            if not {(g.get("from"), g.get("to")) for g in psc["segments"].values()} & set(pts):
                 other = other or meta.get("measured_at") or run.name
                 continue
             def iqr(v):  # 一次测量的正常波动：中间一半轮次的跨度（第 75 百分位减第 25 百分位）
@@ -1369,6 +1370,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return [r["ends"][i] for r in rs if i < len(r["ends"]) and r["ends"][i] is not None]
             segs, noise = {}, {}
             for k, g in psc["segments"].items():
+                if (g.get("from"), g.get("to")) not in pts:
+                    continue
                 v, ck = seg_vals(rounds, k), pts[(g.get("from"), g.get("to"))]
                 if v:
                     segs[ck] = round(jdg.med(v), 6)
@@ -1376,6 +1379,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     noise[ck] = round(max(iqr(v), iqr(c) if c else 0), 6)  # 两次各自的正常波动，取大的
             lines, noise_l = {}, {}
             for i, l in enumerate(psc["lines"]):
+                if l["name"] not in names:
+                    continue
                 v = line_vals(rounds, i)
                 if v:
                     lines[l["name"]] = round(jdg.med(v), 6)
@@ -1409,8 +1414,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if auto:  # 合理范围就是拿这次的轮填的：不拿它再判这次（只会全"正常"），这次快慢只按体验标准看，下次再测和它比；手动改过的照改过的判
             for x in list(out["segments"].values()) + out["lines"]:
                 if x.get("name") in auto and (x.get("range"), x.get("slow")) == auto[x["name"]]:
-                    x.update(range=None, slow=None)
-            out["first_run"] = True
+                    x.update(range=None, slow=None, new=True)
+            out["first_run"] = len(auto) >= len(out["segments"]) + len(out["lines"])  # 全是这次新填的才算第一次测；只补了新出现的几项照常判其余的
         return stds.with_default_experience(out)
 
     def _list_dir(project_dir=None):

@@ -255,3 +255,4 @@ th.segn{min-width:9em}
 .runtl .who{font-size:12px;border-radius:4px;padding:0 6px;margin-left:6px;border:1px solid var(--line);color:var(--muted)}
 .runtl .who.hum{color:var(--speak);border-color:var(--speak)}
 @keyframes rspin{to{transform:rotate(360deg)}}
+.src .lnk{display:inline-block;line-height:1.5;vertical-align:baseline}.decide .src{display:inline-block;line-height:2}

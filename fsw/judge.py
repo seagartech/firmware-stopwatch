@@ -113,7 +113,7 @@ def judge(scenario, rounds):
         es = experience_of(scenario, l["name"])
         e = experience(l["name"], st, es)
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
-                             "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常",
+                             "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常", "new": bool(l.get("new")),
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short")} if es else None,
                              "combo": combo(e, v == "正常", v, _big(l, seg_st, segs_def, st)),
                              "over_slow": sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
@@ -162,8 +162,11 @@ def judge(scenario, rounds):
                        "order": (p.get("rule") or {}).get("type") == "line_order",
                        "level": lv, "why": "对错问题，出现就要改" if p.get("level") == "bad" else
                        "超过每 10 次 1 次" if often else "偶尔出现"})
+    # 有"到第一声"那条线时，第一声之后到全部放完的那几段是在放回答：长短跟回答说了多少有关，不算"偶发特别慢"
+    first = next((l for l in lines_def if l.get("first")), None)
+    playing = set(lines_def[-1]["segments"]) - set(first["segments"]) if first else set()
     for g in out["segments"]:
-        if not g["spiky"]:
+        if not g["spiky"] or g["k"] in playing:
             continue
         hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and n >= 10 and l["p90"] > l["slow"]]
         labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],

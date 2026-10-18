@@ -45,7 +45,7 @@ function advWatch(){clearInterval(advT);
  if(x.status==='done'&&EXP.state==='wait'){EXP.state='saving';render();exportReport(EXP.dir)}else if(x.status==='failed'&&EXP.state==='wait'){EXP.state='';render()}}catch(e){}},1000)}
 function advBox(){if(!ADV||ADV.status==='done')return '';
  if(ADV.status==='failed')return `<div class="errbox"><b>为什么、怎么改还没写出来</b><p style="margin:6px 0">${ADV.message||''}</p><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-advretry="1">重试</button></div></div>`;
- return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(ADV.read)}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
+ return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(String(ADV.read).replace(/^(Read|Grep|Glob|LS|Bash)\s*:?\s*/,''))}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
 const repKey=()=>(realFlash()&&FSWJ&&FSWJ.status==='done'?'real':'demo:'+scene)+':'+okRounds().length;
 async function fetchReport(){const key=repKey(),u=key.startsWith('real')?'/api/report':'/api/report?demo='+encodeURIComponent(scene);
  try{const r=await fetch(u);JREP=r.ok?{...(await r.json()),_key:key}:{_key:key,_none:true}}catch(e){JREP={_key:key,_none:true}}if(page==='report')render()}
@@ -55,7 +55,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const sc=J.scenario,st={...Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),...(sc.points||{})},rng=r=>r?`${r[0]}～${r[1]??'不限'}`:'—';
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,ok:rng(g.range),slow:g.slow,v:val(k)}]));
  const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').split('→').map(x=>x.trim()),sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
- const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first?l.end:side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
+ const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first?l.end:side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side&&!l.first?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
@@ -79,7 +79,7 @@ function rangeTxt(v,ns){const pos=v.filter(x=>x>=0),neg=ns.filter((n,i)=>v[i]<0)
 function headline(D){
   const L=D.lines;
   if(L.length===1)return `${D.S.startShort} ${f(L[0].med,1)} 秒${L[0].phrase}`;
-  return `${D.S.startShort} ${f(L[0].med,1)} 秒${L[0].phrase}，${f(L[1].med,1)} 秒${L[1].phrase}`;
+  return `${D.S.startShort} `+L.map(l=>`${f(l.med,1)} 秒${l.phrase}`).join('，');
 }
 
 const LV=[['必须改','lv-must'],['建议改','lv-should'],['可以不改','lv-ok']];
@@ -90,9 +90,9 @@ const cardOf=(FX,d)=>FX.findIndex(F=>F.when.includes(d.k)||(d.seg&&F.when.includ
 function decisionsJ(D){const J=D.J,out=[];
   const src={line:['tiers','「三档用时」里“一般”那一列；各段占多少见「一次的计时图」'],spiky:['rounds',`「${D.n} 轮逐轮」图里红底的几轮`],order:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1]?D.lines[1].end:''}晚"的几轮`],problem:['rounds',`「${D.n} 轮逐轮」里出这个问题的几轮`]};
   for(const x of J.labels){const lv=['必须改','建议改','可以不改'].indexOf(x.level);
-   if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=D.biggest,share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
+   if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=isMain?D.biggest:([...D.allSegs].filter(s=>l.segs.includes(s.k)).sort((p,q)=>q.med-p.med)[0]||D.biggest),share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
     out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:isMain?`${l.end}要 ${f(l.med,1)} 秒，大头是"${b.name}"`:`${l.end}要 ${f(l.med,1)} 秒`,
-     d:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`:`${x.why}。`,who:x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
+     d:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':'这个场景还没有体验标准，只按合理范围判。'}`:x.level==='可以不改'?`${x.why}。`:`${x.why}，大头是"${b.name}" ${f(b.med)} 秒，占 ${share}%。`,who:x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
    else if(x.kind==='spiky'){const s=D.allSegs.find(y=>y.k===x.segment);if(!s||x.with)continue;  // 和对错问题同一根因的，合并到那条里
     out.push({k:x.k,seg:x.segment,lv,src:src.spiky,tag:['偶发','c-warn'],t:`"${s.name}"偶尔特别慢`,d:`平时 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒（${roundList(x.rounds.map(n=>({n})))}）。`,who:`找${s.owner}`})}
    else if(x.order&&D.lines.length>1)out.push({k:'reversed',lv,src:src.order,tag:['要查','c-bad'],t:`${x.rounds.length} 轮${D.lines[0].end}反而比${D.lines[1].end}晚`,d:`${roundList(x.rounds.map(n=>({n})))}。"先给反应"这个设计在这几轮白做了。`,who:'先查是哪一段变慢'});
@@ -159,12 +159,12 @@ function roundsChart(D){
     if(isBad)g+=`<rect x="0" y="${y}" width="${W}" height="${rh}" fill="var(--bad-soft)"/>`;
     g+=`<text x="${X0-12}" y="${y+14}" text-anchor="end" font-size="12" fill="${isBad?'var(--bad)':'var(--muted)'}" class="num">第 ${r.n} 轮</text>`;
     g+=`<line x1="${sx(0)}" x2="${sx(Math.max(...r.ends))}" y1="${y+10}" y2="${y+10}" stroke="var(--line)" stroke-width="2"/>`;
-    r.ends.forEach((e,j)=>{g+=j===0?`<circle cx="${sx(e)}" cy="${y+10}" r="5" fill="${D.lines[j].col}"/>`:`<rect x="${sx(e)-5}" y="${y+5}" width="10" height="10" fill="${D.lines[j].col}"/>`});
+    r.ends.forEach((e,j)=>{if(e==null)return;g+=j===0?`<circle cx="${sx(e)}" cy="${y+10}" r="5" fill="${D.lines[j].col}"/>`:`<rect x="${sx(e)-5}" y="${y+5}" width="10" height="10" fill="${D.lines[j].col}"/>`});
     const why=D.reversed.some(x=>x.n===r.n)?`${D.lines[0].end}比${D.lines[1].end}晚`:D.slowRounds.some(x=>x.n===r.n)?'超过慢阈值':'';
     if(why)g+=`<text x="${sx(Math.max(...r.ends))+10}" y="${y+14}" font-size="12" font-weight="700" fill="var(--bad)">${why}</text>`;});
   D.lines.forEach(l=>{g+=`<line x1="${sx(l.med)}" x2="${sx(l.med)}" y1="${top-8}" y2="${top+D.n*rh}" stroke="${l.col}" stroke-dasharray="3 3"/>`});
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${top+D.n*rh+6}" style="min-width:640px;width:100%" role="img" aria-label="逐轮计时">${g}</svg></div>
-  <div class="legend">${D.lines.map((l,j)=>`<span><i class="sw" style="background:${l.col};width:10px;height:10px;${j===0?'border-radius:50%':''}"></i>${l.end}</span>`).join('')}<span>竖虚线是中位数</span><span style="color:var(--bad)">红底：有问题的轮</span></div>`;
+  <div class="legend">${D.lines.map((l,j)=>`<span><i class="sw" style="background:${l.col};width:10px;height:10px;${j===0?'border-radius:50%':''}"></i>${l.end}</span>`).join('')}<span>竖虚线是中位数</span>${[...D.reversed,...D.slowRounds].length?'<span style="color:var(--bad)">红底：有问题的轮</span>':''}</div>`;
 }
 function tiers(D){const few=D.n<10;  // 少于 10 轮："10 次里最慢"没意义，不显示
   return `<div class="tiers num" ${few?'style="grid-template-columns:auto repeat(2,1fr)"':''}><span></span><span class="h">一般（中位数）</span>${few?'':'<span class="h">10 次里最慢</span>'}<span class="h">最差</span>
@@ -173,10 +173,10 @@ function tiers(D){const few=D.n<10;  // 少于 10 轮："10 次里最慢"没意�
 // 两把尺子（2026-10-13）：体验标准问"用户等得了吗"（看结果，给负责人）；合理范围问"这套做法有没有做坏"（看实现，给研发）。
 // 体验标准只挂在有公认标准的那条线上，没有就只用合理范围。
 function lineCards(D){
-  const CB={'每段都没做坏，是做法本身慢，要换做法才会快':'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。','先查哪段做坏了':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。','可能有隐患':'用户还等得了，但比这套做法该有的慢，可能有隐患。','正常':'用户等得了，技术上也正常。','只按合理范围判：正常':'这个场景没有体验标准，只按合理范围判：正常。','只按合理范围判：先查哪段做坏了':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。','还没有合理范围：只记下用时，先不判快慢':'还没有这个设备的合理范围：只记下用时，先不判快慢。'};
+  const CB={'每段都没做坏，是做法本身慢，要换做法才会快':'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。','先查哪段做坏了':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。','可能有隐患':'用户还等得了，但比这套做法该有的慢，可能有隐患。','正常':'用户等得了，技术上也正常。','只按合理范围判：正常':'这个场景没有体验标准，只按合理范围判：正常。','只按合理范围判：先查哪段做坏了':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。','还没有合理范围：只记下用时，先不判快慢':D.J&&D.J.scenario&&D.J.scenario.first_run?'第一次测：这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':'还没有这个设备的合理范围：只记下用时，先不判快慢。'};
   return D.lines.map(l=>{const [v,c]=D.verdict(l),isMain=l===D.main,inR=v==='正常',jl=D.J&&D.J.lines.find(x=>x.name===l.name);
     const ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):isMain&&D.exp?D.exp:null,es=jl?jl.exp_std:D.S.exp;  // 体验标准每条线一条：真测的按后台每条线的判定
-    const concl=jl?CB[jl.combo]||jl.combo:!ex?(inR?'这个场景没有体验标准，只按合理范围判：正常。':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。')
+    const concl=jl?(jl.new&&jl.combo.startsWith('还没有合理范围')?(D.J.scenario&&D.J.scenario.first_run?'第一次测：':'这条是这次新加的：')+'这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':CB[jl.combo]||jl.combo):!ex?(inR?'这个场景没有体验标准，只按合理范围判：正常。':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。')
       :ex[0]==='差'?(inR?'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。')
       :(inR?'用户等得了，技术上也正常。':'用户还等得了，但比这套做法该有的慢，可能有隐患。');
     const head=ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:`<span class="chip ${c}">${v}</span>`;
@@ -206,7 +206,9 @@ function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮�
 function subline(D){
   const bits=[];
   if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med,1)} 秒`);
-  if(D.exp)bits.push(`按体验标准算<span class="chip ${D.exp[1]}">${D.exp[0]}</span>`);else bits.push('这个场景还没有体验标准');
+  const je=D.J&&D.J.lines?D.J.lines.filter(x=>x.exp):[];  // 体验标准挂在哪条线上就说哪条（比如只挂在"到喇叭出第一声"）
+  if(je.length)bits.push(je.map(x=>`${(D.lines.find(l=>l.name===x.name)||{end:x.name}).end}按体验标准算<span class="chip ${x.exp==='差'?'c-bad':'c-ok'}">${x.exp}</span>`).join('，'));
+  else if(D.exp)bits.push(`按体验标准算<span class="chip ${D.exp[1]}">${D.exp[0]}</span>`);else bits.push('这个场景还没有体验标准');
   if(D.reversed.length)bits.push(`${roundList(D.reversed)}${D.lines[0].end}反而晚了`);
   for(const x of D.probs||[])bits.push(`${roundList(x.rounds.map(n=>({n})))}${x.name}`);
   if(D.spiky)bits.push(`"${D.spiky.name}"偶尔特别慢`);
@@ -541,7 +543,7 @@ function prevLine(){const P=JREP&&JREP.prev;if(!P)return '';if(P.why)return `<p 
  return `<p style="margin:0"><b>比上次（${htmlEsc(P.measured_at)}，${P.n} 轮）：</b>${htmlEsc(endName)} ${f(p)} → ${f(m.med)} 秒　${cmpTxt(m.med,p,(P.noise_lines||{})[m.name])}<span class="note">　各段见「技术细节」的"上次"一栏</span></p>`}
 function staleBar(){if(!(JREP&&!JREP._none&&repKey().startsWith('real')))return '';const RL=JREP.scenario&&JREP.scenario.range_list,F=JREP.list_filled,PL=prevLine();
  if(RL&&RL.broken)return PL+`<section class="panel stale"><p style="margin:0"><b>⚠ 合理范围清单格式不对，这次按码表自带的范围判。</b></p><p class="note" style="margin:4px 0 0">${htmlEsc(RL.broken)}</p></section>`;
- return PL+(F&&F.length?(JREP.scenario&&JREP.scenario.first_run?`<section class="panel"><p style="margin:0"><b>第一次测量：这次的结果已存为合理范围（${F.length} 项），下次改完再测就和它比。</b></p><p class="note" style="margin:4px 0 0">这次不拿自己判自己，快慢只按体验标准看；没有体验标准的线只记用时。想改合理范围就点「技术细节」→「合理范围清单」。</p></section>`:`<p class="note" style="margin:0">✓ 已按这次 ${JREP.n} 轮实测把合理范围清单填好（${F.length} 项）。想改就点「技术细节」→「合理范围清单」。</p>`):'')}
+ return PL+(F&&F.length?(JREP.scenario&&JREP.scenario.first_run?`<section class="panel"><p style="margin:0"><b>第一次测量：这次的结果已存为合理范围（${F.length} 项），下次改完再测就和它比。</b></p><p class="note" style="margin:4px 0 0">这次不拿自己判自己，快慢只按体验标准看；没有体验标准的线只记用时。想改合理范围就点「技术细节」→「合理范围清单」。</p></section>`:`<p class="note" style="margin:0">✓ 这次新出现的 ${F.length} 项（${F.map(htmlEsc).join('、')}）已按这次 ${JREP.n} 轮实测填进合理范围清单，下次和它比；其余照清单判。想改就点「技术细节」→「合理范围清单」。</p>`):'')}
 // 负责人看的文字不出现代码：括号里带文件名、行号、函数名的整段去掉（码表格式检查也会拦，这里兜底早先存下的建议）
 const noCode=t=>String(t||'').replace(/\s*[（(][^（）()]*?(?:[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\))[^（）()]*?[）)]/g,'');
 function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:noCode(plain(F.why)),impact:noCode(plain(F.impact)),rec:noCode(plain(F.rec)),opts:F.opts.map(o=>({...o,name:noCode(plain(o.name)),effect:noCode(plain(o.effect)),cost:noCode(plain(o.cost)),wn:noCode(plain(o.wn))}))})});return out}
@@ -571,7 +573,7 @@ function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
   d.querySelectorAll('details').forEach(x=>x.removeAttribute('open'));return d.innerHTML}  // 导出也默认收起，点开能看（决策 98）
 // 导出存到哪、存完的提示（一直在，直到你关掉）
 let EXP={dir:'',saved:null};
-const expWhat=()=>realFlash()?(IDENT.page.mapWhat||hSay||''):'';  // 文件名用你自己写的场景说法
+const expWhat=()=>{if(!realFlash())return '';const w=IDENT.page.mapWhat||hSay||'';return w===WHOLE||w.startsWith('全程')?'全程':w};  // 文件名用你自己写的场景说法
 function expDone(){return EXP.saved?`<section class="panel expdone" role="status"><div class="acts" style="justify-content:space-between;align-items:center;margin:0;flex-wrap:wrap"><span>✓ 已导出：<span class="code">${htmlEsc(EXP.saved)}</span></span><span style="display:flex;gap:8px"><button class="pill" data-expshow="1">在访达里显示</button><button class="pill" data-expclose="1">关掉</button></span></div></section>`:''}
 async function exportStart(){EXP.state='';EXP.err='';try{EXP.dir=(await (await fetch('/api/report/export-dir'+(repKey().startsWith('real')?'':'?demo='+encodeURIComponent(scene)))).json()).dir}catch(e){}pop='export';render()}
 // 测完自动存一份报告（报告关掉、码表重启后，「以前测过的」里还能打开）：等"为什么、怎么改"写完再存，每次测量只存一次

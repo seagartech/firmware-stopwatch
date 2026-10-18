@@ -256,3 +256,19 @@ def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
     rounds = [{"n": i + 1, **m.compute(cur, spec)} for i in range(10)]
     first = jdg.judge(sc, rounds)["lines"][0]
     assert first["exp"] == "差" and first["combo"] == "体验差：慢在「服务器」（1.00 秒，占 56%）"
+
+
+def test_playing_the_answer_is_not_flagged_as_occasionally_slow():
+    # 亲测第 12 次："边收边放，直到服务器说完"被标"偶尔特别慢"：那段长短看回答说了多少
+    from fsw import standards as stds, judge as jdg
+    steps = [{"p": p, "n": n, "line": "talk"} for p, n in
+             [("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
+    segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
+    sc = stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None)
+    spec = m.Spec.from_scenario(sc)
+    rounds = []
+    for i in range(10):
+        play = 5.0 if i in (2, 8) else 1.5
+        cur = {"P1": (0, 0), "P2": (1_000_000, 0), "P3": (1_800_000, 0), "P4": (int((1.8 + play) * 1e6), 0)}
+        rounds.append({"n": i + 1, **m.compute(cur, spec)})
+    assert not [x for x in jdg.judge(sc, rounds)["labels"] if x["kind"] == "spiky"]
