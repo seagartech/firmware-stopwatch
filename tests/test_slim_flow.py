@@ -231,11 +231,13 @@ def test_side_line_points_not_every_round_stay_on_the_side_line():
 def test_voice_main_line_gets_the_reference_experience_standard():
     from fsw import standards as stds
     sc = {"lines": [{"name": "回答这条", "segments": ["s"]}], "segments": {"s": {"from": "P1", "to": "P2", "name": "x"}},
-          "point_names": {"P1": "收到听写文字", "P2": "喇叭出第一声"}, "experiences": []}
+          "point_names": {"P1": "设备听出你说完", "P2": "喇叭出第一声"}, "experiences": [], "start": {"point": "P1", "name": "设备听出你说完"}}
     e = stds.with_default_experience(sc)["experiences"]
     assert e[0]["line"] == "回答这条" and e[0]["fair"] == 1.5 and e[0]["source"]
     door = {**sc, "point_names": {"P1": "刷卡", "P2": "开门"}}
     assert stds.with_default_experience(door)["experiences"] == []  # 不是语音的不乱套
+    late = {**sc, "point_names": {"P1": "收到听写文字", "P2": "喇叭出第一声"}, "start": {"point": "P1", "name": "收到听写文字"}}
+    assert stds.with_default_experience(late)["experiences"] == []  # 10-18 真机：起点在听写之后，少算了一段，不拿 1.5 秒判
 
 
 
@@ -243,7 +245,7 @@ def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
     # 亲测第 11 次：全程的终点是"喇叭最后一声"，回答越长越久；1.5 秒参考值说的是"说完到听到回答开头"
     from fsw import standards as stds
     steps = [{"p": p, "n": n, "line": "talk"} for p, n in
-             [("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
+             [("P1", "设备听出你说完"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
     segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
     sc = stds.with_default_experience(stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None))
     names = [l["name"] for l in sc["lines"]]
@@ -321,3 +323,9 @@ def test_retest_entry_goes_to_the_one_page_run_too():
     from tests.test_boss_short import JS
     f = JS.split("async function retestFrom(")[1].split("\n}")[0].split("\nconst ")[0]
     assert "autoStart()" in f and "hStage=2" not in f
+
+
+def test_no_range_yet_does_not_say_slower_than_it_should_be():
+    # 10-18 真机：第一次测、体验可以，却写"比这套做法该有的慢，可能有隐患"：没有合理范围，没有可比的
+    from fsw import judge as jdg
+    assert jdg.combo("可以", False, "没有范围") == "体验可以；还没有合理范围，先只记用时"
