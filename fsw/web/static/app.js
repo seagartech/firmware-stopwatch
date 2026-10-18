@@ -209,7 +209,7 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
 function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
 function startLagLine(name,L){return `<p class="note" style="margin:4px 0 0">起点是「${htmlEsc(name)}」，是设备自己察觉的时刻。${L?`人实际停嘴还要再早约 ${(Math.round(L.secs*10)/10).toFixed(1)} 秒（${htmlEsc(L.when||'')} 用 ${htmlEsc(L.how||'录音')}核对过${L.rounds?`，${L.rounds} 轮`:''}），按人的感受，各条线的用时都要再加上这么多。`:'人实际做完的那一刻还要早一点，码表看不到，还没核对过。'}</p>`}
 function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:'',Q.nostart?`${Q.nostart} 次没记到起点「${Q.startName||'起点'}」`:''].filter(Boolean);
- return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}。数字都是码表按这些轮算的，不经过 AI。</p>`}
+ return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}。${Q.outlier&&Q.outlier.length?`第 ${Q.outlier.join('、')} 轮有一段比平时长好几倍（多半是杂音或误触发记错了），也不算进来，没有补测。`:''}数字都是码表按这些轮算的，不经过 AI。</p>`}
 function subline(D){
   const bits=[];
   if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med,1)} 秒`);

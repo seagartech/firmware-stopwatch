@@ -501,3 +501,13 @@ def test_start_reported_many_times_uses_the_one_right_before_the_next_step():
     lines = ["FSW,RESET,30000000,0"] + noise + ["FSW,P1,75630000,1", "FSW,P3,76040000,0", "FSW,P4,76800000,0", "FSW,RESET,80000000,0"]
     r = [x for x in m.collect(lines, m.Spec.from_scenario(sc)) if x.get("ok")]
     assert len(r) == 1 and r[0]["ends"] == [1.17]
+
+
+def test_round_with_an_absurdly_long_segment_is_left_out():
+    sc = {"segments": {"a": {}, "b": {}, "c": {}},
+          "lines": [{"name": "到开口", "segments": ["a", "b"], "first": True}, {"name": "到放完", "segments": ["a", "b", "c"]}]}
+    rounds = [{"n": i + 1, "segs": {"a": 0.4, "b": 0.8, "c": 5.0 + i}} for i in range(10)]
+    rounds[0]["segs"]["a"] = 40.0   # 杂音让起点记早了 40 秒
+    rounds[3]["segs"]["c"] = 30.0   # 放回答长短看内容，不查
+    assert m.outliers(rounds, sc) == {1}
+    assert m.outliers(rounds[:4], sc) == set()  # 太少看不出平时多长
