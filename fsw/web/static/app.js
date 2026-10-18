@@ -301,7 +301,7 @@ const histRow=h=>`<div class="lrow"><button data-hopen="${htmlEsc(h.project_dir)
 let remeasure=false;  // 这一轮是从「改完了，再测一次」进来的：步骤条写"改完再测"，不写"第一次测"
 async function retestFrom(h){flow=null;flowReset();page='home';hStage=0;await realPick({path:h.path},h.path);if(!REAL)return;remeasure=true;
  hSay=String(h.what||'').replace(/[<>&"]/g,'');if(!REAL.chip){hBoardNeed=true;render();return}if(!envKey()){pop='env';render();return}
- hStage=2;render();window.scrollTo(0,0)}
+ autoStart();window.scrollTo(0,0)}  // 改完再测也走测量页一页到底（决策 158），不回老的一页页流程（10-18 真机）
 const recentList=()=>DEMO?PROJ_LIST():HIST.length?`<div class="list">${HIST.map(histRow).join('')}</div>`:'<p class="note" style="margin:0">还没有测过。选一份固件源码开始，测完会出现在这里。</p>';
 const PROJ_LIST=()=>`<div class="list">${PROJ.map(p=>`<div class="lrow"><button data-open="${p.scene}"><span><b>${p.name}</b>　<span class="note">${p.what} · ${p.last}</span></span><span class="num">${p.metric} ${f(p.now)} 秒　${arrow(p.now,p.prev)}</span></button><button class="pill" data-retest="${p.scene}">改完了，再测一次</button></div>${p.fswOnDevice&&!restored[p.scene]?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-restore="${p.scene}">还原成原版</button></div>`:''}`).join('')}</div>`;
 let pName='',restored={},hNeed=false,hSrc='',hReading=false,hErr='',hScan=0,hScanT=null;

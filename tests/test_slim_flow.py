@@ -314,3 +314,10 @@ def test_steady_segment_while_playing_is_still_judged():
         rounds.append({"n": i + 1, **m.compute(cur, spec)})
     seg = {g["k"]: g["verdict"] for g in jdg.judge(sc, rounds)["segments"]}
     assert seg["P2-P3"] == jdg.ANSWER and seg["P3-P4"] == "正常"
+
+
+def test_retest_entry_goes_to_the_one_page_run_too():
+    # 10-18 真机：「改完了，再测一次」还走老的一页页流程，单页测量只接在首页「开始」上
+    from tests.test_boss_short import JS
+    f = JS.split("async function retestFrom(")[1].split("\n}")[0].split("\nconst ")[0]
+    assert "autoStart()" in f and "hStage=2" not in f
