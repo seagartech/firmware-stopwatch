@@ -5,17 +5,18 @@ const QS=new URLSearchParams(location.search);
 const FAIL=QS.get('fail')||'',DEMO=QS.get('demo')||'',RTCASE=QS.get('retest')||'same';
 // ===== 通用计算 =====
 const sorted=a=>[...a].sort((x,y)=>x-y);
-const med=a=>{const s=sorted(a),m=s.length/2;return s.length%2?s[m|0]:(s[m-1]+s[m])/2};
-const p90=a=>sorted(a)[Math.ceil(a.length*.9)-1];
-const mx=a=>Math.max(...a);
-const f=(x,d=2)=>x.toFixed(d);
+const num=a=>a.filter(x=>x!=null&&isFinite(x));  // 顺带那条线某轮没收到（比如这轮没换表情）：那一轮不算
+const med=a=>{const s=sorted(num(a)),m=s.length/2;return s.length%2?s[m|0]:(s[m-1]+s[m])/2};
+const p90=a=>{a=num(a);return sorted(a)[Math.ceil(a.length*.9)-1]};
+const mx=a=>Math.max(...num(a));
+const f=(x,d=2)=>x==null||!isFinite(x)?'—':x.toFixed(d);
 const fms=x=>x>0&&x<.1?x.toFixed(3):f(x);  // 技术细节表：几毫秒的段多留一位，不显示成 0.00（和合理范围清单页一致）
 const LCOL=['var(--face)','var(--speak)','var(--warn)','var(--muted)'];
 const LSOFT=['var(--face-soft)','var(--speak-soft)','var(--soft)','var(--soft)'];
 function build(S){S.lines.forEach(l=>{if(l.slow==null)l.slow=Infinity});  // 没有算慢线：不算慢
   const n=Object.values(S.segs)[0].v.length;
   const use={};S.lines.forEach(l=>l.segs.forEach(k=>use[k]=(use[k]||0)+1));
-  const lines=S.lines.map((l,i)=>{const ends=[...Array(n)].map((_,r)=>l.segs.reduce((t,k)=>t+S.segs[k].v[r],0));
+  const lines=S.lines.map((l,i)=>{const ends=[...Array(n)].map((_,r)=>l.segs.some(k=>S.segs[k].v[r]==null)?null:l.segs.reduce((t,k)=>t+S.segs[k].v[r],0));
     return {...l,i,col:LCOL[i],soft:LSOFT[i],ends,med:med(ends),p90:p90(ends),max:mx(ends),segMed:l.segs.map(k=>med(S.segs[k].v))}});
   const rounds=[...Array(n)].map((_,r)=>({n:r+1,ends:lines.map(l=>l.ends[r])}));
   let reversed=[];
@@ -28,7 +29,7 @@ function build(S){S.lines.forEach(l=>{if(l.slow==null)l.slow=Infinity});  // 没
   const verdict=l=>l.med>l.slow?['超过慢阈值','c-bad']:l.med>l.ok[1]?['偏慢','c-warn']:['正常','c-ok'];
   const exp=S.exp?(main.med>S.exp.fair?['差','c-bad']:['可以','c-ok']):null;
   // 计时图画"真实的一轮"：选各条线都最接近中位数的那一轮（2026-10-13 用户问"是某一次还是平均值"后改）
-  const rep=[...rounds].map(r=>({r,d:r.ends.reduce((t,e,i)=>t+Math.abs(e-lines[i].med)/lines[i].med,0)})).sort((a,b)=>a.d-b.d)[0].r;
+  const rep=[...rounds].map(r=>({r,d:r.ends.reduce((t,e,i)=>t+(e==null?9:Math.abs(e-lines[i].med)/lines[i].med),0)})).sort((a,b)=>a.d-b.d)[0].r;
   const out={S,n,use,lines,rounds,reversed,slowRounds,allSegs,biggest,spiky,main,verdict,exp,rep};
   return S.J?withJudge(out,S.J):out;
 }

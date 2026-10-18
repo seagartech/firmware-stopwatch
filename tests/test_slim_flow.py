@@ -211,3 +211,18 @@ def test_end_point_printed_twice_mid_answer_does_not_shift_later_rounds():
     assert not [r for r in out if r.get("ok") is False]
     ends = [round(r["ends"][0], 2) for r in out if r.get("ok")]
     assert ends == [2.94, 3.06, 4.5, 2.85, 3.07, 4.43]  # 第 6 轮（水在几度结冰）是 4.5 秒，不是 1.66
+
+
+def test_side_line_points_not_every_round_stay_on_the_side_line():
+    # 亲测第 11 次：表情的两个点被标"不一定每轮都有"（服务器不一定每轮发表情），整条表情线被去掉了
+    from fsw import standards as stds
+    pg = _page_with_touch_start()
+    pg["steps"] += [{"p": "P5", "n": "收到表情", "line": "face", "opt": True},
+                    {"p": "P6", "n": "换上表情", "line": "face", "opt": True}]
+    pg["fsegs"] = [{"a": "P2", "b": "P5", "t": "等表情"}, {"a": "P5", "b": "P6", "t": "换表情"}]
+    page = stds.inserted_page(pg)
+    assert [(g["a"], g["b"]) for g in page["fsegs"]] == [("P2", "P5"), ("P5", "P6")]
+    spec = m.Spec.from_scenario(stds.real_scenario(page, None))
+    assert len(spec.lines) == 2 and "P6" not in spec.need  # 没换表情的那一轮照样收齐，只是表情线那一轮算不出来
+    cur = {"P2": (1_000_000, 0), "P3": (2_000_000, 0), "P4": (3_000_000, 0)}
+    assert None in m.compute(cur, spec)["ends"]
