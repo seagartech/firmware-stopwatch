@@ -23,6 +23,12 @@ def door_lines(check_first, rounds=12):
     return list(m.demo_lines(d, rounds))
 
 
+
+def _talk(pairs):
+    """要测的这条线上的步骤；找步骤时 AI 会给"第一下/最后一下感觉到的结果"标身份（felt）和怎么感觉到的（kind）。"""
+    felt = {"喇叭出第一声": ("first", "声音"), "喇叭最后一声": ("last", "声音")}
+    return [{"p": p, "n": n, "line": "talk", **({"felt": felt[n][0], "kind": felt[n][1]} if n in felt else {})} for p, n in pairs]
+
 def test_reversed_segment_is_suspect_but_a_very_short_server_segment_is_not():
     sc = DOOR["scenario"]
     assert m.suspects({"segs": {"check": -0.2}}, sc) == [
@@ -229,23 +235,21 @@ def test_side_line_points_not_every_round_stay_on_the_side_line():
 
 
 def test_voice_main_line_gets_the_reference_experience_standard():
+    # 按 AI 标的"怎么感觉到的"（kind）判是不是听到声音，不按步骤名猜词（10-18 用户：通用代码不迁就某一个固件）
     from fsw import standards as stds
     sc = {"lines": [{"name": "回答这条", "segments": ["s"]}], "segments": {"s": {"from": "P1", "to": "P2", "name": "x"}},
-          "point_names": {"P1": "设备听出你说完", "P2": "喇叭出第一声"}, "experiences": [], "start": {"point": "P1", "name": "设备听出你说完"}}
+          "point_names": {"P1": "起点", "P2": "终点"}, "point_kinds": {"P2": "声音"}, "experiences": []}
     e = stds.with_default_experience(sc)["experiences"]
     assert e[0]["line"] == "回答这条" and e[0]["fair"] == 1.5 and e[0]["source"]
-    door = {**sc, "point_names": {"P1": "刷卡", "P2": "开门"}}
-    assert stds.with_default_experience(door)["experiences"] == []  # 不是语音的不乱套
-    late = {**sc, "point_names": {"P1": "收到听写文字", "P2": "喇叭出第一声"}, "start": {"point": "P1", "name": "收到听写文字"}}
-    assert stds.with_default_experience(late)["experiences"] == []  # 10-18 真机：起点在听写之后，少算了一段，不拿 1.5 秒判
-
+    door = {**sc, "point_names": {"P1": "设备听出你说完", "P2": "喇叭出声"}, "point_kinds": {"P2": "动作"}}
+    assert stds.with_default_experience(door)["experiences"] == []  # 名字像语音也不套：看的是 kind
+    assert stds.with_default_experience({**sc, "point_kinds": {}})["experiences"] == []  # 没标的（老的识别结果）不套
 
 
 def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
     # 亲测第 11 次：全程的终点是"喇叭最后一声"，回答越长越久；1.5 秒参考值说的是"说完到听到回答开头"
     from fsw import standards as stds
-    steps = [{"p": p, "n": n, "line": "talk"} for p, n in
-             [("P1", "设备听出你说完"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
+    steps = _talk([("P1", "设备听出你说完"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")])
     segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
     sc = stds.with_default_experience(stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None))
     names = [l["name"] for l in sc["lines"]]
@@ -263,8 +267,7 @@ def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
 def test_playing_the_answer_is_not_flagged_as_occasionally_slow():
     # 亲测第 12 次："边收边放，直到服务器说完"被标"偶尔特别慢"：那段长短看回答说了多少
     from fsw import standards as stds, judge as jdg
-    steps = [{"p": p, "n": n, "line": "talk"} for p, n in
-             [("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
+    steps = _talk([("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")])
     segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
     sc = stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None)
     spec = m.Spec.from_scenario(sc)
@@ -279,8 +282,7 @@ def test_playing_the_answer_is_not_flagged_as_occasionally_slow():
 def test_playing_the_answer_is_not_judged_by_range_and_every_line_is_listed():
     # 亲测第 19 次：再测时"边收边放"按上次填的范围判"偏慢"、到最后一声那条也按范围判：长短看回答说了多少字，不判快慢
     from fsw import standards as stds, judge as jdg
-    steps = [{"p": p, "n": n, "line": "talk"} for p, n in
-             [("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
+    steps = _talk([("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")])
     segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
     sc = stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None)
     for k in sc["segments"]:
@@ -302,8 +304,7 @@ def test_playing_the_answer_is_not_judged_by_range_and_every_line_is_listed():
 def test_steady_segment_while_playing_is_still_judged():
     # 亲测第 20 次："放完设备里剩下的声音"每轮 0.12～0.14 秒，跟回答长短无关，照常按范围判
     from fsw import standards as stds, judge as jdg
-    steps = [{"p": p, "n": n, "line": "talk"} for p, n in
-             [("P1", "收到听写文字"), ("P2", "喇叭出第一声"), ("P3", "服务器说完"), ("P4", "喇叭最后一声")]]
+    steps = _talk([("P1", "收到听写文字"), ("P2", "喇叭出第一声"), ("P3", "服务器说完"), ("P4", "喇叭最后一声")])
     segs = [{"a": "P1", "b": "P2", "t": "等声音"}, {"a": "P2", "b": "P3", "t": "边收边放"}, {"a": "P3", "b": "P4", "t": "放完剩下的"}]
     sc = stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None)
     for k in sc["segments"]:
@@ -329,3 +330,24 @@ def test_no_range_yet_does_not_say_slower_than_it_should_be():
     # 10-18 真机：第一次测、体验可以，却写"比这套做法该有的慢，可能有隐患"：没有合理范围，没有可比的
     from fsw import judge as jdg
     assert jdg.combo("可以", False, "没有范围") == "体验可以；还没有合理范围，先只记用时"
+
+
+def test_felt_roles_split_lines_for_any_device(tmp_path):
+    # 通用：刷卡开门也一样，AI 标了"第一下感觉到的结果"（锁开始动）就多一条到那一步的线；不是声音不套对话参考值
+    import json
+    from fsw import identify as idf, standards as stds
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main" / "door.c").write_text("\n".join(f"line {i}" for i in range(1, 60)), encoding="utf-8")
+    step = lambda i, n, line, **k: {"id": f"P{i}", "name": n, "file": "main/door.c", "line": 10 * i, "line_of": "start" if i == 1 else "main",
+                                    "sure": "高", **k}
+    data = {"start": {"name": "读到卡"}, "main": {"name": "开门这条", "end": "门开到位"},
+            "steps": [step(1, "读到卡号", 10), step(2, "校验通过", 20), step(3, "锁开始动", 30, felt="first", kind="动作"),
+                      step(4, "门开到位", 40, felt="last", kind="动作")],
+            "segments": [{"from": "P1", "to": "P2", "name": "校验"}, {"from": "P2", "to": "P3", "name": "驱动锁"},
+                         {"from": "P3", "to": "P4", "name": "开门"}]}
+    r = idf.parse("```json\n" + json.dumps(data, ensure_ascii=False) + "\n```", tmp_path)
+    assert [s["felt"] for s in r["steps"]] == ["", "", "first", "last"]
+    page = idf.to_page(r, "全程")
+    sc = stds.with_default_experience(stds.real_scenario(page, None))
+    assert [l["name"] for l in sc["lines"]] == ["到锁开始动", "到门开到位"] and sc["lines"][0]["first"]
+    assert sc["experiences"] == []
