@@ -103,10 +103,12 @@ def judge(scenario, rounds):
             continue
         st = stats(vals)
         seg_st[k] = st
-        spiky = k not in playing and st["max"] > st["med"] * SPIKE_RATIO and st["max"] - st["med"] > SPIKE_GAP
+        # 放回答那几段里每轮都差不多长的（比如放完设备里剩下的声音，每轮 0.12～0.14 秒）跟回答长短无关：照常判
+        by_answer = k in playing and st["max"] - st["min"] > SPIKE_GAP
+        spiky = not by_answer and st["max"] > st["med"] * SPIKE_RATIO and st["max"] - st["med"] > SPIKE_GAP
         out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
                                 "range": g.get("range"), "slow": g.get("slow"), "outside": g.get("side") == "outside",
-                                "verdict": ANSWER if k in playing else verdict(st, g.get("range"), g.get("slow"), g.get("basis", "measured")),
+                                "verdict": ANSWER if by_answer else verdict(st, g.get("range"), g.get("slow"), g.get("basis", "measured")),
                                 "spiky": spiky,
                                 "spiky_rounds": [r["n"] for r in rounds if r["segs"].get(k) is not None
                                                  and r["segs"][k] > st["med"] * SPIKE_RATIO] if spiky else []})
