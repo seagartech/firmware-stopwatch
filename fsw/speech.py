@@ -25,8 +25,21 @@ def say(text, voice=VOICE):
     subprocess.run(["say", "-v", voice, text], check=False, timeout=60)
 
 
+def volume():
+    """电脑当前输出音量（0～100）；拿不到返回 None。音量会被别的程序或换输出设备改掉，每次开始播前查一下。"""
+    try:
+        r = subprocess.run(["osascript", "-e", "output volume of (get volume settings)"],
+                           capture_output=True, text=True, timeout=5)
+        return int(r.stdout.strip())
+    except Exception:
+        return None
+
+
+LOW_VOLUME = 50
+
+
 def drive(speak, next_item, idle, marks, stop, on_hint, wake="", sleep=time.sleep, clock=time.monotonic,
-          answer_secs=ANSWER_SECS, max_misses=MAX_MISSES, resets=None, wake_max=WAKE_MAX, after_reset=AFTER_RESET):
+          answer_secs=ANSWER_SECS, max_misses=MAX_MISSES, resets=None, wake_max=WAKE_MAX, after_reset=AFTER_RESET, again="接着测"):
     """一直播到 stop()：idle() 设备空闲；marks() 到现在收到几行计时点（看设备有没有反应）；
     resets() 到现在收到几个一轮结束标记（FSW,RESET，插在设备说完、回到聆听的地方）：唤醒词后设备常会先回应一句，
     要等它说完再播句子，否则句子被它自己的声音盖住。不能看调试口安静：设备说话期间日志也会停好几秒。
@@ -64,7 +77,7 @@ def drive(speak, next_item, idle, marks, stop, on_hint, wake="", sleep=time.slee
         misses += 1
         need_wake = bool(wake)
         if misses >= max_misses:
-            on_hint(f"电脑播了 {misses} 次设备都没反应，已停止语音播放：请改由人对设备说，或把电脑音量调大后点「接着测」。")
+            on_hint(f"电脑播了 {misses} 次设备都没反应，已停止语音播放：请改由人对设备说，或把电脑音量调大后点「{again}」。")
             return "gave_up"
         on_hint("电脑播完设备没反应：把电脑音量调到 50 以上，或把设备放近一点，码表会再播一次。")
     return "stopped"
