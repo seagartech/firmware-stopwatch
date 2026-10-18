@@ -546,6 +546,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return tline["cur"]
 
     def _fail(job, kind, message, **extra):
+        if job.get("cancel"):  # 已经点了「停止测量」：不再报失败
+            return
         job.update(status="failed", err={"kind": kind, "message": message, **extra})
 
     def _on_device(project_dir, fsw_on):
@@ -844,7 +846,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             T().count("clicks")
             fresh = job.pop("_just_flashed", False)
             my_gen = job.get("gen")
-            superseded = lambda: fsw["job"] is not job or job.get("gen") != my_gen  # 又插了一次 / 又点了编译烧录 / 再试一次：这一趟作废，让出调试口、不改页面状态
+            superseded = lambda: fsw["job"] is not job or job.get("gen") != my_gen or job.get("cancel")  # 又插了一次 / 又点了编译烧录 / 再试一次：这一趟作废，让出调试口、不改页面状态
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机" if fresh else "设备开着，等计时点",
                        try_started=time.time(), dev_seen=None if fresh else time.time(), boot_quiet=False)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
@@ -854,6 +856,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             names = {ins.point_id(x, a.steps): x.get("n") for x in a.steps}
             # 只在某种触发方式才走的计时点（比如点屏幕开始、喊唤醒词那一下）：每轮不一定有，不算必收
             want = (want - {int(ins.point_id(x, a.steps)[1:]) for x in a.steps if x.get("opt")}) or want
+            job["need"] = len(want)  # 页面上"已收到 x / 共几个"按这个数，和判通过的标准一致
             need_n = max(1, len(want) - min(2, len(want) // 4))
             rounds = {"cur": set(), "best": set()}  # 这一轮收到的、收得最多的那一轮
             job["missing"] = []
@@ -937,6 +940,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
         def run():
             for name in order[order.index(start) if start in order else 0:]:
+                if job.get("cancel"):  # 点了「停止测量」：后面几步不做了
+                    return
                 if {"build": build, "flash": flash, "ready": ready, "try": try_once}[name]() is not True:
                     return
 
@@ -959,6 +964,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 or (body.from_ == "try" and not job.get("port") and not port_finder()):
             raise HTTPException(409, "还没插好计时点，或者正在做")
         return _run_from(body.from_ if body.from_ in ("build", "flash", "try") else "build")
+
+    @app.post("/api/fsw/stop")
+    def fsw_stop():
+        """「停止测量」：不再烧录、试测马上停下让出调试口；正在编译的编完就停。"""
+        job = fsw["job"]
+        if job and job["status"] in ("running", "waiting_device", "ready_try"):
+            job.update(cancel=True, status="stopped", log="已停止")
+        return job or {"status": "idle"}
 
     @app.post("/api/fsw/drop")
     def fsw_drop(body: FswDropBody):

@@ -337,3 +337,26 @@ def test_new_run_stops_the_old_try_and_frees_the_port(setup):
     wait(c, lambda j: j["phase"] == "try" and dev.open == 1)
     start_insert(c, r)                                                           # 另一个页面里又插了一次（新的一趟）
     assert dev.first_left.wait(2), "旧的试一次没让出调试口"
+
+
+def test_stop_while_waiting_device_does_not_flash(setup):
+    """测量页「停止测量」：等设备时停下，插上设备也不再烧录。"""
+    c, r, dev, ports, *_ = setup(ports=())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    c.post("/api/fsw/run", json={"from": "build"})
+    wait(c, lambda j: j["status"] == "waiting_device")
+    assert c.post("/api/fsw/stop").json()["status"] == "stopped"
+    ports.append("/dev/cu.usbmodem1101")
+    time.sleep(0.3)
+    j = c.get("/api/fsw").json()
+    assert j["status"] == "stopped" and not dev.flashed
+
+
+def test_try_reports_how_many_points_it_needs(setup):
+    """页面上"已收到 x / 共几个"和后台判通过用同一个数。"""
+    c, r, *_ = setup()
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["need"] == 3

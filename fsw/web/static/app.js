@@ -384,8 +384,10 @@ function runView(){if(!AUTO||autoHold||pop)return false;
  if(page==='collect')return col.st===1||col.st===2||col.st===4;
  return false}
 function runAt(){if(page==='home')return 0;if(page==='flash')return fl.step<=1&&fl.st!==3?1:fl.step<4?2:3;return col.st===2?5:4}
-function runPage(){const at=runAt(),used=autoT0?(Date.now()-autoT0)/1000:0;
- const L=[['找关键步骤','auto',150],['插入计时点','auto',90],['编译、烧录','auto',60],['试测：校验计时点','hum',30],[`多轮实测：${AUTO_ROUNDS} 轮`,'hum',AUTO_ROUNDS*15],['生成分析报告','auto',90]];
+let runT=null;  // 测量页顶上的已用时、剩余时间每秒走
+function runTick(){if(runT)return;runT=setInterval(()=>{if(!runView()){clearInterval(runT);runT=null;return}const e=document.getElementById('runused');if(e)e.textContent=mmss((Date.now()-autoT0)/1000)},1000)}
+function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/1000:0;
+ const L=[['找关键步骤','auto',150],['插入计时点','auto',90],['编译、烧录','auto',60],['试测：校验计时点','hum',60],[`多轮实测：${AUTO_ROUNDS} 轮`,'hum',AUTO_ROUNDS*15],['生成分析报告','auto',90]];
  const left=L.slice(at).reduce((a,x)=>a+x[2],0);
  const P=REAL&&IDENT&&IDENT.page,n=P?(P.steps||[]).length:0;
  const done=i=>i===0&&P?`<div class="note">${htmlEsc(P.measure||'')}；${n} 个关键步骤，位置已逐个核对</div>`:i===3?`<div class="note">计时点收到，顺序校验通过</div>`:'';
@@ -394,16 +396,18 @@ function runPage(){const at=runAt(),used=autoT0?(Date.now()-autoT0)/1000:0;
  let now;
  if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
  else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>连接设备到电脑的 USB 口</b><span class="note">计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
- else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(fl.log||'')}</span></div>`;
- else if(at===3){const N=FSWJ?FSWJ.total||live().length:live().length,got=FSWJ?(FSWJ.got||[]).length:0;now=tryBox(got,N).replace('<div class="bigask">','<div class="bigask"><span class="lab">人工操作 · 试测（校验计时点，不计入数据）</span>')}
+ else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?'AI 读取源码，确定每个计时点的插入位置':fl.log||'')}</span></div>`;
+ else if(at===3){const N=FSWJ?FSWJ.need||FSWJ.total||live().length:live().length,got=FSWJ?(FSWJ.got||[]).length:0;now=tryBox(got,N).replace('<div class="bigask">','<div class="bigask"><span class="lab">人工操作 · 试测（校验计时点，不计入数据）</span>')}
  else if(col.st===4)now=suspectBox();
  else if(col.st===2)now=`<div class="bigask auto"><span class="lab">自动执行</span><b><span class="spin"></span> 正在生成分析报告</b></div>`;
  else now=(col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:'')+colB();
- return `<div class="stack"><div class="acts" style="justify-content:space-between;align-items:flex-start;margin:0"><div><h1 style="font-size:22px;margin:0">测量：全程</h1><p class="note" style="margin:2px 0 0">已用时 <span class="num">${mmss(used)}</span>　剩余约 <span class="num">${Math.max(1,Math.round(left/60))} 分钟</span></p></div><button class="btn" data-autostop="1">停止测量</button></div>
+ return `<div class="stack"><div class="acts" style="justify-content:space-between;align-items:flex-start;margin:0"><div><h1 style="font-size:22px;margin:0">测量：全程</h1><p class="note" style="margin:2px 0 0">已用时 <span class="num" id="runused">${mmss(used)}</span>　剩余约 <span class="num">${Math.max(1,Math.round(left/60))} 分钟</span></p></div><button class="btn" data-autostop="1">停止测量</button></div>
  ${now}<section class="panel"><h2>执行进度</h2><ul class="runtl">${tl}</ul></section>
  <p class="note">计时点变更明细、关键步骤位置在报告「技术细节」中查看</p></div>`}
-function autoStop(){AUTO=false;if(page==='collect'&&col.st===1){const b=document.querySelector('[data-col="stop"]');post('/api/collect/stop',{}).catch(()=>{})}
- if(page==='home'){hStage=1}render()}
+function autoStop(){AUTO=false;clearInterval(runT);runT=null;
+ if(page==='collect')post('/api/collect/stop',{}).catch(()=>{});
+ if(page==='flash'){clearInterval(fswT);fswT=null;post('/api/fsw/stop',{}).catch(()=>{});fl.st=0}
+ page='home';hStage=1;render();window.scrollTo(0,0)}
 const suspectBox=()=>{const S=(COLJ&&COLJ.suspect)||[];return `<div class="errbox"><b>第 1 轮自动校验没通过，已暂停</b>${S.map(x=>`<p style="margin:6px 0">「${htmlEsc(x.name)}」这一段 ${fms(Math.abs(x.seconds))} 秒${x.seconds<0?'（先后反了）':''}：${htmlEsc(x.why)}。计时点位置可能不对，接着测的数据不可信。</p>`).join('')}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-autofix="1">查看并修改计时点位置</button><button class="btn" data-col="resume">忽略，继续测量</button></div></div>`};
 
 const HOME={
@@ -697,6 +701,7 @@ const mmss=x=>{x=Math.round(x||0);return x<60?`${x} 秒`:`${Math.floor(x/60)} �
 function identApply(j){IDENT=j;readSec=j.state==='running'&&j.started?Math.max(0,Math.round(Date.now()/1000-j.started)):Math.round(j.seconds||0);readFound=(j.found||[]).length;
  if(j.state==='done'){clearInterval(readT);readT=null;FF[scene]={...FF[scene],...j.page};mapSel=j.page.mapSel;dropped=new Set();edits={};added=[];alsoFace=true;applyScene();readFound=STEPS.length;stepsRead=2;render();return}
  if(j.state==='failed'){clearInterval(readT);readT=null;stepsRead=3;render();return}
+ if(runView()){render();return}
  const b=document.getElementById('readbox');if(b)morphHTML(b,readBox())}
 async function identStart(retry){clearInterval(readT);stepsRead=1;readSec=0;readFound=0;IDENT=null;if(bgSrc!==hSrc)bgStart();
  const r=await fetch(retry?'/api/identify/retry':'/api/identify/start',{method:'POST',headers:{'Content-Type':'application/json'},body:retry?'{}':JSON.stringify({work:REAL.work,what:hSay,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint,chip:CHIP(),reuse:reuseLast})});
@@ -905,7 +910,7 @@ function flList(from=0,to=4){const n=to-from+1;
  const li=FST().slice(from,to+1).map(([t,d],j)=>{const i=from+j,done=fl.st===2||(fl.st>=1&&i<fl.step)||(fl.st===3&&i<=fl.step-1),cur=(fl.st===1||fl.st===4||fl.st===5||fl.st===6)&&i===fl.step,bad=(fl.st===4||fl.st===5)&&cur;
   return `<li class="istep ${done?'ok':cur?(bad?'bad':'cur'):''}"><b>${done?'✓':bad?'!':j+1}</b><span>${t}<small>${d}</small>${cur&&fl.st===1&&i===2&&fl.wait?`<small style="color:var(--warn)">先等后台把原始代码编完：已编 ${bgPct()}%。编完自动接着编，不用点。</small><span class="pbar"><i style="width:${bgPct()}%;background:var(--warn)"></i></span>`:cur&&fl.st===1&&(i===2||i===3)?`<span class="pbar"><i style="width:${fl.pct}%"></i></span>`:''}${cur&&fl.st===1&&i!==4?stepLog():''}${bad&&fl.st===5?flErr():''}${bad&&fl.st===4?`<small style="color:var(--warn)">没看到设备。用 USB 线插上设备，插上会自动继续，不用点。</small>${REAL?'':'<button class="pill" data-fl="plug">演示：设备已插上</button>'}`:''}</span></li>`}).join('');
  const say=FF[scene].big;
- const N=realFlash()&&FSWJ?FSWJ.total||live().length:live().length,got=realFlash()&&FSWJ?(FSWJ.got||[]).length:Math.min(N,Math.round(fl.pct/100*N));
+ const N=realFlash()&&FSWJ?FSWJ.need||FSWJ.total||live().length:live().length,got=realFlash()&&FSWJ?(FSWJ.got||[]).length:Math.min(N,Math.round(fl.pct/100*N));
  const big=fl.st===6&&to>=4?`<div class="bigask"><b>试一次：${trySay()}</b><span class="note">设备烧完会重启。等它准备好（有屏幕的，等回到待命画面），再点「准备好了」；点了以后最多等 ${FSWJ&&FSWJ.try_secs||45} 秒。只是确认计时点能收到，不算进数据。</span><button class="btn pri" data-flx="trygo">准备好了</button></div>`
   :fl.st===1&&fl.step===4&&to>=4?(realFlash()?tryBox(got,N):`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`):fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点。没收到：${tryMissing().join("、")||"—"}。这一次没走到这一步（有的计时点只在某些情况下才走到，比如喊醒那一下设备不会判断你说完了），不影响多轮实测`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
  return `<ol class="isteps">${li}</ol>${big}`}
@@ -918,7 +923,7 @@ function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=
  return `<div class="bigask"><b>${/^现在/.test(tryAct())?tryAct():'现在对设备：'+tryAct()}</b>
   <span class="note">设备已经开机了。只是确认计时点能收到，不算进数据。</span>
   ${idle?`<span class="note" style="color:var(--warn)">已经 ${since} 秒没收到计时点：设备可能还在联网，或者还没被唤醒。请现在再做一次。</span>`:''}
-  <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点${J.try_started?`　剩余 <b class="num">${mmss(Math.max(0,TRY_SECS-(now-J.try_started)))}</b>，超时判未通过`:''}</span>${got&&got<N&&(J.missing||[]).length?`<span class="note">还差「${J.missing.map(htmlEsc).join('」「')}」：有的步骤只在某些情况下才走到，接着再完整做一次（${tryAct()}），码表会继续收。</span>`:''}${fullLogBtn()}${fullLog()}</div>`}  // 设备原始输出不摆在明面上，想看点"完整日志"（决策 139）
+  <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点${J.try_started?`　剩余 <b class="num">${mmss(Math.max(0,TRY_SECS-(now-J.try_started)))}</b>，超时判未通过`:''}</span>${got>=Math.max(2,N/2)&&got<N&&(J.missing||[]).length?`<span class="note">还差「${J.missing.map(htmlEsc).join('」「')}」：有的步骤只在某些情况下才走到，接着再完整做一次（${tryAct()}），码表会继续收。</span>`:''}${fullLogBtn()}${fullLog()}</div>`}  // 设备原始输出不摆在明面上，想看点"完整日志"（决策 139）
 // 完整日志（决策 106）：编译、烧录、试一次时设备和工具的输出，最近 200 行，去掉了控制字符
 let showFull=false;
 const fullLogBtn=()=>realFlash()&&FSWJ&&(FSWJ.tail||[]).length?`<button class="pill" data-fulllog="1">${showFull?'收起日志':'完整日志'}</button>`:'';
