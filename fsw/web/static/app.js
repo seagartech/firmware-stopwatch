@@ -127,7 +127,7 @@ function timeline(D){
   // 体验标准每条线一条：画在那条线自己那一行上，写明是哪条线的；演示数据只有一条（主线）的，照旧画一条贯穿的
   const jls=D.J&&D.J.lines?D.lines.map(l=>(D.J.lines.find(x=>x.name===l.name)||{}).exp_std):null;
   if(jls&&jls.some(Boolean))D.lines.forEach((l,i)=>{const es=jls[i];if(!es||es.fair==null||es.fair>T)return;const y=top+i*gap,x=sx(es.fair),below=i>0;  // 下面几条写在横条下面，不和"早多少秒"叠在一起
-   g+=`<line x1="${x}" x2="${x}" y1="${below?y-4:y-16}" y2="${below?y+h+18:y+h+10}" stroke="var(--warn)" stroke-dasharray="3 4" stroke-width="1.5"/><text x="${x+4}" y="${below?y+h+16:y-6}" font-size="11.5" fill="var(--warn)">${l.name}：超过 ${es.fair} 秒算体验差（${htmlEsc(es.short||(es.source&&es.source.startsWith('用户设定')?'用户设定':'参考值'))}）</text>`});
+   g+=`<line x1="${x}" x2="${x}" y1="${below?y-4:y-16}" y2="${below?y+h+18:y+h+10}" stroke="var(--warn)" stroke-dasharray="3 4" stroke-width="1.5"/><text x="${x>W-320?x-4:x+4}" text-anchor="${x>W-320?'end':'start'}" y="${below?y+h+16:y-6}" font-size="11.5" fill="var(--warn)">${l.name}：超过 ${es.fair} 秒算体验差（${htmlEsc(es.short||(es.source&&es.source.startsWith('用户设定')?'用户设定':'参考值'))}）</text>`});
   else if(D.S.exp&&D.S.exp.fair<=T)g+=`<line x1="${sx(D.S.exp.fair)}" x2="${sx(D.S.exp.fair)}" y1="30" y2="${H-30}" stroke="var(--warn)" stroke-dasharray="3 4"/><text x="${sx(D.S.exp.fair)+4}" y="40" font-size="11.5" fill="var(--warn)">${D.S.exp.label}</text>`;
   g+=`<text x="${sx(0)}" y="22" text-anchor="middle" font-size="12" fill="var(--muted)">${D.S.start}</text>`;
   const shown=new Map();let merged=false;  // 图例只列图上画成单独一块的段；合并了的几段另列一项
@@ -173,7 +173,7 @@ function tiers(D){const few=D.n<10;  // 少于 10 轮："10 次里最慢"没意�
 // 两把尺子（2026-10-13）：体验标准问"用户等得了吗"（看结果，给负责人）；合理范围问"这套做法有没有做坏"（看实现，给研发）。
 // 体验标准只挂在有公认标准的那条线上，没有就只用合理范围。
 function lineCards(D){
-  const CB={'每段都没做坏，是做法本身慢，要换做法才会快':'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。','先查哪段做坏了':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。','可能有隐患':'用户还等得了，但比这套做法该有的慢，可能有隐患。','正常':'用户等得了，技术上也正常。','只按合理范围判：正常':'这个场景没有体验标准，只按合理范围判：正常。','取决于回答长短，不判快慢':'长短主要看这次回答说了多少字，不判快慢；快慢看前面那条「到第一声」。','只按合理范围判：先查哪段做坏了':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。','还没有合理范围：只记下用时，先不判快慢':D.J&&D.J.scenario&&D.J.scenario.first_run?'第一次测：这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':'还没有这个设备的合理范围：只记下用时，先不判快慢。'};
+  const CB={'每段都没做坏，是做法本身慢，要换做法才会快':'每段都没做坏，是这套做法本身就慢：要换做法（如换更快的模型）才会快，不是修毛病。','先查哪段做坏了':'既让人等太久，也比这套做法该有的慢：先查哪段做坏了。','可能有隐患':'用户还等得了，但比这套做法该有的慢，可能有隐患。','正常':'用户等得了，技术上也正常。','只按合理范围判：正常':'这个场景没有体验标准，只按合理范围判：正常。','体验可以；还没有合理范围，先只记用时':D.J&&D.J.scenario&&D.J.scenario.first_run?'体验可以。第一次测：这次的用时已存为合理范围，下次改完再测就和它比。':'体验可以；还没有合理范围，先只记用时。','体验差；还没有合理范围，先只记用时':'体验差；还没有合理范围，先只记用时。','取决于回答长短，不判快慢':'长短主要看这次回答说了多少字，不判快慢；快慢看前面那条「到第一声」。','只按合理范围判：先查哪段做坏了':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。','还没有合理范围：只记下用时，先不判快慢':D.J&&D.J.scenario&&D.J.scenario.first_run?'第一次测：这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':'还没有这个设备的合理范围：只记下用时，先不判快慢。'};
   return D.lines.map(l=>{const [v,c]=D.verdict(l),isMain=l===D.main,inR=v==='正常',jl=D.J&&D.J.lines.find(x=>x.name===l.name);
     const ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):isMain&&D.exp?D.exp:null,es=jl?jl.exp_std:D.S.exp;  // 体验标准每条线一条：真测的按后台每条线的判定
     const concl=jl?(jl.new&&jl.combo.startsWith('还没有合理范围')?(D.J.scenario&&D.J.scenario.first_run?'第一次测：':'这条是这次新加的：')+'这次的用时已存为合理范围，下次改完再测就和它比；这次先只记用时。':CB[jl.combo]||jl.combo):!ex?(inR?'这个场景没有体验标准，只按合理范围判：正常。':'这个场景没有体验标准，只按合理范围判：比这套做法该有的慢，先查哪段做坏了。')
@@ -296,7 +296,7 @@ let toastT=null;function toast(m){const t=document.getElementById('toast');m=Str
 document.addEventListener('click',e=>{if(e.target.closest('#toast .tclose'))document.getElementById('toast').hidden=true});
 // 首页"以前测过的"：真测过的记录（后台按结果文件夹里的原始日志重算）；演示数据只在演示入口（地址里写 ?demo=）出现
 let HIST=[];async function histLoad(){try{HIST=await (await fetch('/api/history')).json()}catch(e){}}
-const histRow=h=>`<div class="lrow"><button data-hopen="${htmlEsc(h.project_dir)}"><span><b>${htmlEsc(h.name)}</b>　<span class="note">${htmlEsc(h.what)} · ${htmlEsc(h.last)}</span></span><span class="num">${htmlEsc(h.metric)} ${f(h.now)} 秒　${h.few?`<span class="note">只测了 ${h.rounds} 轮，跑流程，不比较</span>`:h.prev!=null?arrow(h.now,h.prev):'<span class="note">第一次测</span>'}</span></button>${h.path?`<button class="pill" data-hretest="${htmlEsc(h.project_dir)}">改完了，再测一次</button>`:''}</div>${h.fsw_on?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-hrestore="${htmlEsc(h.project_dir)}">还原成原版</button></div>`:''}`;
+const histRow=h=>`<div class="lrow"><button data-hopen="${htmlEsc(h.project_dir)}"><span><b>${htmlEsc(h.name)}</b>　<span class="note">${htmlEsc(String(h.what||'').startsWith('全程')?'全程':h.what)} · ${htmlEsc(h.last)}</span></span><span class="num">${htmlEsc(h.metric)} ${f(h.now)} 秒　${h.few?`<span class="note">只测了 ${h.rounds} 轮，跑流程，不比较</span>`:h.prev!=null?arrow(h.now,h.prev):'<span class="note">第一次测</span>'}</span></button>${h.path?`<button class="pill" data-hretest="${htmlEsc(h.project_dir)}">改完了，再测一次</button>`:''}</div>${h.fsw_on?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-hrestore="${htmlEsc(h.project_dir)}">还原成原版</button></div>`:''}`;
 // 改完再测（任务 22）：带上次的源码位置、板子、要测什么，直接到"确认要测的内容"；不另开页面
 let remeasure=false;  // 这一轮是从「改完了，再测一次」进来的：步骤条写"改完再测"，不写"第一次测"
 async function retestFrom(h){flow=null;flowReset();page='home';hStage=0;await realPick({path:h.path},h.path);if(!REAL)return;remeasure=true;
@@ -356,7 +356,8 @@ function chips(){const C=(t,x)=>`<button class="pill" data-fill="${x}">${x}</but
 const examples=`<div class="pills"><span class="note">比如：</span>${['从按键到屏幕亮','从开机到连上网','从收到指令到动作完成'].map(x=>`<button class="pill" data-fill="${x}">${x}</button>`).join('')}</div>`;
 
 // 精简流程（决策 158）：一律测全程；点「开始测量」后自动执行，只在要人工操作或校验没过时停下
-const WHOLE='全程：从设备最早知道被触发，到用户感受到的最后一个结果';
+// 10-18 真机：只写"最早""最后"时，大模型有一次把起点放到"收到听写文字"、终点放到"设备开口"，少了前后两头。写明两头各是什么样的时刻（举几种设备的例子）
+const WHOLE='全程：起点是用户做完那件事、设备自己察觉到的那一刻（比如设备判断出你说完了、读到卡号），不要用之后才收到的服务器消息当起点；终点是用户感受到的最后一个结果（比如喇叭把回答整段放完、门锁打开到位）；中间用户能感受到的结果（比如喇叭出第一声、换上表情、灯亮）也都要有计时点';
 let AUTO=false,autoHold='',autoBusy='',autoT0=0;
 const TRY_SECS=180;  // 和后台 TRY_SECONDS 一致：试一次最多等多久
 const AUTO_ROUNDS=10;
@@ -617,6 +618,7 @@ function myPick(D,FX){initPick(FX);
    ${none.length?`<p style="margin:6px 0;color:var(--bad)">${none.join('、')}一个方案都没选，等于先不处理。</p>`:''}
    <details class="lvwhy" ${fixTodo?'open':''} data-todod="1"><summary>待办：按人分好的消息（${Object.keys(who).length} 个人）</summary><p class="note" style="margin:10px 0 6px">按人分好，每人一块，各自复制后贴到钉钉、微信或邮件里发给对方。</p>${Object.keys(who).map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX)}</pre></div>`).join('')}</details>`
    :'<p class="note">还没勾任何方案。</p>';
+  if(!FX.length)return '';  // 没有要改的问题：没有方案可勾，不显示"勾了 0 个方案"（10-18 真机）
   return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你的决定：勾了 ${chosen.length} 个方案</h3>${body}</div>`;
 }
 function fixA(D){const FX=activeFixes(D);initPick(FX);

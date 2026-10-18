@@ -71,6 +71,8 @@ def combo(exp, inside, verdict="正常", big=None):
         return "还没有合理范围：只记下用时，先不判快慢"
     if verdict == "没有范围" and exp == "差" and big:  # 第一次测：没有范围可查"哪段做坏了"，直接说慢在哪一段
         return f"体验差：慢在「{big[0]}」（{big[1]:.2f} 秒，占 {big[2]}%）"
+    if verdict == "没有范围":  # 体验标准判了、还没有合理范围：只说体验，不说"比这套做法该有的慢"（没有可比的）
+        return "体验可以；还没有合理范围，先只记用时" if exp == "可以" else "体验差；还没有合理范围，先只记用时"
     if exp is None:
         return "只按合理范围判：正常" if inside else "只按合理范围判：先查哪段做坏了"
     if exp == "差":

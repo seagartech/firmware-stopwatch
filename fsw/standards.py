@@ -311,6 +311,7 @@ def inserted_page(page, steps=None, inserted=None):
 
 VOICE_WORDS = ("说", "声", "听", "喇叭", "回答", "语音", "开口")
 FIRST_WORDS = ("第一声", "出第一", "首声")  # 不用"开口"：会撞上"收到开口通知"这种服务器消息
+DONE_WORDS = ("说完", "停下", "讲完", "听出", "说话结束", "静音")  # 起点是"设备判断出人说完了"的说法
 LAST_WORDS = ("最后", "放完")
 
 
@@ -328,6 +329,11 @@ def with_default_experience(sc):
     pts = {x for k in line.get("segments") or [] for x in ((sc.get("segments") or {}).get(k) or {}).values()
            if isinstance(x, str) and x in names}
     if not any(w in names[p] for p in pts for w in VOICE_WORDS):
+        return sc
+    # 参考值说的是"人说完到听到回答"：起点要是设备判断出人说完的那一刻。起点是之后才到的（比如收到听写文字），
+    # 少算了上传、听写那段，套上去会把慢的判成"可以"（10-18 真机：同一台设备 1.62 秒判差、换了起点 1.20 秒判可以）
+    st = sc.get("start") or {}
+    if not any(w in f"{st.get('name') or ''}{names.get(st.get('point'), '')}" for w in DONE_WORDS):
         return sc
     ref = next((d["experience"] for d in load_all() if (d.get("experience") or {}).get("fair") is not None), None)
     if not ref:
