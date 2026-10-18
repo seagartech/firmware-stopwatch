@@ -231,8 +231,24 @@ def test_side_line_points_not_every_round_stay_on_the_side_line():
 def test_voice_main_line_gets_the_reference_experience_standard():
     from fsw import standards as stds
     sc = {"lines": [{"name": "回答这条", "segments": ["s"]}], "segments": {"s": {"from": "P1", "to": "P2", "name": "x"}},
-          "point_names": {"P1": "收到听写文字", "P2": "喇叭最后一声"}, "experiences": []}
+          "point_names": {"P1": "收到听写文字", "P2": "喇叭出第一声"}, "experiences": []}
     e = stds.with_default_experience(sc)["experiences"]
     assert e[0]["line"] == "回答这条" and e[0]["fair"] == 1.5 and e[0]["source"]
     door = {**sc, "point_names": {"P1": "刷卡", "P2": "开门"}}
     assert stds.with_default_experience(door)["experiences"] == []  # 不是语音的不乱套
+
+
+
+def test_whole_chain_gets_a_first_sound_line_and_only_it_gets_the_reference():
+    # 亲测第 11 次：全程的终点是"喇叭最后一声"，回答越长越久；1.5 秒参考值说的是"说完到听到回答开头"
+    from fsw import standards as stds
+    steps = [{"p": p, "n": n, "line": "talk"} for p, n in
+             [("P1", "收到听写文字"), ("P2", "收到开口通知"), ("P3", "喇叭出第一声"), ("P4", "喇叭最后一声")]]
+    segs = [{"a": "P1", "b": "P2", "t": "服务器"}, {"a": "P2", "b": "P3", "t": "等声音"}, {"a": "P3", "b": "P4", "t": "边收边放"}]
+    sc = stds.with_default_experience(stds.real_scenario({"steps": steps, "segs": segs, "fsegs": [], "ln": {"talk": "回答这条"}}, None))
+    names = [l["name"] for l in sc["lines"]]
+    assert names == ["到喇叭出第一声", "回答这条"] and sc["lines"][0]["segments"] == ["P1-P2", "P2-P3"]
+    assert [e["line"] for e in sc["experiences"]] == ["到喇叭出第一声"]
+    spec = m.Spec.from_scenario(sc)
+    cur = {"P1": (0, 0), "P2": (1_000_000, 0), "P3": (1_800_000, 0), "P4": (4_000_000, 0)}
+    assert m.compute(cur, spec)["ends"] == [1.8, 4.0]
