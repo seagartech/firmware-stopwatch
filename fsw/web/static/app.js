@@ -384,11 +384,12 @@ function runView(){if(!AUTO||autoHold||pop)return false;
  if(page==='collect')return col.st===1||col.st===2||col.st===4;
  return false}
 function runAt(){if(page==='home')return 0;if(page==='flash')return fl.step<=1&&fl.st!==3?1:fl.step<4?2:3;return col.st===2?5:4}
-let runT=null;  // 测量页顶上的已用时、剩余时间每秒走
-function runTick(){if(runT)return;runT=setInterval(()=>{if(!runView()){clearInterval(runT);runT=null;return}const e=document.getElementById('runused');if(e)e.textContent=mmss((Date.now()-autoT0)/1000)},1000)}
+let runT=null,runPrev=-1,runS0=0,runLeft=()=>0;  // 剩余时间：后面几步的预计 + 当前这步预计减去已做的时间（至少留 30 秒）  // 测量页顶上的已用时、剩余时间每秒走
+function runTick(){if(runT)return;runT=setInterval(()=>{if(!runView()){clearInterval(runT);runT=null;return}const e=document.getElementById('runused');if(e)e.textContent=mmss((Date.now()-autoT0)/1000);const l=document.getElementById('runleft');if(l)l.textContent=Math.max(1,Math.round(runLeft()/60))+' 分钟'},1000)}
 function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/1000:0;
  const L=[['找关键步骤','auto',150],['插入计时点','auto',90],['编译、烧录','auto',60],['试测：校验计时点','hum',60],[`多轮实测：${AUTO_ROUNDS} 轮`,'hum',AUTO_ROUNDS*15],['生成分析报告','auto',90]];
- const left=L.slice(at).reduce((a,x)=>a+x[2],0);
+ if(at!==runPrev){runPrev=at;runS0=Date.now()}
+ runLeft=()=>L.slice(at+1).reduce((a,x)=>a+x[2],0)+Math.max(30,L[at][2]-(Date.now()-runS0)/1000);const left=runLeft();
  const P=REAL&&IDENT&&IDENT.page,n=P?(P.steps||[]).length:0;
  const done=i=>i===0&&P?`<div class="note">${htmlEsc(P.measure||'')}；${n} 个关键步骤，位置已逐个核对</div>`:i===3?`<div class="note">计时点收到，顺序校验通过</div>`:'';
  const tl=L.map((x,i)=>{const c=i<at?'done':i===at?(col.st===4&&i===4?'err':'doing'):'wait';
@@ -396,12 +397,12 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  let now;
  if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
  else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>未检测到设备：连接 USB，或按电源键开机</b><span class="note">设备闲置一段时间会自动关机。计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
- else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?'AI 读取源码，确定每个计时点的插入位置':fl.log||'')}</span></div>`;
+ else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?'AI 读取源码，确定每个计时点的插入位置':fl.step===3?'正在写入设备，请勿拔线':'编译带计时点的固件')}</span></div>`;
  else if(at===3){const N=FSWJ?FSWJ.need||FSWJ.total||live().length:live().length,got=FSWJ?(FSWJ.got||[]).length:0;now=tryBox(got,N).replace('<div class="bigask">','<div class="bigask"><span class="lab">人工操作 · 试测（校验计时点，不计入数据）</span>')}
  else if(col.st===4)now=suspectBox();
  else if(col.st===2)now=`<div class="bigask auto"><span class="lab">自动执行</span><b><span class="spin"></span> 正在生成分析报告</b></div>`;
  else now=(col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:'')+colB();
- return `<div class="stack"><div class="acts" style="justify-content:space-between;align-items:flex-start;margin:0"><div><h1 style="font-size:22px;margin:0">测量：全程</h1><p class="note" style="margin:2px 0 0">已用时 <span class="num" id="runused">${mmss(used)}</span>　剩余约 <span class="num">${Math.max(1,Math.round(left/60))} 分钟</span></p></div><button class="btn" data-autostop="1">停止测量</button></div>
+ return `<div class="stack"><div class="acts" style="justify-content:space-between;align-items:flex-start;margin:0"><div><h1 style="font-size:22px;margin:0">测量：全程</h1><p class="note" style="margin:2px 0 0">已用时 <span class="num" id="runused">${mmss(used)}</span>　剩余约 <span class="num" id="runleft">${Math.max(1,Math.round(left/60))} 分钟</span></p></div><button class="btn" data-autostop="1">停止测量</button></div>
  ${now}<section class="panel"><h2>执行进度</h2><ul class="runtl">${tl}</ul></section>
  <p class="note">计时点变更明细、关键步骤位置在报告「技术细节」中查看</p></div>`}
 function autoStop(){AUTO=false;clearInterval(runT);runT=null;
