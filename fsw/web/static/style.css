@@ -42,7 +42,7 @@ h2{font-size:17px;margin:0 0 10px;font-weight:700}
 [hidden]{display:none!important}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
 .stack{display:flex;flex-direction:column;gap:16px}
-.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.grid3>*{min-width:0;overflow-wrap:anywhere}
 .chip{display:inline-block;font-size:12.5px;font-weight:500;border-radius:999px;padding:1px 10px;white-space:nowrap}
 .c-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
 .c-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
