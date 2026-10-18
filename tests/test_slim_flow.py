@@ -100,39 +100,34 @@ class Clock:
         return self.t
 
 
-def test_drive_speaks_wake_word_then_sentence_only_when_idle_and_waits_for_reaction():
-    clk, said, marks = Clock(), [], {"n": 0}
-    busy = {"until": 0.0}
-
-    def speak(t):
-        said.append(t)
-        if t != "你好":  # 设备听到句子：收到计时点，忙 5 秒
-            marks["n"] += 1
-            busy["until"] = clk.t + 5
-    stop = lambda: len([x for x in said if x != "你好"]) >= 3 and clk.t > busy["until"]
-    r = voice.drive(speak, lambda: f"第{marks['n'] + 1}句", lambda: clk.t >= busy["until"], lambda: marks["n"], stop,
-                    lambda t: None, wake="你好", sleep=clk.sleep, clock=clk)
-    assert r == "stopped" and said == ["你好", "第1句", "你好", "第2句", "你好", "第3句"]
-
-
-def test_drive_waits_for_device_to_finish_answering_wake_word():
-    # 设备听到唤醒词先回应约 4 秒（调试口一直有输出），回应完才播句子
-    clk, said = Clock(), []
-    last = {"at": -100.0}
+def test_drive_wakes_once_waits_for_reply_to_end_then_asks_each_round():
+    # 设备听到唤醒词先回应约 4 秒：期间日志会停（不能看安静），说完才打一轮结束标记；之后接着听，不用再唤醒
+    clk, said, st = Clock(), [], {"marks": 0, "resets": 0, "busy": 0.0, "end": None}
 
     def speak(t):
         said.append((t, clk.t))
-        if t == "你好":
-            last["at"] = clk.t + 4.0
+        st["marks"] += 1
+        st["busy"] = clk.t + 4.0
+        st["end"] = clk.t + 4.0
 
-    def quiet():
-        if last["at"] - 4.0 <= clk.t <= last["at"]:
-            return 0.0
-        return clk.t - last["at"]
-    voice.drive(speak, lambda: "一加一等于几", lambda: True, lambda: 0, lambda: len(said) >= 2, lambda t: None,
-                wake="你好", sleep=clk.sleep, clock=clk, quiet=quiet)
-    assert said[0][0] == "你好" and said[1][0] == "一加一等于几"
-    assert said[1][1] - said[0][1] >= 4.0 + 2.0 - 0.01
+    def resets():
+        if st["end"] is not None and clk.t >= st["end"]:
+            st["resets"] += 1
+            st["end"] = None
+        return st["resets"]
+    idle = lambda: resets() is not None and clk.t >= st["busy"] + 3
+    stop = lambda: len(said) >= 4 and clk.t > st["busy"]
+    r = voice.drive(speak, lambda: "一加一等于几", idle, lambda: st["marks"], stop, lambda t: None,
+                    wake="你好", sleep=clk.sleep, clock=clk, resets=resets)
+    assert r == "stopped" and [t for t, _ in said] == ["你好", "一加一等于几", "一加一等于几", "一加一等于几"]
+    assert said[1][1] - said[0][1] >= 4.0  # 等唤醒回应说完才问
+
+
+def test_drive_wakes_again_after_device_did_not_react():
+    clk, said, hints = Clock(), [], []
+    voice.drive(lambda t: said.append(t), lambda: "一加一等于几", lambda: True, lambda: 0, lambda: False, hints.append,
+                wake="你好", sleep=clk.sleep, clock=clk, resets=lambda: 0)
+    assert said == ["你好", "一加一等于几"] * 3
 
 
 def test_drive_gives_up_after_three_silent_tries_with_volume_hint():

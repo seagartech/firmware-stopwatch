@@ -11,9 +11,8 @@ import time
 
 VOICE = "Tingting"  # 中文普通话女声，验证 25 用的就是它
 IDLE_SECS = 3.0      # 设备安静这么久才算空闲
-WAKE_GAP = 2.5       # 唤醒词播完至少等这么久
-WAKE_QUIET = 2.0     # 设备对唤醒词有反应（调试口出声）后，再安静这么久才算回应说完、进入聆听
-WAKE_MAX = 10.0      # 最多等这么久，设备一直没输出也照常播句子
+WAKE_MAX = 15.0      # 唤醒词播完最多等这么久设备回应完，等不到也照常播句子
+AFTER_RESET = 0.5    # 设备回应完（打出一轮结束标记）后再隔一下才播
 ANSWER_SECS = 20.0   # 播完等这么久没收到计时点，算设备没反应
 MAX_MISSES = 3
 
@@ -27,28 +26,28 @@ def say(text, voice=VOICE):
 
 
 def drive(speak, next_item, idle, marks, stop, on_hint, wake="", sleep=time.sleep, clock=time.monotonic,
-          wake_gap=WAKE_GAP, answer_secs=ANSWER_SECS, max_misses=MAX_MISSES, quiet=None, wake_quiet=WAKE_QUIET, wake_max=WAKE_MAX):
+          answer_secs=ANSWER_SECS, max_misses=MAX_MISSES, resets=None, wake_max=WAKE_MAX, after_reset=AFTER_RESET):
     """一直播到 stop()：idle() 设备空闲；marks() 到现在收到几行计时点（看设备有没有反应）；
-    quiet() 调试口距上一行输出几秒：唤醒词后设备常会先回应一句，等它说完（有输出、又安静下来）再播句子，否则句子被它自己的声音盖住。
+    resets() 到现在收到几个一轮结束标记（FSW,RESET，插在设备说完、回到聆听的地方）：唤醒词后设备常会先回应一句，
+    要等它说完再播句子，否则句子被它自己的声音盖住。不能看调试口安静：设备说话期间日志也会停好几秒。
     返回 "stopped"（外面叫停）或 "gave_up"（连着没反应，已提示改由人说）。"""
-    misses = 0
+    misses, need_wake = 0, bool(wake)
     while not stop():
         if not idle():
             sleep(0.1)
             continue
-        before = marks()
-        if wake:
+        if need_wake:  # 只在开头和设备没反应（多半回到待机）时播：设备说完会接着听，每句都带唤醒词会被当成一句话
             speak(wake)
-            t_wake = clock()
-            sleep(wake_gap)
-            if quiet:
-                reacted = False
-                while not stop() and clock() - t_wake < wake_max:
-                    q = quiet()
-                    reacted = reacted or q < clock() - t_wake
-                    if reacted and q >= wake_quiet:
-                        break
+            t_wake, r0 = clock(), resets() if resets else 0
+            if resets:
+                while not stop() and resets() == r0 and clock() - t_wake < wake_max:
                     sleep(0.1)
+                if resets() != r0:
+                    sleep(after_reset)
+            else:
+                sleep(2.5)
+            need_wake = False
+        before = marks()
         speak(next_item())
         t0 = clock()
         while not stop() and marks() == before and clock() - t0 < answer_secs:
@@ -63,6 +62,7 @@ def drive(speak, next_item, idle, marks, stop, on_hint, wake="", sleep=time.slee
                 sleep(0.1)
             continue
         misses += 1
+        need_wake = bool(wake)
         if misses >= max_misses:
             on_hint(f"电脑播了 {misses} 次设备都没反应，已停止语音播放：请改由人对设备说，或把电脑音量调大后点「接着测」。")
             return "gave_up"
