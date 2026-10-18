@@ -1235,7 +1235,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["pauses"] = job.get("pauses", 0) + 1
                     opened = quiet["lines"] + len(job["rounds"]) > got0 or job.get("progress", [0])[0]
                     job.update(status="paused", error=str(e), hint="",
-                               message=f"设备断开了，已测的 {ok_count()} 轮都留着；插回去会自动接着测。" if opened else
+                               message=f"设备断开了，已测的 {ok_count()} 轮都留着：插回 USB，或设备已自动关机就按电源键开机，检测到会自动接着测。" if opened else
                                f"打不开设备的调试口（{ports[0]}）：可能被别的软件占着（比如串口监视器、另一个码表窗口），"
                                f"关掉它，码表会自动重试。已测的 {ok_count()} 轮都留着。")
                     time.sleep(wait_step)
