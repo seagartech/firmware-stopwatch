@@ -1317,7 +1317,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         else:
             raise HTTPException(404, "还没有测完的轮")
         out = jdg.judge(sc, ok)
-        keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points", "range_list")
+        keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points", "range_list",
+                "first_run")
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
@@ -1401,7 +1402,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if filled:
                 rl.save(d, lst)
                 job["_filled"] = filled
-        return rl.apply(sc, lst) if lst else sc
+                job["_filled_vals"] = {x["name"]: (x.get("range"), x.get("slow"))
+                                       for x in list(lst["segments"].values()) + lst["lines"] if x["name"] in filled}
+        out = rl.apply(sc, lst) if lst else sc
+        auto = job.get("_filled_vals") or {}
+        if auto:  # 合理范围就是拿这次的轮填的：不拿它再判这次（只会全"正常"），这次快慢只按体验标准看，下次再测和它比；手动改过的照改过的判
+            for x in list(out["segments"].values()) + out["lines"]:
+                if x.get("name") in auto and (x.get("range"), x.get("slow")) == auto[x["name"]]:
+                    x.update(range=None, slow=None)
+            out["first_run"] = True
+        return stds.with_default_experience(out)
 
     def _list_dir(project_dir=None):
         """清单在哪个项目：给了项目文件夹就用它（只限码表结果文件夹里，设置页进来的）；没给就是这份报告对应的项目。"""

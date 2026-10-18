@@ -51,7 +51,9 @@ def test_first_full_run_fills_the_list_and_report_follows_edits_without_refresh(
     lst = rl.read(proj)
     assert lst and r["list_filled"] and r["scenario"]["range_list"]["file"] == rl.FILENAME
     seg = {g["k"]: g for g in r["segments"]}["P2-P5"]
-    assert seg["verdict"] == "正常" and seg["range"][0] <= seg["min"] and seg["range"][1] >= seg["max"]  # 按实测填，自然在范围里
+    assert seg["verdict"] == "没有范围" and r["scenario"]["first_run"]  # 范围就是按这次填的：不拿它判这次自己（只会全"正常"）
+    lseg = next(g for g in lst["segments"].values() if (g["from"], g["to"]) == ("P2", "P5"))
+    assert lseg["range"][0] <= seg["min"] and lseg["range"][1] >= seg["max"]  # 清单里按实测填好了，下次和它比
     assert "stale" not in r
     lk = next(k for k, g in lst["segments"].items() if (g["from"], g["to"]) == ("P2", "P5"))
     c.post("/api/rangelist/edit", json={"kind": "segment", "key": lk, "range": [0.001, seg["med"] / 2], "slow": seg["med"] / 1.5})

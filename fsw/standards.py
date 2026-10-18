@@ -297,3 +297,25 @@ def inserted_page(page, steps=None, inserted=None):
     xsegs = [{"a": start, "b": s["p"], "t": s["n"], "who": ""} for s in kept if start and s["p"] not in used]
     return {**page, "steps": kept, "segs": main, "fsegs": side, "xsegs": xsegs,
             "main": [s["p"] for s in kept if s.get("line") != "face"]}
+
+
+VOICE_WORDS = ("说", "声", "听", "喇叭", "回答", "语音", "开口")
+
+
+def with_default_experience(sc):
+    """语音对话类的设备，要测的这条线（最后一条，终点是用户听到回答）还没有体验标准时，挂上码表自带标准里的
+    对话体验参考值（1.5 秒，出处写在标准里）。不是语音的、或已经有体验标准的不动。"""
+    from fsw.scenario import experience_of
+    lines = sc.get("lines") or []
+    if not lines or experience_of(sc, lines[-1]["name"]):
+        return sc
+    names = sc.get("point_names") or {}
+    pts = {x for k in lines[-1].get("segments") or [] for x in ((sc.get("segments") or {}).get(k) or {}).values()
+           if isinstance(x, str) and x in names}
+    if not any(w in names[p] for p in pts for w in VOICE_WORDS):
+        return sc
+    ref = next((d["experience"] for d in load_all() if (d.get("experience") or {}).get("fair") is not None), None)
+    if not ref:
+        return sc
+    return {**sc, "experiences": [e for e in sc.get("experiences") or [] if e.get("line") != lines[-1]["name"]]
+            + [{**ref, "line": lines[-1]["name"]}]}
