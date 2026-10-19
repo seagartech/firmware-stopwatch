@@ -463,3 +463,10 @@ def test_report_line_uses_the_round_totals_even_when_a_segment_is_empty():
             "S.lines[0].ends0=[1.0,2.5,1.4];const L=build(S).lines[0];return [L.med,L.max]})()")
     assert run(["LCOL", "LSOFT", "num", "sorted", "med", "p90", "mx", "build"], expr) == [1.4, 2.5]
     assert "ends0:li<0?null:J.rounds.map(r=>(r.ends||[])[li]??null)" in JS  # 真测报告把后台每轮的线用时带进来
+
+
+@node
+def test_range_skips_rounds_without_a_value():
+    """10-19：第 2 轮没换表情，表情这条那轮没数，范围写成了 0.00～1.87。"""
+    out = run(["f", "fms", "rangeTxt"], "rangeTxt([null,0.62,1.87],[1,2,3])")
+    assert out.startswith("0.62") and "0.00" not in out

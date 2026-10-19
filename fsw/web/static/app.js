@@ -83,7 +83,8 @@ function withJudge(D,J){const L=n=>J.lines.find(x=>x.name===n)||{};
   D.J=J;return D}
 const roundList=a=>'第 '+a.map(r=>r.n).join('、')+' 轮';
 // 分段用时的范围：某轮后一个点比前一个点先到（如回答开头被吞），算出来是负数，不写负数，写这一轮先后反了
-function rangeTxt(v,ns){const pos=v.filter(x=>x>=0),neg=ns.filter((n,i)=>v[i]<0);
+function rangeTxt(v,ns){const pos=v.filter(x=>x!=null&&x>=0),  // 某轮这条线没数（null>=0 在 JS 里是真，会被当成 0）
+ neg=ns.filter((n,i)=>v[i]<0);
   return (pos.length?`${fms(Math.min(...pos))}～${fms(Math.max(...pos))}`:'—')+(neg.length?`<br><span class="note">第 ${neg.join('、')} 轮先后反了</span>`:'')}  // 备注换一行写：不把这一列撑宽
 function headline(D){
   const L=D.lines;
