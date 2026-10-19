@@ -234,7 +234,7 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
 function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
 // 最值得优化的一段（10-19 用户定，固定点名）：设备上能改的段里占用时最多的，只写占多少，不分等级（后台 judge 算的 best_fix）
 function bestFix(D){const b=D.J&&D.J.best_fix;if(!b)return '';const l=D.lines.find(x=>x.name===b.line);
- return `<p style="margin:0 0 10px">最值得优化的一段：<b>「${htmlEsc(b.name)}」</b>，一般 ${fms(b.med)} 秒${b.share!=null?`，占「${htmlEsc(l?l.end:b.line)}」的 ${b.share}%`:''}<span class="note">（设备上能改的段里最大的；服务器、网络那几段不算）</span></p>`}
+ return `<p style="margin:0 0 10px">最值得优化的一段：<b>「${htmlEsc(b.name)}」</b>，一般 ${fms(b.med)} 秒${b.share!=null?`，占「${htmlEsc(l?l.end:b.line)}」的 ${b.share}%`:''}<span class="note">（设备上能改的段里最大的；服务器、网络那几段不算）</span>${b.device_share!=null?`。设备上能改的段合计占 ${b.device_share}%，其余是服务器、网络、回答长短`:''}</p>`}
 // 起点比人真正做完晚多少：没核对过时，用标准库里这一类设备写的估计（写明是估计，不是标准）
 const startGap=J=>{const x=(J.lines||[]).find(l=>l.exp_std&&l.exp_std.start_gap);return x?{txt:x.exp_std.start_gap,cat:x.exp_std.category}:null};
 function startLagLine(name,L,gap){return `<p class="note" style="margin:4px 0 0">起点是「${htmlEsc(name)}」，是设备自己察觉的时刻。${!L&&gap?`人实际做完的那一刻还要早，${htmlEsc(gap.cat?`按「${gap.cat}」类设备`:'')}${htmlEsc(gap.txt)}，还没核对过；实际等的时间会比报告里长一点。`:L?`人实际停嘴还要再早约 ${(Math.round(L.secs*10)/10).toFixed(1)} 秒（${htmlEsc(L.when||'')} 用 ${htmlEsc(L.how||'录音')}核对过${L.rounds?`，${L.rounds} 轮`:''}），按人的感受，各条线的用时都要再加上这么多。`:'人实际做完的那一刻还要早一点，码表看不到，还没核对过。'}</p>`}
