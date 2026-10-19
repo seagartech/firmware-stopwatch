@@ -1305,6 +1305,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     take(coll.finish())
                 if job is col["job"]:
                     job["status"] = "suspect" if job.get("suspect") else "done" if ok_count() >= job["target"] else "stopped"
+                    _keep_rounds(job)
                     if body.source == "device":
                         T().end("collect")
 
@@ -1345,6 +1346,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         name = (sc.get("point_names") or {}).get((sc.get("start") or {}).get("point"))
         return lag if lag and name and lag.get("point_name") == name else None
 
+    def _keep_rounds(job):
+        """真测（有项目文件夹）测完：把收全的每一轮存在原始日志旁边，以后和它比都读这份（meas.save_rounds）。"""
+        if job.get("_page") is None or not job.get("_project_dir"):
+            return
+        try:
+            meas.save_rounds(Path(job["raw_log"]).parent, job.get("rounds") or [])
+        except OSError:
+            pass
+
     @app.get("/api/report")
     def report(demo: str | None = None):
         """报告用的判断：这次收齐的轮，按固定规则算（判快慢、两把尺子、结论标签），不用大模型。
@@ -1356,8 +1366,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             sc, raw = job["_scenario"], job["raw_log"]
             if job.get("_page") is not None and job.get("_project_dir"):  # 真测：每次都按项目现在的合理范围清单判
                 sc = job["_scenario"] = _judge_scenario(job, ok)
-                if job.get("status") in ("done", "stopped") and "_prev" not in job:
-                    job["_prev"] = _prev_run(job, sc, ok)
+                if job.get("status") in ("done", "stopped"):
+                    _keep_rounds(job)  # 晚到的最后一声会改已交出的那一轮：打开报告时再存一次，存的和报告用的一样
+                    if "_prev" not in job:
+                        job["_prev"] = _prev_run(job, sc, ok)
         elif demo in demos:
             sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
         else:
@@ -1398,8 +1410,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 continue
             try:
                 psc = stds.real_scenario(meta["page"], stds.find(meta["page"].get("steps") or []), meta.get("values"))
-                rounds = [r for r in meas.collect(log.read_text(encoding="utf-8", errors="replace").splitlines(),
-                                                  meas.Spec.from_scenario(psc)) if r["ok"]]
+                rounds = meas.run_rounds(run, meas.Spec.from_scenario(psc))
             except Exception:  # 老数据格式对不上：这一次不拿来比
                 continue
             if len(rounds) < rl.MIN_ROUNDS:
@@ -1643,11 +1654,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def _run_med(proj, run, meta):
         page = meta.get("page") or {}
         sc = stds.real_scenario(page, stds.find(page.get("steps") or []), meta.get("values"))
-        lines = (run / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
         # 有"第一下感觉到的结果"那条线时，最后一条（到全部做完）看内容长短、不判快慢：首页的主数用第一下那条（真测第 40 次：显示成"声音放完 10.11 秒"）
         ls = sc.get("lines") or []
         i = next((k for k, l in enumerate(ls) if l.get("first")), len(ls) - 1)
-        ok = [r for r in meas.collect(lines, meas.Spec.from_scenario(sc)) if r["ok"] and r["ends"][i] is not None]
+        ok = [r for r in meas.run_rounds(run, meas.Spec.from_scenario(sc)) if i < len(r["ends"]) and r["ends"][i] is not None]
         end = ls[i].get("end") if ls and i < len(ls) - 1 else None
         # 留 4 位小数：网页再取两位，和报告一样（真测第 41 次：1.325206 先四舍五入成 1.325，网页显示 1.32、报告 1.33）
         return (round(jdg.med([r["ends"][i] for r in ok]), 4), len(ok), end) if ok else (None, 0, end)
