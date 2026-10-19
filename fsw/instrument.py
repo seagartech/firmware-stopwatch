@@ -51,11 +51,17 @@ extern "C" {
 
 #define FSW_MAX_ID 32
 
+// 这一轮的起点是哪个计时点（码表插点时写进来）。-1 = 不知道（老的插法）：和以前一样
+#ifndef FSW_START_ID
+#define FSW_START_ID -1
+#endif
+
 // 几个文件共用同一份记录：weak 让链接时合成一份（C 和 C++ 文件都行）
 __attribute__((weak)) unsigned char fsw_done[FSW_MAX_ID];   // "一轮只记第一次"：这一轮记过没有
 __attribute__((weak)) int64_t fsw_last_us[FSW_MAX_ID];      // "记最后一次"：最后一次的时间
 __attribute__((weak)) int32_t fsw_last_n[FSW_MAX_ID];       // "记最后一次"：这一轮发生了几次
 __attribute__((weak)) unsigned char fsw_armed;              // 这一轮是否已经"武装"
+__attribute__((weak)) unsigned char fsw_started;            // 这一轮的起点到了没有
 
 static inline int fsw_ok(int id) { return id >= 0 && id < FSW_MAX_ID; }
 
@@ -63,12 +69,23 @@ static inline void fsw_print(int id, int64_t us, int32_t v) {
     printf("FSW,P%d,%lld,%ld\n", id, (long long)us, (long)v);
 }
 
-// 每次都记
-static inline void fsw_mark(int id, int32_t v) { fsw_print(id, esp_timer_get_time(), v); }
+static inline void fsw_seen(int id) {
+    if (id == FSW_START_ID) __atomic_store_n(&fsw_started, (unsigned char)1, __ATOMIC_RELAXED);
+}
 
-// 一轮只记第一次
+// 每次都记
+static inline void fsw_mark(int id, int32_t v) { fsw_seen(id); fsw_print(id, esp_timer_get_time(), v); }
+
+// 一轮只记第一次。这一轮的起点还没到时照常打印、但不算"记过"：上一轮的尾巴（比如打断回答后上一句的结束消息）
+// 在新一轮开始后才到，不能把这一轮真正的那一次吞掉（码表按起点之前的不算，丢掉它）
 static inline void fsw_mark_once(int id, int32_t v) {
-    if (fsw_ok(id) && !__atomic_exchange_n(&fsw_done[id], (unsigned char)1, __ATOMIC_RELAXED)) {
+    if (!fsw_ok(id)) return;
+    fsw_seen(id);
+    if (FSW_START_ID >= 0 && id != FSW_START_ID && !__atomic_load_n(&fsw_started, __ATOMIC_RELAXED)) {
+        fsw_print(id, esp_timer_get_time(), v);
+        return;
+    }
+    if (!__atomic_exchange_n(&fsw_done[id], (unsigned char)1, __ATOMIC_RELAXED)) {
         fsw_print(id, esp_timer_get_time(), v);
     }
 }
@@ -88,6 +105,7 @@ static inline void fsw_mark_once_after(int id, int after_id, int32_t v) {
 // 高频位置：只在内存里记最后一次，到后面某个计时点再打印（附加值 = 这一轮发生了几次）
 static inline void fsw_keep_last(int id) {
     if (!fsw_ok(id)) return;
+    fsw_seen(id);
     __atomic_store_n(&fsw_last_us[id], esp_timer_get_time(), __ATOMIC_RELAXED);
     __atomic_fetch_add(&fsw_last_n[id], 1, __ATOMIC_RELAXED);
 }
@@ -107,6 +125,7 @@ static inline void fsw_round_reset(void) {
         if (us) printf("FSW,LATE,P%d,%lld,%ld\n", i, (long long)us, (long)n);
     }
     __atomic_store_n(&fsw_armed, (unsigned char)0, __ATOMIC_RELAXED);
+    __atomic_store_n(&fsw_started, (unsigned char)0, __ATOMIC_RELAXED);
     printf("FSW,RESET,%lld,0\n", (long long)esp_timer_get_time());
 }
 
@@ -136,6 +155,11 @@ static inline void fsw_round_reset(void) {
 
 #endif  // FW_STOPWATCH_ENABLE
 """
+
+def header_text(start=None):
+    """计时点工具的内容：知道这一轮的起点是哪个计时点就写进去（"一轮只记第一次"的点起点之前不占名额）。"""
+    return HEADER if start is None else HEADER.replace("#define FSW_START_ID -1", f"#define FSW_START_ID {int(start)}", 1)
+
 
 PLAN_VER = 2  # 插入提示词改过（决策 118 加了 FSW_MARK_ONCE_AFTER）：之前存的插入方案不再沿用
 HELPERS = {"include", "reset", "arm", "flush"}
@@ -333,7 +357,9 @@ def parse_plan(text, root, steps, needs=None):
         expect = said.get(k, {}).get("expect")
         values[k] = {"expr": expr, "expect": expect if isinstance(expect, int) and not isinstance(expect, bool) else need.get("value"),
                      "what": need["what"]}
-    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values}
+    st = next((s for s in steps if s.get("line") == "start"), steps[0] if steps else None)  # 一轮的起点（和场景里一样）
+    start = number(st["p"], steps) if st and f"P{number(st['p'], steps)}" in {x["step"] for x in out} else None
+    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start}
 
 
 def _record_path(backup):
@@ -398,7 +424,7 @@ def apply(root, plan, backup):
     if rec["deleted"]:  # 还没动任何文件
         return _fail("deleted", f"码表核对时发现会删掉或改掉 {rec['deleted']} 行原有代码，已经撤回，一个文件都没改。")
     if created:
-        rec["added"] += len(HEADER.splitlines())
+        rec["added"] += len(header_text(plan.get("start")).splitlines())
     rec.update(state="applying", before={f: _sha(root / f) for f in files},
                after={f: hashlib.sha256(news[f]).hexdigest() for f in files})
     try:
@@ -417,7 +443,7 @@ def apply(root, plan, backup):
             (root / f).write_bytes(news[f])
         if created:
             header.parent.mkdir(parents=True, exist_ok=True)
-            header.write_text(HEADER, encoding="utf-8")
+            header.write_text(header_text(plan.get("start")), encoding="utf-8")
         rec["state"] = "done"
         _write_record(backup, rec, plan)
     except BaseException as e:  # 只读文件、磁盘满、杀毒软件锁住文件、被强行中断：已改的撤回
