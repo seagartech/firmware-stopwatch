@@ -132,7 +132,7 @@ def suspects(rnd, scenario):
 STALE_US = 500_000  # 比起点早半秒以上，算这一轮开始之前的
 LATE_US = 1_000_000  # 一轮结束标记之后这么久内到的尾巴点（比如最后一声放完）还算上一轮的
 LATE_MAX = 2         # 上一轮最多差这么几个点，才等它的尾巴
-LAST_QUIET = 10.0    # 有"取最后一次"的点时，下一轮一直没开始，最后一次之后再安静这么久才收尾（实测：回答两句之间服务器停了好几秒）
+LAST_QUIET = 30.0    # 有"取最后一次"的点时，下一轮一直没开始，最后一次之后再安静这么久才收尾（实测：回答两句之间服务器停了好几秒；10-19 停过 10.25 秒，原来的 10 秒把放完记早了）
 
 
 class Collector:
@@ -152,6 +152,7 @@ class Collector:
         self.ready, self.ready_at = False, None
         self.prev = None  # 上一轮差几个尾巴点、在等（见 _park）
         self.last_cur = {}
+        self.post = {}  # 这一轮已经收尾（等安静收的尾）、下一轮还没开始时到的点：看是不是结束标记没读到、已经是下一轮（见 _post_round）
 
     def skip_round(self):
         """正在进行的这一轮不算（比如试一次时只喊了唤醒词的那一轮）：到下一个结束标记前收到的都不管，也不报开头没收到。"""
@@ -241,15 +242,26 @@ class Collector:
         p = parse_line(line)
         if not p:
             m = LATE.search(line or "")
-            # 只当"取最后一次"的终点用（比如设备先回到等待、后放空声音的最后一声）；别的点（比如没走完的起点）补打出来也不算。
-            if not m or m.group(1) not in self.spec.last:
+            # 当"取最后一次"的终点用（比如设备先回到等待、后放空声音的最后一声）。起点和别的要的点补打出来：
+            # 这一轮后面的点大半都到了才算（10-19 真测：回答被打断、设备回到聆听时才补打出"你说完"，整句当成没记到起点）；
+            # 没走完的起点（后面没有点）补打出来照旧不算
+            if m and m.group(1) not in self.spec.last:
+                ln, lus = m.group(1), int(m.group(2))
+                ok = (ln in self.spec.need and ln not in self.cur and self.started and not self.done
+                      and (self.spec.start in self.cur or (ln == self.spec.start and self._later_half(lus, self.occ))))
+                if not ok:
+                    return []
+                m = None
+                p = (ln, lus, int(LATE.search(line).group(3)))
+            elif not m:
                 return []
             # 补打的那次晚过了它的下一步（比如听写结果回来后又发出的一小段录音）：不是这一步该算的那次，不要
             # （真测第 41 次第 1 轮：拿它顶替正常打出的那次，先后反了 0.014 秒）
-            nxt = [self.cur[b][0] for a, b in self.spec.segments.values() if a == m.group(1) and b in self.cur]
-            if nxt and int(m.group(2)) > min(nxt):
-                return []
-            p = (m.group(1), int(m.group(2)), int(m.group(3)))
+            if m:
+                nxt = [self.cur[b][0] for a, b in self.spec.segments.values() if a == m.group(1) and b in self.cur]
+                if nxt and int(m.group(2)) > min(nxt):
+                    return []
+                p = (m.group(1), int(m.group(2)), int(m.group(3)))
         self.last = line.strip()
         name, us, val = p
         out = []
@@ -286,12 +298,18 @@ class Collector:
                 # 大部分点都到了、就是没有起点：是一次真的对话，只是设备没记到起点。不算一轮，但要报出来（决策 133）
                 out.append({"nostart": True})
             self.last_cur = dict(self.cur)  # 刚结束的这一轮记到了哪些点（看晚到的尾巴是谁的）
+            self.post = {}
             self.started, self.cur, self.done, self.first = True, {}, False, False
             self.occ = {}
             self.reset_us = us
             self.ready, self.ready_at = False, None
             return out
-        if not self.started or self.done:  # 半轮、或这一轮已经收尾：后面的不管
+        if self.started and self.done:  # 这一轮已经收尾（等安静收的尾）：后面的先记着，看是不是下一轮的结束标记没读到
+            self.post.setdefault(name, []).append((us, val))
+            if name == self.spec.start and self._later_half(us, self.post):
+                self._begin({k: [o for o in v if o[0] >= us - STALE_US] for k, v in self.post.items()})
+            return out
+        if not self.started:  # 半轮：后面的不管
             return out
         if name == self.spec.start and self.ready and self._missed_reset(us):
             return out + self._split(us, val)
@@ -308,7 +326,11 @@ class Collector:
         （比如试一次收齐后到正式实测开始读之间调试口没在读，那一下丢了；10-19 真测：试一次之后说的第一句被并进第 1 轮、白说了）。"""
         if any(o[0] >= us - STALE_US for o in self.occ.get(self.spec.start, [])):
             return False  # 起点在这一轮里报了好几次（比如杂音），不是新的一轮（见 _latest_start）
-        later = [x for x in self.spec.need if x != self.spec.start and any(o[0] > us for o in self.occ.get(x, []))]
+        return self._later_half(us, self.occ)
+
+    def _later_half(self, us, occ):
+        """起点之后（时间戳在 us 之后）要的点到了一大半：是一次真的、走完了的事，不是没走完的起点或杂音。"""
+        later = [x for x in self.spec.need if x != self.spec.start and any(o[0] > us for o in occ.get(x, []))]
         return len(later) * 2 >= len(self.spec.need) - 1
 
     def _split(self, us, val):
@@ -318,16 +340,21 @@ class Collector:
         self.occ = {k: [o for o in v if o[0] < cut] for k, v in self.occ.items() if any(o[0] < cut for o in v)}
         self.cur = {k: (v if v[0] < cut else min(self.occ[k])) for k, v in self.cur.items() if k in self.occ}
         out = [self._close()]
+        new.setdefault(self.spec.start, []).append((us, val))
+        self._begin(new)
+        return out
+
+    def _begin(self, occ):
+        """结束标记没读到的下一轮：从这些点开始（起点已在里面），等它自己收全、收尾。"""
         self.last_cur = dict(self.cur)
         self.started, self.done, self.first = True, False, False
-        self.occ = {k: v for k, v in new.items() if v}
-        self.occ.setdefault(self.spec.start, []).append((us, val))
-        self.cur = {k: min(v) for k, v in self.occ.items()}
+        self.occ = {k: sorted(v) for k, v in occ.items() if v}
+        self.cur = {k: v[0] for k, v in self.occ.items()}
+        self.post = {}
         self.reset_us = None
         self.ready, self.ready_at = False, None
         if self._complete():
             self.ready, self.ready_at = True, time.monotonic()
-        return out
 
     def _after(self, x):
         """这一轮里计时点 x 记在起点之后（容差 STALE_US）的那几次，按时间先后。"""

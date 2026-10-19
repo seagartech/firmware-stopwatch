@@ -230,3 +230,36 @@ def test_noise_start_again_in_the_same_round_is_not_a_new_round():
     """起点在同一轮里又报了一次（后面没有新一轮的点）：不分轮。"""
     log = MISSED_RESET_LOG[:10] + ["FSW,P1,23000000,1", "FSW,RESET,30000000,0"]
     assert len([r for r in m.collect(log, interrupt_spec()) if r.get("ok")]) == 1
+
+
+def test_next_round_counts_when_the_round_was_closed_by_quiet_before_it():
+    """实测时第 1 轮（试一次带过来的）先等安静收了尾，下一句的结束标记又没读到：以前下一句整句被丢（10-19 第二次重测"恐龙"那句）。"""
+    c = m.Collector(interrupt_spec())
+    out = []
+    for l in MISSED_RESET_LOG[:10]:
+        out += c.feed(l)
+    c.ready_at -= 1000  # 等安静等到头了
+    out += c.flush()
+    for l in MISSED_RESET_LOG[10:]:
+        out += c.feed(l)
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 2 and round(ok[1]["ends"][1], 3) == round((33478312 - 32387776) / 1e6, 3)
+
+
+def test_start_printed_late_at_the_reset_still_counts():
+    """回答被打断、设备回到聆听时才补打出"你说完""最后一段录音发出"：后面的点都到了，这一轮照样算（10-19"外面下雨了"那句）。"""
+    log = ["FSW,RESET,1000000,0", "FSW,P3,5000000,0", "FSW,P6,5050000,0", "FSW,P7,5060000,0", "FSW,P8,5800000,0",
+           "FSW,P9,5820000,0", "FSW,LATE,P1,4600000,2", "FSW,LATE,P2,4950000,80", "FSW,LATE,P10,9000000,30", "FSW,RESET,9001000,0"]
+    rs = m.collect(log, interrupt_spec())
+    assert len(rs) == 1 and rs[0]["ok"] and round(rs[0]["ends"][1], 2) == 1.22
+
+
+def test_late_start_alone_still_does_not_count():
+    """没走完的起点（后面没有点）补打出来照旧不算。"""
+    log = ["FSW,RESET,1000000,0", "FSW,LATE,P1,4600000,2", "FSW,LATE,P2,4950000,80", "FSW,RESET,9001000,0"]
+    assert not [r for r in m.collect(log, interrupt_spec()) if r.get("ok")]
+
+
+def test_answer_pausing_over_ten_seconds_is_not_taken_as_done():
+    """回答中途服务器停了 10 秒多（10-19"老师今天表扬了我"）：不能按 10 秒安静就当放完。"""
+    assert m.LAST_QUIET > 10.25
