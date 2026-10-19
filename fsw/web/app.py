@@ -1175,6 +1175,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["half_hint"] = ""
                     job["stale_run"] = {}
                     job["miss_run"] = {}
+                    # 中间的点不是这一轮的（打断回答后常见）：这一轮照样算；同一个点连着几轮都这样，多半是插的位置不对，点名
+                    run = {m: job.get("gap_run", {}).get(m, 0) + 1 for m in r.get("gap") or []}
+                    job["gap_run"] = run
+                    worst = max(run.items(), key=lambda kv: kv[1], default=None)
+                    if worst and worst[1] >= MISS_RUN:
+                        job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都记在起点之前，不像是这一轮的事，这几轮用到它的两段空着。"
+                                            "要是上一轮没有被中途打断，多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 elif not r.get("stale"):  # 没收全：同一个点连着几轮都没收到，点名（多半是这一步没走到，或者插的位置走不到）
                     run = {m: job.get("miss_run", {}).get(m, 0) + 1 for m in r.get("missing") or []}
                     job["miss_run"] = run
@@ -1362,7 +1369,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
                    "nostart": (job or {}).get("nostart", 0) if raw else 0,
-                   "startName": (sc.get("start") or {}).get("name", "")}
+                   "startName": (sc.get("start") or {}).get("name", ""),
+                   "gap": [{"n": r["n"], "names": r["gap"]} for r in ok if r.get("gap")]}
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
                 "timing": _timing() if raw else None, "quality": quality, "start_lag": _start_lag(raw, sc),
                 "list_filled": (job or {}).get("_filled") if ok and same else None,
