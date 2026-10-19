@@ -324,7 +324,26 @@ def test_try_wake_round_without_start_point_passes(setup):
     start_insert(c, r)
     wait(c, lambda j: j["status"] == "inserted")
     j = run_to_try(c)
-    assert j["status"] == "done" and sorted(j["got"]) == [1, 2, 5]
+    assert j["status"] == "done" and sorted(j["got"]) == [2, 5]  # 唤醒那一轮其余收齐就试通了，起点留给多轮实测
+
+
+class WakeOnlyDevice(FakeDevice):
+    """10-19 真机：只喊了唤醒词，起点（"设备听出你说完"）一次都没出现过，其余都齐：也算试通，起点留给多轮实测核对。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,RESET,1,0", "FSW,P2,20,0", "FSW,P5,30,0", "FSW,RESET,100,0"]
+        for l in out:
+            on_line(l)
+            if stop and stop():
+                break
+        return out
+
+
+def test_try_wake_only_without_any_start_point_passes(setup):
+    c, r, *_ = setup(device=WakeOnlyDevice())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "done" and sorted(j["got"]) == [2, 5]
 
 
 def test_new_run_stops_the_old_try_and_frees_the_port(setup):
@@ -400,11 +419,17 @@ def test_try_counts_the_last_sound_that_ends_just_after_the_round_marker(setup):
     assert j["status"] == "done" and j["got"] == [1, 2, 5]
 
 
-class WakeThenStream(WakeRoundNoStartDevice):
-    """试通那一刻（起点刚到）这一轮还在进行：多轮实测接着收这一轮后面的点。"""
+class SpokeThenStream(FakeDevice):
+    """试通那一刻这一轮还在进行（起点已到）：多轮实测接着收这一轮后面的点。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,RESET,1,0", "FSW,P1,10,1", "FSW,P2,20,0", "FSW,P5,30,0"]
+        for l in out:
+            on_line(l)
+        return out
+
     def stream(self, port, on_line, stop):
-        for l in ["FSW,P2,150,0", "FSW,P5,160,0", "FSW,RESET,300,0", "FSW,P1,310,1", "FSW,P2,350,0", "FSW,P5,360,0", "FSW,RESET,500,0",
-                  "FSW,P1,510,1", "FSW,P2,550,0", "FSW,P5,560,0", "FSW,RESET,700,0"]:
+        for l in ["FSW,RESET,100,0", "FSW,P1,110,1", "FSW,P2,150,0", "FSW,P5,160,0", "FSW,RESET,300,0",
+                  "FSW,P1,310,1", "FSW,P2,350,0", "FSW,P5,360,0", "FSW,RESET,500,0"]:
             if stop():
                 return
             on_line(l)
@@ -412,15 +437,33 @@ class WakeThenStream(WakeRoundNoStartDevice):
             time.sleep(0.01)
 
 
-def test_round_running_when_try_passes_counts_in_measurement(setup):
-    # 真测第 29 次：唤醒后说的那句，起点一到就试通、转进多轮实测，这句被算"开头没收到"白说了
-    c, r, *_ = setup(device=WakeThenStream())
+class WakeThenStream(WakeRoundNoStartDevice):
+    """试一次时只喊了唤醒词（没有起点，其余收齐就试通）：唤醒回应剩下的点不算一轮，也不报开头没收到。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,RESET,1,0", "FSW,P2,20,0", "FSW,P5,30,0"]
+        for l in out:
+            on_line(l)
+        return out
+
+    def stream(self, port, on_line, stop):
+        for l in ["FSW,P2,40,0", "FSW,P5,50,0", "FSW,RESET,300,0", "FSW,P1,310,1", "FSW,P2,350,0", "FSW,P5,360,0", "FSW,RESET,500,0",
+                  "FSW,P1,510,1", "FSW,P2,550,0", "FSW,P5,560,0", "FSW,RESET,700,0",
+                  "FSW,P1,710,1", "FSW,P2,750,0", "FSW,P5,760,0", "FSW,RESET,900,0"]:
+            if stop():
+                return
+            on_line(l)
+        while not stop():
+            time.sleep(0.01)
+
+
+def _collect_after_try(setup, dev, n):
+    c, r, *_ = setup(device=dev)
     start_insert(c, r)
     wait(c, lambda j: j["status"] == "inserted")
     assert run_to_try(c)["status"] == "done"
     page = {"steps": [{"p": s["p"], "n": s["n"], "line": s["line"]} for s in STEPS],
             "segs": [{"a": "P1", "b": "P2", "t": "读卡号"}, {"a": "P2", "b": "P5", "t": "开锁"}], "fsegs": [], "ln": {"talk": "开锁这条"}}
-    res = c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3})
+    res = c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": n})
     assert res.status_code == 200, res.text
     t = time.time()
     while time.time() - t < 10:
@@ -428,5 +471,18 @@ def test_round_running_when_try_passes_counts_in_measurement(setup):
         if j["status"] in ("done", "stopped"):
             break
         time.sleep(0.02)
+    return j
+
+
+def test_round_running_when_try_passes_counts_in_measurement(setup):
+    # 真测第 29 次：唤醒后说的那句，试通时这一轮正在进行，转进多轮实测，这句不能被算"开头没收到"白说了
+    j = _collect_after_try(setup, SpokeThenStream(), 3)
     assert j["status"] == "done" and not j.get("half")
+    assert [x["ok"] for x in j["rounds"]] == [True, True, True]
+
+
+def test_wake_round_after_try_is_skipped_silently(setup):
+    # 10-19：喊完唤醒词就试通，唤醒回应剩下的点不算一轮，不报开头没收到、也不算没记到起点
+    j = _collect_after_try(setup, WakeThenStream(), 3)
+    assert j["status"] == "done" and not j.get("half") and not j.get("nostart")
     assert [x["ok"] for x in j["rounds"]] == [True, True, True]

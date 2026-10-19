@@ -400,3 +400,26 @@ def test_report_table_owner_column_and_reversal_note_do_not_squeeze():
     assert "th.own,td.own{min-width:6.5em}" in css
     assert '<th class="own">谁负责</th>' in JS and '<td class="own" style="font-family:var(--sans)">${s.owner}</td>' in JS
     assert '<br><span class="note">第 ${neg.join' in JS
+
+
+def test_start_point_missing_several_rounds_in_a_row_is_named(tmp_path):
+    # 试一次不再等起点（唤醒那一轮本来没有）：起点在多轮实测里核对，连着 3 次没记到就点名
+    from tests.test_first_round_and_push import make
+    from tests.test_collect_api import wait
+    from tests.test_standards import PAGE
+    lines = []
+    for k in range(4):
+        pts = [f"FSW,P{i},{k * 10_000_000 + 3_000_000 + i * 100_000},0" for i in range(2, 10)]
+        lines += [f"FSW,RESET,{k * 10_000_000 + 1_000_000},0"] + pts
+    c = make(tmp_path, lines + ["FSW,RESET,99000000,0"])
+    c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 3, "project_dir": str(tmp_path / "p")})
+    j = wait(c, lambda j: "没记到起点" in (j.get("half_hint") or ""))
+    assert "连着" in j["half_hint"] and "插计时点" in j["half_hint"]
+
+
+def test_spiky_rounds_are_red_in_the_round_chart():
+    # 真测第 36 次：拍板区说"见逐轮图里红底的几轮"，可偶发特别慢的第 6 轮在图上没标红
+    D = ('{J:{labels:[{kind:"spiky",segment:"a",rounds:[6]},{kind:"spiky",segment:"b",rounds:[2],with:"problem:x"}]},'
+         'allSegs:[{k:"a",name:"上传录音、服务器听写"},{k:"b",name:"b"}]}')
+    assert run(["spikyRounds"], f"[...spikyRounds({D})]") == [[6, "上传录音、服务器听写"]]
+    assert "spk.has(r.n)" in grab("roundsChart")

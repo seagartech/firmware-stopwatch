@@ -860,7 +860,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job["need"] = len(want)  # 页面上"已收到 x / 共几个"按这个数，和判通过的标准一致
             need_n = max(1, len(want) - min(2, len(want) // 4))
             # 起点（比如"设备听出你说完"）：喊唤醒词、点屏幕开头的那一轮本来就没有它（唤醒词模块认的，不经过"说完"判断）。
-            # 所以起点不要求和其余计时点在同一轮：这几分钟里收到过就行，其余的有一轮收齐就算试通
+            # 所以试一次不等起点：其余的有一轮收齐就算试通；起点留给多轮实测去核对（连着几轮没记到起点会点名，见 take）
             start_ids = {int(ins.point_id(x, a.steps)[1:]) for x in a.steps if x.get("line") == "start"} & want
             rounds = {"cur": set(), "best": set(), "seen": set()}  # 这一轮收到的、收得最多的那一轮、收到过的
             full = lambda got: got >= want - start_ids
@@ -900,8 +900,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 job["missing"] = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - cur)] if cur else []
                 _log(job, line[:300])
 
-            def enough():  # 有一轮全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
-                return shown(rounds["best"]) == want
+            def enough():  # 有一轮除起点外全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
+                return full(rounds["best"])
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -930,9 +930,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if lines is None:
                 return _fail(job, "try", "设备的调试口一直打不开。看看线插好没有，或者有没有别的软件（比如串口监视器）占着它。",
                              error=f"打不开调试口：{err}" if err else "没看到设备")
-            got = shown(rounds["best"])  # 按收得最多的那一轮判（起点收到过就算）
+            got = shown(rounds["best"])  # 按收得最多的那一轮判（起点不要求）
             job["got"] = sorted(got)
-            if got and got != want and len(got) >= need_n:  # 差几个：不算试通，否则正式实测每一轮都会"没收全"
+            if got and not full(got) and len(got) >= need_n:  # 差几个：不算试通，否则正式实测每一轮都会"没收全"
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 miss = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)]
                 return _fail(job, "try", f"{TRY_SECONDS // 60} 分钟里收得最全的一轮是 {len(got)} / {len(want)} 个计时点，一直没收到「{'」「'.join(miss)}」。"
@@ -940,7 +940,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                              why="可能这一次没走到这几步（比如只在某些情况下才走的分支），也可能计时点插的位置走不到。"
                                  "点「再试一次」完整做一次要测的事；还是收不到，回到「插计时点」那一步换个位置，或者删掉这一步。",
                              error=f"（收到 {len(got)} / {len(want)} 个）", missing=miss, offer_restore=job["try_fails"] >= 2)
-            if got and len(got) < need_n:  # 只收到零星几个：不算试通（决策 124）
+            if got and not full(got) and len(got) < need_n:  # 只收到零星几个：不算试通（决策 124）
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 return _fail(job, "try", f"只收到 {len(got)} / {len(want)} 个计时点，这一次没走完。点「再试一次」，然后完整做一次要测的事。",
                              why="可能刚才只做了一半（比如只让设备准备好、还没真正做那件事），或者设备还没准备好。", error=f"（收到 {len(got)} / {len(want)} 个）",
@@ -1149,6 +1149,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def take(results):
             """收尾的轮记下来；进度、提示跟着更新。"""
             for r in results:
+                if r.get("update"):  # 已经记下的一轮，最后一声晚到：只换数，格子颜色和轮数不变
+                    k = next((i for i in range(len(job["rounds"]) - 1, -1, -1)
+                              if job["rounds"][i].get("ok") and job["rounds"][i].get("n") == r["n"]), None)
+                    if k is not None:
+                        job["rounds"][k] = {x: v for x, v in r.items() if x != "update"}
+                    continue
                 if r.get("half"):  # 开始读时这一次已经过了起点：不算，提示再做一次（决策 101）
                     job["half"] = job.get("half", 0) + 1
                     job["half_hint"] = ("这一次开头没收到（码表开始听的时候它已经开始了），不算。"
@@ -1156,7 +1162,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     continue
                 if r.get("nostart"):  # 设备没记到起点：不算一轮，不出格子，报告的数据检查里写上（决策 133）
                     job["nostart"] = job.get("nostart", 0) + 1
+                    job["nostart_run"] = job.get("nostart_run", 0) + 1
+                    if job["nostart_run"] >= MISS_RUN:  # 试一次不等起点（唤醒那一轮本来没有），起点在这里核对：连着几轮都没记到就点名
+                        sn = ((job.get("_scenario") or {}).get("start") or {}).get("name") or "起点"
+                        job["half_hint"] = (f"连着 {job['nostart_run']} 次没记到起点「{sn}」，这几次都不算。要是每次都完整做了要测的事，"
+                                            "多半是起点插的位置走不到：先停下，回到「插计时点」那一步换个位置。")
                     continue
+                job["nostart_run"] = 0
                 if r["ok"]:
                     job["half_hint"] = ""
                     job["stale_run"] = {}
@@ -1178,14 +1190,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                         job["half_hint"] = (f"「{name}」连着 {worst[1]} 轮都记在起点之前，不像是这一轮的事，再测也一样。"
                                             "多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 job["rounds"].append(r)
-                if r["ok"] and not job.get("_checked"):  # 第 1 轮收齐：自动校验计时点位置，不对就停下，不让后面白测（决策 158）
-                    job["_checked"] = True
-                    bad = meas.suspects(r, job["_scenario"])
-                    if bad:
-                        job["suspect"] = bad
-                        job["_stop"] = True
+            first = next((x for x in job["rounds"] if x["ok"]), None)
+            if first and not job.get("_checked") and not (coll.prev and coll.prev.get("sent") is not None and coll.prev["sent"].get("n") == first["n"]):
+                # 第 1 轮收齐（晚到的最后一声也等完了）：自动校验计时点位置，不对就停下，不让后面白测（决策 158）
+                job["_checked"] = True
+                bad = meas.suspects(first, job["_scenario"])
+                if bad:
+                    job["suspect"] = bad
+                    job["_stop"] = True
             job["progress"], job["last"] = list(coll.progress()), coll.last
-            if ok_count() >= job["target"]:
+            if ok_count() >= job["target"] and not coll.prev:  # 最后一轮还在等晚到的最后一声：等完（见 flush）再停
                 job["_stop"] = True
 
         stop = lambda: job["_stop"]
@@ -1234,8 +1248,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if carry and time.time() - carry["at"] < CARRY_SECS:
             # 试通时这一轮已经过了起点（比如唤醒后说的那一句，起点一到就试通了）：把已收到的计时点先喂进来，这一轮照样算，
             # 不再当"开头没收到"白说（真测第 29 次）。不喂结束标记：这一轮后面的点要是在换调试口时丢了，照旧算开头没收到，不算没收全
-            for l in carry["lines"]:
-                on_line(l)
+            if any((meas.parse_line(l) or (None,))[0] == coll.spec.start for l in carry["lines"]):
+                for l in carry["lines"]:
+                    on_line(l)
+            else:  # 这一轮没有起点（只喊了唤醒词，其余收齐就试通了）：不是要测的那件事，到下一个结束标记前的都不算，也不报"开头没收到"
+                coll.skip_round()
 
         def run_device():
             def helper_crashed(e):  # 看收尾、看安静的小线程出错：停下这次实测（已测的留着），不让最后一轮一直收不了尾

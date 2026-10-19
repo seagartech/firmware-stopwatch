@@ -523,3 +523,18 @@ def test_last_point_reported_just_after_the_round_end_marker_still_counts():
              "FSW,P1,10000000,0", "FSW,P2,11000000,0", "FSW,P3,13000000,1", "FSW,RESET,14000000,0"]
     ok = [r for r in m.collect(lines, _last_spec()) if r.get("ok")]
     assert [r["ends"] for r in ok] == [[1.25, 8.007], [1.0, 3.0]]
+
+
+def test_round_is_handed_over_at_the_end_marker_and_late_last_sound_only_updates_it():
+    # 真测第 36 次：回答说完后格子要晚 1 秒才变绿，中间还闪一下。结束标记一到就交出这一轮（格子马上变绿），
+    # 之后 1 秒内晚到的最后一声只更新这一轮的数，不算新的一轮
+    c = m.Collector(_last_spec())
+    out = []
+    for l in ["FSW,RESET,0,0", "FSW,P1,1000000,0", "FSW,P2,2250000,0", "FSW,P3,4000000,1"]:
+        out += c.feed(l)
+    assert out == [] and c.progress()[0] < c.progress()[1]
+    first = c.feed("FSW,RESET,9000000,0")
+    assert len(first) == 1 and first[0]["ok"] and first[0]["ends"] == [1.25, 3.0]
+    upd = c.feed("FSW,P3,9007000,5")
+    assert len(upd) == 1 and upd[0]["update"] and upd[0]["n"] == first[0]["n"] and upd[0]["ends"] == [1.25, 8.007]
+    assert m.merge_updates(first + upd) == [{k: v for k, v in upd[0].items() if k != "update"}]
