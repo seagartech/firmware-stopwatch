@@ -121,3 +121,69 @@ def test_demo_replay_can_drop_a_round_for_resampling():
     d = json.loads((Path(__file__).resolve().parent.parent / "fsw/web/demo/voice.json").read_text(encoding="utf-8"))
     rs = m.collect(list(m.demo_lines(d, 20, drop_at=9)), m.Spec.from_scenario(d["scenario"]))
     assert len([r for r in rs if r["ok"]]) == 20 and [r["att"] for r in rs if not r["ok"]] == [9] and len(rs) == 21
+
+
+# ---- 10-19 真测：打断回答（点屏幕）后服务器补发"开始说话"，落在下一轮你说完之前 ----
+INTERRUPT_LOG = """FSW,P10,69168287,7
+FSW,RESET,69168804,0
+FSW,P6,69341391,0
+FSW,P3,75641730,0
+FSW,P7,75648442,0
+FSW,P4,76093919,0
+FSW,P5,76094869,0
+FSW,P8,76751974,0
+FSW,P9,76768330,0
+I (82273) Application: Abort speaking
+FSW,P1,75278148,3
+FSW,P2,75636538,107
+FSW,P10,82588245,98
+FSW,RESET,82588773,0
+FSW,P6,82602641,0
+FSW,P3,88749576,0
+FSW,P7,88755932,0
+FSW,P4,89299717,0
+FSW,P5,89300716,0
+FSW,P8,89751380,0
+FSW,P9,89768278,0
+I (99533) Application: Abort speaking
+FSW,P1,88318085,2
+FSW,P2,88706223,101
+FSW,P10,99728308,167
+FSW,RESET,99729057,0
+FSW,P6,99865126,0
+FSW,P3,100809388,0
+FSW,P7,100865092,0
+FSW,P4,101224776,0
+FSW,P5,101225785,0
+FSW,P8,101753818,0
+FSW,P9,101768300,0
+I (104313) Application: Abort speaking
+FSW,P1,100308040,2
+FSW,P2,100854889,18
+FSW,P10,104528258,47
+FSW,RESET,104528777,0
+FSW,P6,104642261,0""".splitlines()
+
+
+def interrupt_spec():
+    segs = {"P1-P2": ["P1", "P2"], "P2-P3": ["P2", "P3"], "P3-P6": ["P3", "P6"], "P6-P7": ["P6", "P7"],
+            "P7-P8": ["P7", "P8"], "P8-P9": ["P8", "P9"], "P9-P10": ["P9", "P10"], "P3-P4": ["P3", "P4"], "P4-P5": ["P4", "P5"]}
+    talk = [segs[k] for k in ("P1-P2", "P2-P3", "P3-P6", "P6-P7", "P7-P8", "P8-P9")]
+    return m.Spec(start="P1", segments=segs, lines=[
+        {"name": "表情", "segs": [segs[k] for k in ("P1-P2", "P2-P3", "P3-P4", "P4-P5")]},
+        {"name": "到开始出声", "segs": talk}, {"name": "到声音放完", "segs": talk + [segs["P9-P10"]]}],
+        need=["P1", "P2", "P3", "P6", "P7", "P8", "P9", "P10"], last={"P10", "P5"}, soft={"P10"},
+        marks={"P1", "P2", "P5", "P10"}, names={"P6": "收到开始说话"})
+
+
+def test_interrupted_answer_does_not_throw_away_the_next_round():
+    """用户 10-19："打断是正常用法，码表不能判错"。打断后的那一轮：补发的"开始说话"不是这一轮的，真正那次不再来，
+    这一轮照样算，用到它的两段空着，到开始出声按首尾算；早得不多（起点前 0.44 秒）的那次也不当成这一轮的，不出负数段。"""
+    rs = m.collect(INTERRUPT_LOG, interrupt_spec())
+    ok = [r for r in rs if r.get("ok")]
+    assert len(ok) == 3 and not [r for r in rs if not r.get("ok")]
+    for r in ok:
+        assert r["gap"] == ["收到开始说话"] and r["segs"]["P3-P6"] is None and r["segs"]["P6-P7"] is None
+        # "最后一段录音发出"记最后一次、可能越过下一步（报告把两段合一段，见 judge.merge_overruns），不在这里查
+        assert all(v is None or v >= 0 for k, v in r["segs"].items() if k not in ("P1-P2", "P2-P3"))
+    assert [round(r["ends"][1], 3) for r in ok] == [1.49, 1.45, 1.46]  # 到开始出声 = 开始出声 - 你说完

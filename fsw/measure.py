@@ -35,6 +35,7 @@ class Spec:
     names: dict = field(default_factory=dict)
     last: set = field(default_factory=set)  # 一轮里取最后一次的点（比如回答全部放完、门完全打开）：中途可能先报一次
     soft: set = field(default_factory=set)  # 只在"看内容长短、不判快慢"那条线上用的点：一轮缺了它，其余的线照样算，不整轮补测
+    marks: set = field(default_factory=set)  # 插成"记最后一次"的点（含中间点）：可能越过下一步，不拿来查下一步的先后
 
     def __post_init__(self):
         if self.need is None:
@@ -64,6 +65,7 @@ class Spec:
         if first is not None and first != len(lines) - 1:
             other = {p for i, l in enumerate(lines) if i != len(lines) - 1 for g in l["segs"] for p in g}
             spec.soft = {p for g in lines[-1]["segs"] for p in g} - other - {spec.start}
+        spec.marks = set(s.get("last_points") or [])
         opt = set(s.get("optional") or [])  # 只在某种触发方式才走的计时点：有就记，一轮收齐不等它
         if opt:
             spec.need = [p for p in spec.need if p not in opt] or spec.need
@@ -104,6 +106,10 @@ def compute(cur, spec):
     for l in spec.lines:
         parts = [(t[b] - t[a]) if a in t and b in t else None for a, b in l["segs"]]
         ends[l["name"]] = round(sum(parts), 6) if parts and None not in parts else None
+        g = l["segs"]
+        if ends[l["name"]] is None and g and g[0][0] in t and g[-1][1] in t and all(g[i][1] == g[i + 1][0] for i in range(len(g) - 1)):
+            # 中间缺一个点（比如打断回答后那一轮"收到开始说话"不是这一轮的）：一条线首尾相接，用时就是首尾两点之差，照样算
+            ends[l["name"]] = round(t[g[-1][1]] - t[g[0][0]], 6)
     probs = [p["key"] for p in spec.problems if _rule(p.get("rule") or {}, t, vals, segs, ends)]
     return {"segs": segs, "ends": [ends[l["name"]] for l in spec.lines], "probs": probs}
 
@@ -298,13 +304,19 @@ class Collector:
     def _after(self, x):
         """这一轮里计时点 x 记在起点之后（容差 STALE_US）的那几次，按时间先后。"""
         t0 = self.cur[self.spec.start][0]
-        got = sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - STALE_US)
+        # 起点之前半秒内的也算（"记最后一次"的点，时间戳可能略早于起点）；一次一记的中间点必须在起点之后：
+        # 打断回答后服务器补发的"开始说话"早于你说完 0.44 秒，算进来就成了负数段（10-19 真测：一段 -0.94 秒）
+        tol = STALE_US if x in self.spec.marks or not self.spec.marks or x in self._line_ends() else 0
+        got = sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - tol)
         b = self._before_end(x)
         if got and b and b != x:
             # 线的终点（比如喇叭最后一声）中途可能多打一次（播放卡了一下）：只认它前一步之后的那次，前一步还没到就当还没收到
             tb = [o[0] for o in ([self.cur[b]] if b == self.spec.start else self._after(b))] if b in self.cur else []
             got = [o for o in got if o[0] >= tb[0]] if tb else []
         return got
+
+    def _line_ends(self):
+        return {l["segs"][-1][1] for l in self.spec.lines if l["segs"]}
 
     def _complete(self):
         """起点到了，而且要的每个点在起点之后都记到了。"""
@@ -362,11 +374,23 @@ class Collector:
                 self.cur[x] = after[-1] if x in self.spec.last else after[0]
             else:
                 stale.append(x)
+        gap = self._gaps(stale)
+        stale = [x for x in stale if x not in gap]
         if not stale:
-            return self._ok()
+            return self._ok(gap)
         self.att += 1
         return {"ok": False, "att": self.att, "stale": True,
                 "missing": [self.spec.names.get(x, x) + "（记到的是这一轮开始之前的）" for x in stale]}
+
+    def _gaps(self, stale):
+        """中间的点（不是起点、不是哪条线的终点）这一轮没有真正的那一次：只是这个点用到的两段这一轮空着，整轮照样算，线的用时按首尾算。
+        比如打断回答（点屏幕、插话）后，服务器还会补发一个"开始说话"，落在下一轮你说完之前，下一轮真正的那一次不再来
+        （10-19 真测 5 轮因此作废；用户："打断是正常用法，不能判错"）。同一个点轮轮如此（多半插错了位置）由收点那边连着几轮点名。"""
+        ends = {l["segs"][-1][1] for l in self.spec.lines if l["segs"]} - self.spec.soft
+        gap = [x for x in stale if x != self.spec.start and x not in ends]
+        for x in gap:
+            self.cur.pop(x, None)
+        return gap
 
     def _latest_start(self):
         """起点一轮里报了好几次（比如设备每听到一阵杂音停下就判一次"说完了"）：取紧挨着下一步之前的那一次，
@@ -383,10 +407,13 @@ class Collector:
         if before:
             self.cur[st] = before[-1]
 
-    def _ok(self):
+    def _ok(self, gap=()):
         self.att += 1
         self.n += 1
-        return {"ok": True, "n": self.n, "att": self.att, **self._numbers()}
+        r = {"ok": True, "n": self.n, "att": self.att, **self._numbers()}
+        if gap:
+            r["gap"] = [self.spec.names.get(x, x) for x in gap]
+        return r
 
     def _numbers(self):
         # 三个设备时刻（秒）：开始聆听、起点、最后一个计时点。码表算"说话、设备反应、放完回答"各多久用（决策 99）

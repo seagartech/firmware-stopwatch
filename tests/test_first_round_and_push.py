@@ -106,12 +106,13 @@ def test_page_listens_to_the_push_and_keeps_polling_as_fallback():
 
 # ---- 第二次亲手操作发现的（决策 111、112） ----
 def test_point_recorded_before_the_start_belongs_to_before_this_round():
-    """决策 111：比起点还早的点（比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它），不是这一轮的；
-    这一轮真正的那一次没记到，这轮不能算（不判吞字），写清楚原因，自动补一轮。"""
+    """决策 111：比起点还早的点（比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它），不是这一轮的。
+    10-19 起：它是中间的点时，这一轮照样算，只是用到它的两段空着，线的用时按首尾算（打断回答后常见，用户："不能判错"）。"""
     stale = ["FSW,RESET,1000000,0", "FSW,P7,1200000,5"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10) if i != 7]
     out = feed(stale + ["FSW,RESET,9000000,0"])
-    assert len(out) == 1 and out[0]["ok"] is False and out[0].get("stale")
-    assert out[0]["missing"]  # 写出是哪个点
+    assert len(out) == 1 and out[0]["ok"] and out[0]["gap"]  # 写出是哪个点不是这一轮的
+    assert [v for k, v in out[0]["segs"].items() if "P7" in k] == [None, None]
+    assert None not in out[0]["ends"]
 
 
 def test_first_round_after_reconnect_missing_a_point_is_half_not_incomplete():
@@ -130,9 +131,12 @@ def test_point_recorded_several_times_uses_the_first_after_the_start():
     assert len(out) == 1 and out[0]["ok"], out
 
 
-def test_point_only_recorded_before_the_start_is_still_stale():
-    stale = ["FSW,RESET,1000000,0", "FSW,P7,1200000,5"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10) if i != 7]
-    assert feed(stale + ["FSW,RESET,9000000,0"])[0].get("stale")
+def test_line_end_only_recorded_before_the_start_is_still_stale():
+    """线的终点只在起点之前记到：这条线这一轮算不出，照旧判"记到的是这一轮开始之前的"、补一轮。"""
+    end = meas.Spec.from_scenario(SC).lines[0]["segs"][-1][1]
+    n = int(end[1:])
+    stale = ["FSW,RESET,1000000,0", f"FSW,{end},1200000,5"] + [f"FSW,P{i},{3_000_000 + i * 100_000},0" for i in range(1, 10) if i != n]
+    assert feed(stale + ["FSW,RESET,9000000,0", "FSW,RESET,20000000,0"])[0].get("stale")  # 先等尾巴，等不到才判
 
 
 def test_today_log_all_rounds_count_after_the_fix():
