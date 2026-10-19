@@ -96,7 +96,7 @@ def label(j):
     (0.6, 1.0, 1.5, None, "必须改", "体验标准判差"),                                       # 中位数 1.6 超过 1.5
     ([0.6] * 20, [0.6] * 17 + [1.6] * 3, 1.5, None, "必须改", "10 次里最慢超过体验标准"),  # 中位数 1.2，10 次里最慢 2.2
     (0.6, 1.0, 9.0, prev(1.4), "建议改", "比上次慢了 0.20 秒"),                            # 体验可以，比上次慢 0.2（超出 0.03 和 5%）
-    (0.6, 1.0, 9.0, prev(1.59), "可以不改", "在体验标准内，和上次比持平"),                   # 慢 0.01：持平
+    (0.6, 1.0, 9.0, prev(1.59), "可以不改", '达到及格线（体验标准，≤9.0 秒），这个标准没给"好"的档；和上次比持平'),  # 慢 0.01：持平
     (0.6, 1.0, None, prev(1.8), "可以不改", "比上次快了 0.20 秒"),
     (0.6, 1.0, None, None, "未判", "没有体验标准，也没有上次可比，这次只记用时"),           # 第一次测，也没有体验标准
 ])
@@ -117,7 +117,7 @@ def test_compare_with_last_only_when_both_have_10_rounds():
 
 def test_combo_sentence_says_experience_and_change():
     j = J.judge(sc(fair=9.0), rounds(0.6, 1.0), prev(1.4))
-    assert j["lines"][0]["combo"] == "体验可以；比上次慢了 0.20 秒"
+    assert j["lines"][0]["combo"] == '达到及格线（体验标准，≤9.0 秒），这个标准没给"好"的档；比上次慢了 0.20 秒'
     assert J.judge(sc(), rounds(0.6, 1.0))["lines"][0]["combo"].startswith("没有体验标准、也没有上次可比")
 
 
@@ -225,3 +225,64 @@ def test_merged_segment_gets_new_code_and_a_short_name():
     assert sc["segments"] == {"P1-P3": {"name": "你说完到收到听写", "from": "P1", "to": "P3"}}
     assert sc["lines"][0]["segments"] == ["P1-P3"] and rs[0]["segs"] == {"P1-P3": 0.39}
     assert notes[0]["segment"] == "P1-P3" and notes[0]["names"] == ["发完剩下的录音", "上传听写"]
+
+
+# ---------- 体验标准分档（10-19 用户定）：标准给了"好"才分三档，只有及格线的不编"好"的数 ----------
+def sc_std(fair, good=None, short="某标准"):
+    s = sc()
+    s["experience"] = {"line": "主线", "fair": fair, "good": good, "short": short}
+    return s
+
+
+@pytest.mark.parametrize("fair,good,want_exp,want_why", [
+    (2.0, 0.8, "可以", "可以，离好（0.8 秒）还差 0.80 秒"),                      # 语音对话那样：有"好"的档
+    (2.0, 2.0, "好", "体验好（某标准：≤2.0 秒算好）"),
+    (1.0, 0.1, "差", "体验标准判差"),                                         # 尼尔森通用三档：1 秒以上算差
+    (2.0, None, "可以", '达到及格线（某标准，≤2.0 秒），这个标准没给"好"的档'),  # 门禁那样：只有及格线
+])
+def test_experience_tiers(fair, good, want_exp, want_why):
+    j = J.judge(sc_std(fair, good), rounds(0.6, 1.0))
+    assert j["lines"][0]["exp"] == want_exp
+    assert label(j)["why"].replace("体验可以，离好", "可以，离好") == want_why
+    assert label(j)["level"] == ("必须改" if want_exp == "差" else "可以不改")   # 好 / 可以都不影响必须改、建议改
+
+
+def test_good_tier_does_not_change_slower_than_last_time():
+    j = J.judge(sc_std(2.0, 0.8), rounds(0.6, 1.0), prev(1.4))
+    assert label(j)["level"] == "建议改" and label(j)["why"] == "比上次慢了 0.20 秒"
+
+
+def test_best_fix_is_the_biggest_segment_the_device_code_can_change():
+    s = sc()
+    s["segments"]["c"] = {"name": "设备解码", "owner": "固件", "side": "device", "from": "P3", "to": "P4", "basis": "measured"}
+    s["segments"]["d"] = {"name": "估计的一段", "owner": "固件", "side": "device", "from": "P4", "to": "P5", "basis": "estimated"}
+    s["lines"][0]["segments"] = ["a", "b", "c", "d"]
+    rs = [{"n": i + 1, "segs": {"a": 0.2, "b": 1.0, "c": 0.3, "d": 0.9}, "ends": [2.4], "probs": []} for i in range(10)]
+    bf = J.judge(s, rs)["best_fix"]
+    assert bf["k"] == "c" and bf["share"] == 12.5          # 服务器那段（设备外）、推算的段不算；只写占多少
+
+
+def test_best_fix_skips_answer_length_segments():
+    """语音那样：到第一声那条线是要看的；放回答那几段长短看回答多长，就算是设备上的段也不算"最值得优化"。"""
+    s = {"start": {"point": "P1", "name": "起点"},
+         "segments": {"a": {"name": "服务器想回答", "side": "outside", "from": "P1", "to": "P2"},
+                      "b": {"name": "解码送喇叭", "side": "device", "from": "P2", "to": "P3"},
+                      "c": {"name": "边收边放", "side": "device", "from": "P3", "to": "P4"}},
+         "lines": [{"name": "到第一声", "segments": ["a", "b"], "first": True}, {"name": "到放完", "segments": ["a", "b", "c"]}],
+         "problems": []}
+    rs = [{"n": i + 1, "segs": {"a": 1.0, "b": 0.02, "c": 3.0 + i * 0.5}, "ends": [1.02, 4.02 + i * 0.5], "probs": []} for i in range(10)]
+    bf = J.judge(s, rs)["best_fix"]
+    assert bf["k"] == "b" and bf["line"] == "到第一声"
+
+
+def test_best_fix_uses_the_first_felt_line_even_when_a_side_line_is_faster():
+    """真测 22:49 回放：表情线比开口线快，"最值得优化的一段"照样在开口那条线上找（不是用时最短的那条）。"""
+    s = {"start": {"point": "P1", "name": "起点"},
+         "segments": {"f": {"name": "设备换表情", "side": "device", "from": "P1", "to": "P5"},
+                      "a": {"name": "服务器", "side": "outside", "from": "P1", "to": "P2"},
+                      "b": {"name": "解码送喇叭", "side": "device", "from": "P2", "to": "P3"},
+                      "c": {"name": "边收边放", "side": "device", "from": "P3", "to": "P4"}},
+         "lines": [{"name": "表情线", "segments": ["f"]}, {"name": "到第一声", "segments": ["a", "b"], "first": True},
+                   {"name": "到放完", "segments": ["a", "b", "c"]}], "problems": []}
+    rs = [{"n": i + 1, "segs": {"f": 0.5, "a": 1.0, "b": 0.02, "c": 2.0}, "ends": [0.5, 1.02, 3.02], "probs": []} for i in range(10)]
+    assert J.judge(s, rs)["best_fix"]["line"] == "到第一声"
