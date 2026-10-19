@@ -89,6 +89,35 @@ def _big(line, seg_st, segs_def, st):
     return segs_def[k]["name"], seg_st[k]["med"], round(seg_st[k]["med"] / st["med"] * 100)
 
 
+def merge_overruns(scenario, rounds):
+    """"记最后一次"的中间点越过了下一步（比如"最后一包录音发出"：服务器回了听写之后设备还会再发几包），
+    这一步后面那段就会变成负数、前面那段多算：只要有一轮这样，就把前后两段合成一段（从前一步直接到下一步），写明为什么。
+    返回 (合并后的场景, 合并后的每一轮, 合并说明)；没有要合并的原样返回。"""
+    segs = scenario.get("segments") or {}
+    last = set(scenario.get("last_points") or []) - {(scenario.get("start") or {}).get("point")}
+    notes = []
+    for k2, g2 in list(segs.items()):
+        a = g2["from"]
+        k1 = next((k for k, g in segs.items() if g["to"] == a and k != k2), None)
+        if a not in last or not k1 or not any((r["segs"].get(k2) or 0) < 0 for r in rounds):
+            continue
+        g1 = segs[k1]
+        add = lambda x, y: None if x is None or y is None else round(x + y, 6)
+        both = lambda x, y: [add(p, q) for p, q in zip(x, y)] if isinstance(x, list) and isinstance(y, list) else None if isinstance(x, list) or isinstance(y, list) else add(x, y)
+        segs = {**segs, k1: {**g1, "to": g2["to"], "name": f"{g1['name']}、{g2['name']}",
+                             "range": both(g1.get("range"), g2.get("range")), "slow": both(g1.get("slow"), g2.get("slow"))}}
+        segs.pop(k2)
+        rounds = [{**r, "segs": {**{k: v for k, v in r["segs"].items() if k != k2},
+                                 k1: None if r["segs"].get(k1) is None or r["segs"].get(k2) is None
+                                 else round(r["segs"][k1] + r["segs"][k2], 6)}} for r in rounds]
+        lines = [{**l, "segments": [k for k in l["segments"] if k != k2]} for l in scenario["lines"]]
+        notes.append({"segment": k1, "point": a, "names": [g1["name"], g2["name"]],
+                      "why": f"「{(scenario.get('point_names') or {}).get(a, a)}」这一步在下一步之后还在发生（有的轮比下一步还晚），"
+                             f"分不出两段各占多少，合成一段算"})
+        scenario = {**scenario, "segments": segs, "lines": lines}
+    return scenario, rounds, notes
+
+
 def judge(scenario, rounds):
     """scenario：fsw-scenario/1（段、线、合理范围、体验标准、问题规则）；rounds：多轮实测收齐的每一轮。"""
     n = len(rounds)

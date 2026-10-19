@@ -1353,7 +1353,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
         else:
             raise HTTPException(404, "还没有测完的轮")
+        sc, ok, merged = jdg.merge_overruns(sc, ok)
         out = jdg.judge(sc, ok)
+        out["merged"] = merged
         keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points", "range_list",
                 "first_run", "exp_skip")
         allr = (job or {}).get("rounds", []) if ok and same else []
@@ -1741,7 +1743,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         ok = [r for r in (job0 or {}).get("rounds", []) if r["ok"]]
         if not ok:
             raise HTTPException(409, "还没测完：先做多轮实测")
-        sc = job0["_scenario"]
+        sc, ok, _ = jdg.merge_overruns(job0["_scenario"], ok)
         j = jdg.judge(sc, ok)
         if body.project_dir and (old := advs.saved_for(Path(body.project_dir) / "advice", j, sc)):
             adv["job"] = {**old, "status": "done", "seconds": 0, "called": False}  # 要改的问题和上次一样（比如只改了清单）：不再调用大模型

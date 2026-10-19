@@ -186,3 +186,22 @@ def test_line_with_fewer_than_10_values_does_not_use_10_slowest():
     assert j["lines"][0]["count"] == 8
     assert next(x for x in j["labels"] if x["k"] == "line:主线")["level"] != "必须改"
     assert all(x["level"] != "必须改" for x in j["labels"] if x["kind"] == "spiky")
+
+
+def test_keep_last_middle_point_that_overruns_the_next_step_merges_two_segments():
+    """真测第 41 次：「最后一段录音发出」是记最后一次的中间点，服务器回了听写后设备还会再发几包，10 轮 7 轮比「收到听写」晚，
+    「上传听写」那段成了负数。只要有一轮越过下一步，就把前后两段合成一段，第 1 轮校验也不再为它暂停。"""
+    s = {"start": {"point": "P1", "name": "你说完"}, "last_points": ["P2"], "point_names": {"P2": "最后一段录音发出"},
+         "segments": {"a": {"name": "发剩下的录音", "from": "P1", "to": "P2", "range": [0, 0.5], "slow": 1.0},
+                      "b": {"name": "上传听写", "from": "P2", "to": "P3", "range": [0, 0.5], "slow": 1.0},
+                      "c": {"name": "想回答", "from": "P3", "to": "P4"}},
+         "lines": [{"name": "到开口", "segments": ["a", "b", "c"]}], "problems": []}
+    rounds = [{"n": i + 1, "segs": {"a": 0.4, "b": -0.011 if i % 2 else 0.02, "c": 0.9}, "ends": [1.3], "probs": []} for i in range(10)]
+    sc, rs, notes = J.merge_overruns(s, rounds)
+    assert list(sc["segments"]) == ["a", "c"] and sc["segments"]["a"]["to"] == "P3" and sc["lines"][0]["segments"] == ["a", "c"]
+    assert sc["segments"]["a"]["range"] == [0, 1.0] and sc["segments"]["a"]["slow"] == 2.0
+    assert {r["segs"]["a"] for r in rs} == {0.389, 0.42} and "b" not in rs[0]["segs"]
+    assert notes[0]["names"] == ["发剩下的录音", "上传听写"] and "最后一段录音发出" in notes[0]["why"]
+    assert J.judge(sc, rs)["segments"][0]["name"] == "发剩下的录音、上传听写"
+    assert m.suspects(rounds[1], s) == []
+    assert J.merge_overruns(s, [{**r, "segs": {**r["segs"], "b": 0.02}} for r in rounds])[2] == []  # 没越过就不合
