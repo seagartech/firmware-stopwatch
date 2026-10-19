@@ -10,7 +10,7 @@ def test_program_starts_and_prints_version():
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "firmware-stopwatch 0.2.0"
+    assert result.stdout.strip() == "firmware-stopwatch 0.3.0"
 
 
 def test_installed_command_starts_from_any_folder(tmp_path):
@@ -20,7 +20,7 @@ def test_installed_command_starts_from_any_folder(tmp_path):
         [fsw, "--version"], capture_output=True, text=True, cwd=tmp_path
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "firmware-stopwatch 0.2.0"
+    assert result.stdout.strip() == "firmware-stopwatch 0.3.0"
 
 
 def test_busy_port_moves_to_the_next_one():
