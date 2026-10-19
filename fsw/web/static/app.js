@@ -148,21 +148,25 @@ function timeline(D){
     g+=`<text x="${X0-14}" y="${y+h/2+5}" text-anchor="end" font-size="14" font-weight="700" fill="${l.col}">${l.name}</text>`;
     if(D.rep.ends[i]==null){g+=`<text x="${sx(0)+8}" y="${y+h/2+5}" font-size="12" fill="var(--muted)">这一轮没收到</text>`;return}
     // 几段连着都很短（画出来不到 8 像素）：合成一小块、用灰色，鼠标移上去看是哪几段；段与段之间留一道缝（决策 139）
-    let tiny=null;const flush=()=>{if(!tiny)return;const n=tiny.n.length;merged=true;g+=`<rect x="${sx(tiny.a)}" y="${y}" width="${Math.max(3,sx(tiny.b)-sx(tiny.a))}" height="${h}" fill="var(--est)" opacity=".6" stroke="var(--panel)" stroke-width="1" rx="1"><title>${n>1?`${n} 段很短，共 ${f(tiny.b-tiny.a)} 秒：`:''}${tiny.n.join('；')}</title></rect>`;tiny=null};
+    let tiny=null;const flush=()=>{if(!tiny)return;const n=tiny.n.length;merged=true;g+=`<rect class="hit" data-tip="${htmlEsc(`${n>1?`<b>${n} 段合并显示</b>（每段过短，无法单独显示）<br>合计 ${f(tiny.b-tiny.a)} 秒，起止时刻 ${f(tiny.a)} → ${f(tiny.b)} 秒<br>`:''}${tiny.n.map(htmlEsc).join('<br>')}`)}" x="${sx(tiny.a)}" y="${y}" width="${Math.max(3,sx(tiny.b)-sx(tiny.a))}" height="${h}" fill="var(--est)" opacity=".6" stroke="var(--panel)" stroke-width="1" rx="1"></rect>`;tiny=null};
     l.segs.forEach((k,j)=>{const d=D.S.segs[k].v[R],a=t0,b=t0+d;t0=b;const last=j===l.segs.length-1;const shared=D.use[k]>1;
       if(!last&&sx(b)-sx(a)<8){tiny=tiny||{a,b,n:[]};tiny.b=b;tiny.n.push(`${D.S.segs[k].name} ${f(d)} 秒`);return}
       flush();
       const c=last?l.col:shared?'var(--soft)':l.soft;if(!shown.has(k))shown.set(k,c);
-      g+=`<rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"><title>${D.S.segs[k].name} ${f(d)} 秒</title></rect>`;
-      if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(d)}<title>${nm}</title></text>`}
-      else if(sx(b)-sx(a)>34&&!last)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)" class="num">${f(d)}<title>${D.S.segs[k].name}</title></text>`});flush();
-    g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(D.rep.ends[i])} 秒</text>`;});
+      g+=`<g class="hit" data-tip="${htmlEsc(segTip(D,i,k,a,b))}"><rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
+      if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(d)}</text>`}
+      else if(sx(b)-sx(a)>34&&!last)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)" class="num">${f(d)}</text>`;g+='</g>'});flush();
+    g+=`<circle class="hit" data-tip="${htmlEsc(`<b>${htmlEsc(l.name)}</b><br>${htmlEsc(l.end)}：本轮总耗时 ${f(D.rep.ends[i])} 秒<br>${D.n} 轮中位数 ${f(l.med)} 秒`)}" cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(D.rep.ends[i])} 秒</text>`;});
   if(D.lines.length>1&&D.rep.ends[0]!=null&&D.rep.ends[1]!=null){const a=D.rep.ends[0],b=D.rep.ends[1],y=top+gap-12;
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(b-a,2)} 秒</text>`;}
   const segLegend=[...shown].map(([k,c])=>`<span><i class="sw" style="background:${c}"></i>${D.S.segs[k].name}${D.use[k]>1?'（共用）':''}</span>`).join('')+(merged?`<span><i class="sw" style="background:var(--est);opacity:.6"></i>几段很短、合成一块（鼠标移上去看是哪几段）</span>`:'');
+  const rule=`颜色规则：每条线一种颜色；到达终点的最后一段为深色，之前各段为浅色${[...shown.keys()].some(k=>D.use[k]>1)?'；多条线共用的段为灰色':''}${merged?'；相邻的极短段合并为一块（见图例最后一项）':''}。色块宽度＝该段耗时。<br>鼠标悬停在色块或终点圆点上，查看本轮耗时、占比、起止时刻和 ${D.n} 轮中位数。`;
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
-  <div class="legend">${segLegend}</div>`;
+  <div class="legend">${segLegend}</div><p class="note" style="margin:6px 0 0">${rule}</p>`;
 }
+// 计时图色块的悬停提示：只用段名、线名和数字，不带任何场景专用说法
+function segTip(D,i,k,a,b){const s=D.S.segs[k],l=D.lines[i],tot=D.rep.ends[i],sh=D.use[k]>1;
+ return `<b>${htmlEsc(s.name)}</b>${sh?'（多条线共用）':''}<br>本轮耗时 ${f(b-a)} 秒${tot>0?`，占「${htmlEsc(l.name)}」${Math.round((b-a)/tot*100)}%`:''}<br>起止时刻 ${f(a)} → ${f(b)} 秒<br>${D.n} 轮中位数 ${f((D.allSegs.find(x=>x.k===k)||{med:med(s.v)}).med)} 秒`}
 // "偶发特别慢"点名的那几轮（和拍板区说的"逐轮图里红底的几轮"对上，真测第 36 次）：轮号 → 哪一段
 function spikyRounds(D){const m=new Map(),J=D.J;
  if(J)J.labels.filter(x=>x.kind==='spiky'&&!x.with).forEach(x=>{const s=D.allSegs.find(y=>y.k===x.segment);(x.rounds||[]).forEach(n=>m.set(n,s?s.name:x.segment))});
@@ -626,7 +630,7 @@ async function exportReport(folder){
 <div class="tabs seg" role="group" aria-label="报告版本"><button id="tb-b" aria-pressed="true" onclick="sw('b')">结论建议</button><button id="tb-d" aria-pressed="false" onclick="sw('d')">技术细节</button></div></div>
 <div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
 <p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。勾选的方案和待办是导出那一刻的样子；要改勾选，请在码表里打开这份报告。${log}</p></div>
-<script>function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
+<div id="tip" hidden></div><script>${tipShow.toString()}document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
   let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
