@@ -33,6 +33,7 @@ class Spec:
     need: list | None = None
     names: dict = field(default_factory=dict)
     last: set = field(default_factory=set)  # 一轮里取最后一次的点（比如回答全部放完、门完全打开）：中途可能先报一次
+    soft: set = field(default_factory=set)  # 只在"看内容长短、不判快慢"那条线上用的点：一轮缺了它，其余的线照样算，不整轮补测
 
     def __post_init__(self):
         if self.need is None:
@@ -56,6 +57,12 @@ class Spec:
             names.setdefault(g["to"], g["name"] + "（终点）")
         spec = cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names,
                    last=set(s.get("last_points") or []) & {l["segs"][-1][1] for l in lines if l["segs"]})  # 只认线的终点（起点等别的点"记最后一次"是插点做法，不影响收尾）
+        # 有"第一下感觉到的结果"那条线时，最后一条线（到全部做完，比如回答放完）看内容长短、报告不判快慢（同 judge）：
+        # 只在这条线上用的点缺了，不算没收全（真测第 38 次：回答完整放了，固件那一轮没打出"声音放完"，整轮作废让人重说）
+        first = next((i for i, l in enumerate(s["lines"]) if l.get("first")), None)
+        if first is not None and first != len(lines) - 1:
+            other = {p for i, l in enumerate(lines) if i != len(lines) - 1 for g in l["segs"] for p in g}
+            spec.soft = {p for g in lines[-1]["segs"] for p in g} - other - {spec.start}
         opt = set(s.get("optional") or [])  # 只在某种触发方式才走的计时点：有就记，一轮收齐不等它
         if opt:
             spec.need = [p for p in spec.need if p not in opt] or spec.need
@@ -158,8 +165,14 @@ class Collector:
         return [x for x in self.spec.need if x != self.spec.start and not self._after(x)]
 
     def _bad_or_stale(self):
-        """等尾巴没等到：要的点都有、只是有的只在起点之前记到过，照旧写清"记到的是这一轮开始之前的"；真缺点就判没收全。"""
-        return self._ok_or_stale() if all(x in self.cur for x in self.spec.need) else self._bad()
+        """等尾巴没等到：要的点都有、只是有的只在起点之前记到过，照旧写清"记到的是这一轮开始之前的"；真缺点就判没收全。
+        缺的只是"不判快慢"那条线上的点（见 Spec.soft）：这一轮照样算，那条线这一轮空着。"""
+        if all(x in self.cur for x in self.spec.need):
+            return self._ok_or_stale()
+        miss = set(self._miss_after()) if self.spec.start in self.cur else None
+        if miss and self.spec.soft and miss <= self.spec.soft:
+            return self._ok_or_stale(skip=miss)
+        return self._bad()
 
     def _before_end(self, name):
         """name 是某条线的终点时，这条线终点前一个点；不是终点返回 None。"""
@@ -318,13 +331,16 @@ class Collector:
         self._open()
         return out
 
-    def _ok_or_stale(self):
+    def _ok_or_stale(self, skip=()):
         """比起点还早的点不是这一轮的（决策 111）：比如上一轮剩下的一包声音在聆听时到了，"只记第一次"就记成了它，
-        这一轮真正的那一次没记到。这样的轮不能算（也不能拿它判问题），写清楚是哪个点，自动补一轮。"""
+        这一轮真正的那一次没记到。这样的轮不能算（也不能拿它判问题），写清楚是哪个点，自动补一轮。
+        skip：这一轮没记到、也不要的点（不判快慢那条线上的），从这一轮里去掉，用到它的段和线这一轮空着。"""
         self._latest_start()
         stale = []
+        for x in skip:
+            self.cur.pop(x, None)
         for x in self.spec.need:
-            if x == self.spec.start:
+            if x == self.spec.start or x in skip:
                 continue
             after = self._after(x)
             if after:

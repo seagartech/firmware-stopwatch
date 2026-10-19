@@ -951,7 +951,7 @@ function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=
  return `<div class="bigask"><b>${/^现在/.test(tryAct())?tryAct():'现在对设备：'+tryAct()}</b>
   <span class="note">设备已经开机了。只是确认计时点能收到，不算进数据。</span>
   ${idle?`<span class="note" style="color:var(--warn)">已经 ${since} 秒没收到计时点：设备可能还在联网，或者还没准备好。请现在再做一次。</span>`:''}
-  <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点${J.try_started?`　剩余 <b class="num">${mmss(Math.max(0,TRY_SECS-(now-J.try_started)))}</b>，超时判未通过`:''}</span>${got>=Math.max(2,N/2)&&got<N&&(J.missing||[]).length?`<span class="note">还差「${J.missing.map(htmlEsc).join('」「')}」：有的步骤只在某些情况下才走到，接着再完整做一次（${tryAct()}），码表会继续收。</span>`:''}${fullLogBtn()}${fullLog()}</div>`}  // 设备原始输出不摆在明面上，想看点"完整日志"（决策 139）
+  <span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点${J.try_started?`　剩余 <b class="num">${mmss(Math.max(0,TRY_SECS-(now-J.try_started)))}</b>，超时判未通过`:''}</span>${got>=Math.max(2,N/2)&&got<N&&(J.missing||[]).length?`<span class="note">还差「${J.missing.map(htmlEsc).join('」「')}」：设备还在做的话先等它做完，这几步可能就到了；它已经做完还差，就再完整做一次（${tryAct()}），码表会继续收。</span>`:''}${fullLogBtn()}${fullLog()}</div>`}  // 设备原始输出不摆在明面上，想看点"完整日志"（决策 139）
 // 完整日志（决策 106）：编译、烧录、试一次时设备和工具的输出，最近 200 行，去掉了控制字符
 let showFull=false;
 const fullLogBtn=()=>realFlash()&&FSWJ&&(FSWJ.tail||[]).length?`<button class="pill" data-fulllog="1">${showFull?'收起日志':'完整日志'}</button>`:'';
