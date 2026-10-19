@@ -155,8 +155,11 @@ class Collector:
         self.post = {}  # 这一轮已经收尾（等安静收的尾）、下一轮还没开始时到的点：看是不是结束标记没读到、已经是下一轮（见 _post_round）
 
     def skip_round(self):
-        """正在进行的这一轮不算（比如试一次时只喊了唤醒词的那一轮）：到下一个结束标记前收到的都不管，也不报开头没收到。"""
+        """正在进行的这一轮不算（比如试一次时只喊了唤醒词的那一轮）：到下一个结束标记前收到的都不管，也不报开头没收到。
+        但这一轮的结束标记可能在试一次时就过去了（10-19 真测：唤醒后说的第一句整句被跳过、格子不变绿）：跳着的时候来了起点、
+        起点之后要的点又到了一大半，就是下一轮已经开始了，从这个起点算起（和"结束标记没读到"同一个判断）。"""
         self.started, self.first, self.cur, self.occ = False, False, {}, {}
+        self.skipping, self.post = True, {}
 
     def _park(self, us):
         """设备回到等待（打出结束标记）时，最后一声可能还没放完：这一轮只差最后一两个点时先不判没收全，
@@ -300,6 +303,7 @@ class Collector:
             self.last_cur = dict(self.cur)  # 刚结束的这一轮记到了哪些点（看晚到的尾巴是谁的）
             self.post = {}
             self.started, self.cur, self.done, self.first = True, {}, False, False
+            self.skipping = False
             self.occ = {}
             self.reset_us = us
             self.ready, self.ready_at = False, None
@@ -310,6 +314,12 @@ class Collector:
                 self._begin({k: [o for o in v if o[0] >= us - STALE_US] for k, v in self.post.items()})
             return out
         if not self.started:  # 半轮：后面的不管
+            if getattr(self, "skipping", False):  # 跳着唤醒那一轮：看下一轮是不是已经开始了（见 skip_round）
+                self.post.setdefault(name, []).append((us, val))
+                s = max((o[0] for o in self.post.get(self.spec.start, [])), default=None)
+                if s is not None and self._later_half(s, self.post):
+                    self.skipping = False
+                    self._begin({k: [o for o in v if o[0] >= s - STALE_US] for k, v in self.post.items()})
             return out
         if name == self.spec.start and self.ready and self._missed_reset(us):
             return out + self._split(us, val)
