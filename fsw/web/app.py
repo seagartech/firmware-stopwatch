@@ -1087,13 +1087,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if body.project_dir:  # 插计时点时顺带记了附加值的计时点（插入记录里），看附加值的问题规则才用
                 values = (ins.current(Path(body.project_dir) / "fsw-backup") or {}).get("values") or None
             scenario = stds.real_scenario(page, standard, values)
-            if body.project_dir:  # 项目有合理范围清单：测的时候也按它画范围
-                try:
-                    lst = rl.read(body.project_dir)
-                except rl.ListFormatError:
-                    lst = None
-                if lst:
-                    scenario = rl.apply(scenario, lst)
             std_hash = stds.digest(standard)
         elif body.demo in demos:
             scenario = demos[body.demo]["scenario"]
@@ -1364,8 +1357,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         same = job and (demo is None or job.get("demo") == demo)
         if ok and same:
             sc, raw = job["_scenario"], job["raw_log"]
-            if job.get("_page") is not None and job.get("_project_dir"):  # 真测：每次都按项目现在的合理范围清单判
-                sc = job["_scenario"] = _judge_scenario(job, ok)
+            if job.get("_page") is not None and job.get("_project_dir"):  # 真测：体验标准按设备类别从标准库挂
+                sc = job["_scenario"] = _judge_scenario(job)
                 if job.get("status") in ("done", "stopped"):
                     _keep_rounds(job)  # 晚到的最后一声会改已交出的那一轮：打开报告时再存一次，存的和报告用的一样
                     if "_prev" not in job:
@@ -1374,10 +1367,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
         else:
             raise HTTPException(404, "还没有测完的轮")
+        prev = (job or {}).get("_prev") if ok and same else None
         sc, ok, merged = jdg.merge_overruns(sc, ok)
-        out = jdg.judge(sc, ok)
+        out = jdg.judge(sc, ok, prev)
         out["merged"] = merged
-        keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points", "range_list",
+        sc = {**sc, "first_run": not (prev and prev.get("segs") is not None)}  # 没有上次可比：第一次测
+        keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points",
                 "first_run", "exp_skip")
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
@@ -1387,8 +1382,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                    "gap": [{"n": r["n"], "names": r["gap"]} for r in ok if r.get("gap")]}
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
                 "timing": _timing() if raw else None, "quality": quality, "start_lag": _start_lag(raw, sc),
-                "list_filled": (job or {}).get("_filled") if ok and same else None,
-                "prev": (job or {}).get("_prev") if ok and same else None,
+                "prev": prev,
                 "measured_at": (job or {}).get("measured_at") if ok and same else None}
 
     def _prev_run(job, sc, ok):
@@ -1455,118 +1449,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     "noise": noise, "noise_lines": noise_l}
         return {"why": f"计时点和上次（{other}）不一样，不和上次比"} if other else None
 
-    def _judge_scenario(job, ok):
-        """这份报告按什么判：项目有合理范围清单就按清单；测满 10 轮、清单还没有或有空着的，按这次实测自动填上（只填空的）。"""
-        page, d = job["_page"], Path(job["_project_dir"])
-        sc = stds.real_scenario(page, stds.find(page.get("steps") or []), job.get("_values"))
-        try:
-            lst = rl.read(d)
-        except rl.ListFormatError as e:
-            return {**sc, "range_list": {"file": rl.FILENAME, "broken": str(e), "text": "合理范围清单格式不对，这次按码表自带的范围判"}}
-        if job.get("status") in ("done", "stopped"):
-            try:
-                name = json.loads((d / "project.json").read_text(encoding="utf-8")).get("name")
-            except (OSError, ValueError):
-                name = None
-            fresh = not lst or not any(x.get("range") for x in list(lst["segments"].values()) + lst["lines"])
-            lst, filled = rl.fill(lst, sc, ok, project=name or d.name)
-            if filled:
-                rl.save(d, lst)
-                job["_filled"] = filled
-                job["_fresh"] = fresh  # 填之前清单里一个数都没有：这次就是第一次测
-                job["_filled_vals"] = {x["name"]: (x.get("range"), x.get("slow"))
-                                       for x in list(lst["segments"].values()) + lst["lines"] if x["name"] in filled}
-        out = rl.apply(sc, lst) if lst else sc
-        auto = job.get("_filled_vals") or {}
-        if auto:  # 合理范围就是拿这次的轮填的：不拿它再判这次（只会全"正常"），这次快慢只按体验标准看，下次再测和它比；手动改过的照改过的判
-            for x in list(out["segments"].values()) + out["lines"]:
-                if x.get("name") in auto and (x.get("range"), x.get("slow")) == auto[x["name"]]:
-                    x.update(range=None, slow=None, new=True)
-            # 填之前清单里没有任何数才算第一次测（按条数比会错：同名的段和线、没测到的段都会让条数对不上，真测第 29 次）；只补了新出现的几项照常判其余的
-            out["first_run"] = bool(job.get("_fresh"))
-        return stds.with_default_experience(out)
-
-    def _list_dir(project_dir=None):
-        """清单在哪个项目：给了项目文件夹就用它（只限码表结果文件夹里，设置页进来的）；没给就是这份报告对应的项目。"""
-        if project_dir:
-            d = Path(project_dir).expanduser().resolve()
-            if Path(live["data"]).resolve() not in d.parents:
-                raise HTTPException(403, "只能打开码表结果文件夹里的项目")
-            return d
-        job = col["job"]
-        if not job or not job.get("_project_dir") or job.get("_page") is None:
-            raise HTTPException(409, "先测完一次，才有这个项目的合理范围清单")
-        return Path(job["_project_dir"])
-
-    @app.get("/api/rangelists")
-    def rangelists():
-        """设置页"合理范围清单"：每个测过的项目一行，有没有清单、几项、上次改的时间。"""
-        out = []
-        for pj in sorted(Path(live["data"]).glob("*/project.json")):
-            d = pj.parent
-            if not any(d.glob("runs/*/raw.log")):
-                continue
-            try:
-                info = json.loads(pj.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            row = {"project_dir": str(d), "name": info.get("name", d.name) + (f"（{info['board']}）" if info.get("board") else ""),
-                   "has": False, "items": 0, "changed": None, "broken": None}
-            p = rl.path_of(d)
-            if p.exists():
-                row.update(has=True, changed=time.strftime("%m-%d %H:%M", time.localtime(p.stat().st_mtime)))
-                try:
-                    lst = rl.read(d)
-                    row["items"] = len(lst["segments"]) + len(lst["lines"])
-                except rl.ListFormatError as e:
-                    row["broken"] = str(e)
-            out.append(row)
-        return out
-
-    def _list_out(d):
-        try:
-            lst = rl.read(d)
-        except rl.ListFormatError as e:
-            return {"path": str(rl.path_of(d)), "broken": str(e), "errors": [{"line": n, "msg": m} for n, m in e.errors]}
-        if lst is None:
-            raise HTTPException(404, f"这个项目还没有合理范围清单：测满 {rl.MIN_ROUNDS} 轮后码表按实测自动建")
-        return {"path": str(rl.path_of(d)), "list": lst}
-
-    @app.get("/api/rangelist")
-    def rangelist_get(project_dir: str | None = None):
-        """合理范围清单页：给的项目（设置页进来）或这份报告对应项目的清单。"""
-        return _list_out(_list_dir(project_dir))
-
-    class ListEditBody(BaseModel):
-        kind: str                       # segment / line
-        key: str                        # 分段编号 / 测量线名字
-        range: list[float | None] | None = None
-        slow: float | None = None
-        note: str = ""
-        project_dir: str | None = None  # 设置页进来时是哪个项目
-
-    @app.post("/api/rangelist/edit")
-    def rangelist_edit(body: ListEditBody):
-        """改一段或一条线的数（清单页的「修改」）；改完报告自动按新的判。"""
-        d = _list_dir(body.project_dir)
-        try:
-            lst = rl.read(d)
-        except rl.ListFormatError as e:
-            raise HTTPException(409, str(e))
-        if lst is None:
-            raise HTTPException(404, "这个项目还没有合理范围清单")
-        rng = None if not body.range or body.range[0] is None else [body.range[0], body.range[1] if len(body.range) > 1 else None]
-        try:
-            if body.kind == "segment":
-                rl.edit_segment(lst, body.key, rng, body.slow, body.note)
-            elif body.kind == "line":
-                rl.edit_line(lst, body.key, rng, body.slow)
-            else:
-                raise HTTPException(400, f"不认识的修改：{body.kind}")
-        except rl.ListRuleError as e:
-            raise HTTPException(400, str(e))
-        rl.save(d, lst)
-        return _list_out(d)
+    def _judge_scenario(job):
+        """这份报告按什么判：真找完的步骤 + 按设备类别从标准库挂的体验标准（合理范围清单 10-19 去掉了，项目文件夹里留着的老清单不读）。"""
+        page = job["_page"]
+        return stds.with_default_experience(stds.real_scenario(page, stds.find(page.get("steps") or []), job.get("_values")))
 
     def _timing():
         job = col["job"]

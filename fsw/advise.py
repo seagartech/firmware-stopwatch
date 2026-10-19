@@ -102,10 +102,14 @@ why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的�
 """
 
 
-def _fmt_range(r):
-    if not r:
-        return "没有合理范围"
-    return f"合理 {r[0]}～{r[1] if r[1] is not None else '不限'}"
+def _fmt_vs(x):
+    """和上次比的一句（第一次测没有上次）。"""
+    vs = x.get("vs")
+    if not vs:
+        return "第一次测，没有上次可比"
+    if vs["change"] == "持平":
+        return f"上次 {vs['prev']:.3f}，和上次持平"
+    return f"上次 {vs['prev']:.3f}，比上次{vs['change']} {abs(vs['d']):.3f}"
 
 
 def build_prompt(j, scenario, steps=None, what=""):
@@ -113,10 +117,10 @@ def build_prompt(j, scenario, steps=None, what=""):
     for g in j["segments"]:
         sd = scenario["segments"][g["k"]]
         seg_lines.append(f"- {g['k']}：{g['name']}（{sd['from']}→{sd['to']}，{g['owner']}{'，设备外' if g['outside'] else ''}）"
-                         f"一般 {g['med']:.3f}，10 次最慢 {g['p90']:.3f}，最慢 {g['max']:.3f}；{_fmt_range(g['range'])}"
-                         f"{'，算慢 ' + str(g['slow']) if g.get('slow') is not None else ''}；判断：{g['verdict']}{'（偶发特别慢）' if g['spiky'] else ''}")
-    line_txt = "\n".join(f"- 线「{l['name']}」：一般 {l['med']:.2f} 秒，10 次最慢 {l['p90']:.2f}，最慢 {l['max']:.2f}；{_fmt_range(l['range'])}；"
-                         f"判断 {l['verdict']}{'；体验标准判' + l['exp'] if l['exp'] else ''}" for l in j["lines"])
+                         f"一般 {g['med']:.3f}，10 次最慢 {g['p90']:.3f}，最慢 {g['max']:.3f}；{_fmt_vs(g)}"
+                         f"{'（偶发特别慢）' if g['spiky'] else ''}")
+    line_txt = "\n".join(f"- 线「{l['name']}」：一般 {l['med']:.2f} 秒，10 次最慢 {l['p90']:.2f}，最慢 {l['max']:.2f}；{_fmt_vs(l)}"
+                         f"{'；体验标准判' + l['exp'] if l['exp'] else ''}" for l in j["lines"])
     pts = "\n".join(f"- {s['p']} {s['n']}：{s.get('path') or s.get('f')} 第 {s['l']} 行" for s in steps or []) or "（没有）"
     probs = "\n".join(f"- 编号 {p['key']}（{p['level']}）：{p['what']}" + (f"；主要是段 {p['seg']}" if p.get("seg") else "")
                       for p in problems(j, scenario))
@@ -231,7 +235,7 @@ def signature(j, scenario):
 
 
 def saved_for(save_to, j, scenario):
-    """上次存下的建议，且是按同样的问题写的：直接用（比如改了合理范围清单，但要改的问题没变）。"""
+    """上次存下的建议，且是按同样的问题写的：直接用（比如只是重开了报告，要改的问题没变）。"""
     try:
         out = json.loads((Path(save_to) / "advice.json").read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):

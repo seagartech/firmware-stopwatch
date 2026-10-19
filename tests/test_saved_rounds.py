@@ -68,5 +68,9 @@ def test_compare_with_last_run_uses_what_it_saved(tmp_path, monkeypatch):
     c2 = _app(tmp_path, std_dir)
     c2.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 20, "project_dir": str(proj)})
     wait(c2, lambda j: j["status"] == "done")
-    prev = c2.get("/api/report").json()["prev"]
+    r2 = c2.get("/api/report").json()
+    prev = r2["prev"]
     assert prev["run"] == run1.name and prev["n"] == len(saved)               # 照样和上一次比，轮数是那次测的轮数
+    # 合理范围清单去掉了（10-19）：第二次起每段、每条线和上次比，同一份日志测两次就是持平
+    assert {g["verdict"] for g in r2["segments"]} <= {"持平", "看回答长短"} and not r2["scenario"]["first_run"]
+    assert all("持平" in x["why"] or x["why"] == "取决于回答长短，不判快慢" for x in r2["labels"] if x["kind"] == "line")

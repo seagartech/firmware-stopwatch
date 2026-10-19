@@ -189,7 +189,7 @@ def test_report_judges_this_run_with_fixed_rules(make):
     r = c.get("/api/report").json()
     assert r["n"] == 20 and not r["few"]
     speak = r["lines"][-1]
-    assert speak["exp"] == "差" and speak["combo"] == "每段都没做坏，是做法本身慢，要换做法才会快"
+    assert speak["exp"] == "差" and speak["combo"].startswith("体验差：慢在「")
     assert {x["k"]: x["level"] for x in r["labels"]}["problem:sw"] == "必须改"
     assert len(r["rounds"]) == 20 and r["scenario"]["lines"][0]["name"] == "表情线"
 
@@ -205,12 +205,12 @@ def test_report_for_real_steps_reads_the_xiaozhi_standard(make, tmp_path):
     c.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 9, "project_dir": str(tmp_path / "p")})
     wait(c, lambda j: j["status"] == "done")
     r = c.get("/api/report").json()
-    assert r["few"] and r["scenario"]["standard"].startswith("小智")  # 不到 10 轮：不建清单，按码表自带的标准判
-    assert not (tmp_path / "p" / "合理范围清单.md").exists()
+    assert r["few"] and r["scenario"]["standard"].startswith("小智")  # 按代码位置对上码表自带的标准（体验标准、问题规则从它来）
+    assert not (tmp_path / "p" / "合理范围清单.md").exists()           # 合理范围清单 10-19 去掉了：不建
     seg = {g["k"]: g for g in r["segments"]}
-    assert seg["P2-P5"]["verdict"] == "正常" and seg["P2-P5"]["med"] == pytest.approx(1.35)  # 大模型想回答 0.4～1.5 秒
+    assert seg["P2-P5"]["verdict"] == "已记录" and seg["P2-P5"]["med"] == pytest.approx(1.35)  # 第一次测：只记用时
     talk = r["lines"][-1]
-    assert talk["name"] == "开口这条" and talk["exp"] == "差" and talk["verdict"] == "正常"
+    assert talk["name"] == "开口这条" and talk["exp"] == "差" and talk["verdict"] == "已记录"
 
 
 def test_report_for_demo_data_without_a_run(make):

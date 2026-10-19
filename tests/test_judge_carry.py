@@ -1,4 +1,5 @@
-"""重新找步骤后编号重排、线改了名：合理范围和体验标准跟着计时点在代码里的位置走，不按 P 编号套错（10-19 实测发现）。
+"""重新找步骤后编号重排、线改了名："和上次比"按计时点在代码里的位置对段和线，不按 P 编号比错（10-19 实测发现）；
+体验标准按库挂到要测的那条线；没有体验标准、也没有上次可比的线明说"未判"。合理范围清单 10-19 去掉了。
 用门禁数据：码表不知道它是门禁，语音对话也一样。"""
 
 from fsw import judge as J
@@ -14,9 +15,9 @@ def door(order=("刷卡", "校验回来", "开锁", "锁到位"), line="开门�
     """order 决定编号：重新找步骤后同样的计时点可能排成别的 P 编号。"""
     p = {n: f"P{i + 1}" for i, n in enumerate(order)}
     segs = [("读卡号并校验", "刷卡", "校验回来"), ("驱动电磁锁", "校验回来", "开锁"), ("锁舌到位", "开锁", "锁到位")]
-    segments = {f"{p[a]}-{p[b]}": {"name": n, "from": p[a], "to": p[b], "range": None, "slow": None} for n, a, b in segs}
+    segments = {f"{p[a]}-{p[b]}": {"name": n, "from": p[a], "to": p[b]} for n, a, b in segs}
     return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": p["刷卡"], "name": "刷卡"},
-            "segments": segments, "lines": [{"name": line, "end": "锁到位", "segments": list(segments), "range": None, "slow": None}],
+            "segments": segments, "lines": [{"name": line, "end": "锁到位", "segments": list(segments)}],
             "experiences": [], "problems": [], "points": {p[n]: {"n": n, "at": AT[n]} for n in order}}
 
 
@@ -26,78 +27,33 @@ def rounds(sc, vals=(0.40, 0.05, 0.10), n=10):
             for i in range(n)]
 
 
-def test_renumbered_steps_keep_their_own_ranges():
+def test_renumbered_steps_still_pair_with_last_time():
     a = door()
-    lst, _ = rl.fill(None, a, rounds(a))
-    rl.edit_segment(lst, "P2-P3", [0.04, 0.06], 0.08, "手动")             # 驱动电磁锁：人定的范围
-    lst = rl.loads(rl.dumps(lst))                                          # 位置跟着文件存下来
     b = door(order=("开锁", "刷卡", "校验回来", "锁到位"))                  # 重新找步骤：编号重排
-    s = rl.apply(b, lst)["segments"]
-    assert s["P3-P1"]["range"] == [0.04, 0.06]                             # 同一步，换了编号也认得出
-    assert s["P1-P4"]["range"] == lst["segments"]["P3-P4"]["range"]
+    pairs = rl.pair_segments(a["segments"], rl.at_now(a), b["segments"], rl.at_now(b))
+    assert pairs == {"P1-P2": "P2-P3", "P2-P3": "P3-P1", "P3-P4": "P1-P4"}   # 同一步，换了编号也认得出
 
 
-def test_same_number_but_different_step_is_not_judged_with_old_range():
-    a = door()
-    lst, _ = rl.fill(None, a, rounds(a))
-    lst = rl.loads(rl.dumps(lst))
-    b = door()
+def test_same_number_but_different_step_is_not_compared():
+    a, b = door(), door()
     b["points"]["P3"]["at"] = "main/lock.c|before|relay_on();"            # 编号还是 P2-P3、P3-P4，但计时点换了地方
-    s = rl.apply(b, lst)["segments"]
-    assert s["P2-P3"]["range"] is None and s["P3-P4"]["range"] is None
-    assert s["P1-P2"]["range"] == lst["segments"]["P1-P2"]["range"]
-    lst2, done = rl.fill(lst, b, rounds(b))                                # 测满 10 轮：换了的两段重新填，旧的去掉
-    assert set(done) == {"驱动电磁锁", "锁舌到位"} and set(lst2["segments"]) == {"P1-P2", "P2-P3", "P3-P4"}
+    pairs = rl.pair_segments(a["segments"], rl.at_now(a), b["segments"], rl.at_now(b))
+    assert pairs == {"P1-P2": "P1-P2"}
 
 
-def test_old_list_without_locations_needs_same_name():
-    a = door()
-    lst, _ = rl.fill(None, a, rounds(a))
-    lst.pop("at"), lst.pop("line_at")                                      # 老清单：没记位置
-    b = door()
+def test_without_locations_needs_same_name():
+    a, b = door(), door()
+    for x in (a, b):
+        x.pop("points")                                                    # 老数据：没记位置
     b["segments"]["P2-P3"]["name"] = "服务器合成声音"                      # 编号一样、意思变了
-    s = rl.apply(b, lst)["segments"]
-    assert s["P2-P3"]["range"] is None and s["P1-P2"]["range"] is not None
+    assert rl.pair_segments(a["segments"], {}, b["segments"], {}) == {"P1-P2": "P1-P2", "P3-P4": "P3-P4"}
 
 
-def test_renamed_line_keeps_its_range():
+def test_renamed_line_still_pairs_by_its_start_and_end():
     a = door()
-    lst, _ = rl.fill(None, a, rounds(a))
-    rl.edit_line(lst, "开门线", [0.4, 0.7], 0.9)
-    lst = rl.loads(rl.dumps(lst))
     b = door(order=("开锁", "刷卡", "校验回来", "锁到位"), line="到锁到位")    # 线改了名、编号也变了，起点终点没变
-    s = rl.apply(b, lst)
-    assert s["lines"][0]["range"] == [0.4, 0.7] and s["lines"][0]["slow"] == 0.9
-
-
-def test_old_list_with_hand_typed_standard_reads_but_standard_is_ignored():
-    """老清单多「体验标准」「出处」两列（以前能手填）：照样能读，手填的标准不用，写回去就没这两列了。"""
-    old = """# 合理范围清单：门禁
-
-## 分段
-
-| 编号 | 分段 | 起止计时点 | 合理范围（秒） | 慢阈值（秒） | 备注 |
-|---|---|---|---|---|---|
-| P1-P2 | 读卡号并校验 | P1→P2 | 0.3～0.5 | 0.6 | — |
-
-## 测量线
-
-| 测量线 | 合理范围（秒） | 慢阈值（秒） | 体验标准：超过多少秒算差 | 出处 |
-|---|---|---|---|---|
-| 开门线 | 0.5～0.7 | 0.9 | 1.0 | 用户设定 |
-"""
-    lst = rl.loads(old)
-    assert lst["lines"] == [{"name": "开门线", "range": [0.5, 0.7], "slow": 0.9}]
-    assert rl.apply(door(), lst)["experiences"] == []
-    assert "体验标准" not in rl.dumps(lst) and "用户设定" not in rl.dumps(lst)
-
-
-def test_meta_line_survives_code_with_comment_end():
-    a = door()
-    a["points"]["P1"]["at"] = "main/card.c|before|while (n-->0) read();"
-    lst, _ = rl.fill(None, a, rounds(a), project="门禁")
-    back = rl.loads(rl.dumps(lst))
-    assert back["at"]["P1"] == "main/card.c|before|while (n-->0) read();" and back == lst
+    sa, sb = rl.line_sig(a, a["lines"][0], rl.at_now(a)), rl.line_sig(b, b["lines"][0], rl.at_now(b))
+    assert rl.pair_lines(["开门线"], [sa], ["到锁到位"], [sb]) == {"开门线": "到锁到位"}
 
 
 def test_default_standard_goes_on_target_line_even_if_another_line_has_one():
@@ -110,15 +66,17 @@ def test_default_standard_goes_on_target_line_even_if_another_line_has_one():
     assert {"line": "反应线", "fair": 0.5, "source": "手动"} in out["experiences"]
 
 
-def test_line_without_range_or_standard_says_not_judged():
+def test_line_without_standard_or_last_time_says_not_judged():
     a = door()
-    j = J.judge(a, rounds(a))
-    lab = next(x for x in j["labels"] if x["kind"] == "line")
-    assert lab["level"] == "未判" and "没判" in lab["why"]
+    lab = next(x for x in J.judge(a, rounds(a))["labels"] if x["kind"] == "line")
+    assert lab["level"] == "未判" and "只记用时" in lab["why"]
     a["experiences"] = [{"line": "开门线", "fair": 1.0, "source": "x"}]    # 有体验标准就照常判
     assert next(x for x in J.judge(a, rounds(a))["labels"] if x["kind"] == "line")["level"] == "可以不改"
 
 
-def test_range_list_page_has_no_hand_typed_standard():
+def test_range_list_is_gone_from_the_page_and_the_server():
+    from fsw.web import app as web
     from tests.test_boss_short import JS
-    assert "rl-fair" not in JS and "rl-src" not in JS and "用户设定" not in JS
+    assert "rangelist" not in JS and 'data-go="range"' not in JS and "rl-fair" not in JS and "用户设定" not in JS
+    src = open(web.__file__, encoding="utf-8").read()
+    assert "/api/rangelist" not in src and "合理范围清单.md" not in src
