@@ -181,6 +181,14 @@ def _translate(rule, back, values):
     return None
 
 
+def point_at(step):
+    """计时点在代码里的位置：文件 + 插在哪行代码前后 + 那行代码（不看行号，改了别处的代码行号会变）。
+    重新找步骤后编号（P7、P8……）会重排，靠它认出两次是不是同一个计时点。没有代码的（你自己加的步骤）返回 None。"""
+    code = " ".join((step.get("code") or "").split())
+    path = step.get("path") or step.get("f")
+    return f"{path}|{step.get('where') or ''}|{code}" if code and path else None
+
+
 def real_scenario(page, standard, values=None):
     """真找完的步骤（结果页数据）+ 标准 → 判快慢用的场景。没有标准就只有段和线、没有范围。"""
     steps = page.get("steps") or []
@@ -262,7 +270,8 @@ def real_scenario(page, standard, values=None):
             "last_points": [x["p"] for x in steps if x.get("felt") == "last" or x.get("once") == "last"],
             "start_late": bool(page.get("startLate")), "start_note": page.get("startNote") or "",
             "optional": [x["p"] for x in steps if x.get("opt")],
-            "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l")} for x in steps},
+            "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l"),
+                                **({"at": a} if (a := point_at(x)) else {})} for x in steps},
             "matched": mp}
 
 
@@ -351,7 +360,7 @@ def with_default_experience(sc):
     kinds = sc.get("point_kinds") or {}
     # 套在终点是"第一下感觉到的结果"的线上：有"到第一下"那条就用它；没有就用要测的这条（它的终点就是唯一那一下）
     line = next((l for l in lines if l.get("first")), None) or (lines[-1] if lines else None)
-    if not line or any(experience_of(sc, l["name"]) for l in lines):
+    if not line or experience_of(sc, line["name"]):  # 只看这条线自己：别的线（比如表情）有体验标准不算
         return sc
     end = ((sc.get("segments") or {}).get((line.get("segments") or [""])[-1]) or {}).get("to")
     if end not in kinds:  # 这条线的终点不是 AI 标的"感觉到的结果"（老的识别结果没标）：不知道人在等什么，不套

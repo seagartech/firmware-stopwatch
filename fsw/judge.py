@@ -11,6 +11,7 @@
 结论标签：
 - 必须改：中位数超过慢阈值，或体验标准判"差"，或 10 次里最慢超过慢阈值；对错问题（比如回答开头被吞）出现就算
 - 建议改：偶发特别慢、先后反了，但没到上一条（不到每 10 次 1 次以上）；或超出合理范围但未超过慢阈值
+- 未判：既没有合理范围、也没有体验标准（新出现的线、重新找步骤后对不上的线），这次没法判快慢，明说，不算"可以不改"
 - 可以不改：在合理范围内
 """
 
@@ -18,7 +19,7 @@ import math
 
 from fsw.scenario import experience_of
 
-LEVELS = ["必须改", "建议改", "可以不改"]
+LEVELS = ["必须改", "建议改", "未判", "可以不改"]
 FEW = 20          # 少于 20 轮：结论只供参考
 SPIKE_RATIO, SPIKE_GAP = 2.5, 0.3   # 偶发特别慢：最慢一次超过一般的 2.5 倍，且多出 0.3 秒以上
 OFTEN = 0.1       # 每 10 次 1 次以上算"经常"
@@ -192,12 +193,16 @@ def judge(scenario, rounds):
             lv = "必须改"
         elif l["verdict"] == "偏慢":
             lv = "建议改"
+        elif l["verdict"] == "没有范围" and l["exp"] is None:
+            lv = "未判"
         else:
             lv = "可以不改"
         if True:  # 每条线都列：没问题的收在"另有 N 条不用改"里，条数才对得上
             why = ("体验标准判差" if l["exp"] == "差" else "中位数超过慢阈值" if slow is not None and l["med"] > slow
                    else "10 次里最慢超过慢阈值" if slow is not None and p90_ok and l["p90"] > slow
-                   else "超出合理范围但未超过慢阈值" if lv == "建议改" else "还没有合理范围" if l["verdict"] == "没有范围"
+                   else "超出合理范围但未超过慢阈值" if lv == "建议改"
+                   else "还没有合理范围，也没有体验标准，这次没判快慢" if lv == "未判"
+                   else "还没有合理范围" if l["verdict"] == "没有范围"
                    else ANSWER_TXT if l["verdict"] == ANSWER
                    else "在合理范围内")
             labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
