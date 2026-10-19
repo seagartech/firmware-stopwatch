@@ -538,3 +538,20 @@ def test_round_is_handed_over_at_the_end_marker_and_late_last_sound_only_updates
     upd = c.feed("FSW,P3,9007000,5")
     assert len(upd) == 1 and upd[0]["update"] and upd[0]["n"] == first[0]["n"] and upd[0]["ends"] == [1.25, 8.007]
     assert m.merge_updates(first + upd) == [{k: v for k, v in upd[0].items() if k != "update"}]
+
+
+def test_round_missing_only_the_answer_length_point_still_counts():
+    # 真测第 38 次：回答完整放了，固件那一轮没打出"声音放完"；"到开口"是齐的，却整轮作废让人重说一句。
+    # 缺的只是不判快慢那条线（到全部放完）上的点：这一轮照样算，那条线这一轮空着；缺"开口"这类影响结论的点照旧补测
+    sc = {"start": {"point": "P1", "name": "你说完"},
+          "segments": {"a": {"from": "P1", "to": "P2", "name": "到开口"}, "b": {"from": "P2", "to": "P3", "name": "放回答"}},
+          "lines": [{"name": "到开口", "segments": ["a"], "first": True}, {"name": "到放完", "segments": ["a", "b"]}], "last_points": ["P3"]}
+    spec = m.Spec.from_scenario(sc)
+    assert spec.soft == {"P3"}
+    lines = ["FSW,RESET,0,0", "FSW,P1,1000000,0", "FSW,P2,2000000,0", "FSW,P3,5000000,1",
+             "FSW,RESET,9000000,0", "FSW,P1,10000000,0", "FSW,P2,11500000,0",          # 这一轮没打出"放完"
+             "FSW,RESET,20000000,0", "FSW,P1,21000000,0", "FSW,P3,25000000,1",         # 这一轮缺"开口"：照旧没收全
+             "FSW,RESET,30000000,0"]
+    out = m.collect(lines, spec)
+    assert [(r["ok"], r.get("ends")) for r in out] == [(True, [1.0, 4.0]), (True, [1.5, None]), (False, None)]
+    assert m.Spec.from_scenario({**sc, "lines": [{**l, "first": False} for l in sc["lines"]]}).soft == set()  # 没有"第一下"那条线时都要
