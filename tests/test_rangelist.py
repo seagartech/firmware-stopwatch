@@ -46,12 +46,12 @@ def test_apply_and_judge_three_verdicts():
     lst, _ = rl.fill(None, door(), rounds(20))
     rl.edit_segment(lst, "read", [0.01, 0.04], 0.08)                          # 0.05 偏慢
     rl.edit_segment(lst, "lock", [0.01, 0.05], 0.08)                          # 0.1 超过慢阈值
-    rl.edit_line(lst, "开门线", None, None, 0.5, "")                          # 体验标准用户设定 0.5 秒
+    rl.edit_line(lst, "开门线", [0.3, 0.45], 0.5)                            # 0.55 左右：超过慢阈值
     j = J.judge(rl.apply(door(), lst), rounds(20))
     v = {g["k"]: g["verdict"] for g in j["segments"]}
     assert v == {"read": "偏慢", "check": "正常", "lock": "超过慢阈值"}
     line = j["lines"][0]
-    assert line["exp"] == "差" and line["exp_std"]["fair"] == 0.5 and line["exp_std"]["source"] == "用户设定"
+    assert line["verdict"] == "超过慢阈值" and line["exp"] is None             # 清单里没有体验标准
     assert j["range_list"]["file"] == rl.FILENAME
 
 

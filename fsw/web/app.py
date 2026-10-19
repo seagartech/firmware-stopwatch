@@ -1532,8 +1532,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         range: list[float | None] | None = None
         slow: float | None = None
         note: str = ""
-        fair: float | None = None       # 体验标准：超过多少秒算差，不设就空着
-        source: str = ""
         project_dir: str | None = None  # 设置页进来时是哪个项目
 
     @app.post("/api/rangelist/edit")
@@ -1551,7 +1549,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if body.kind == "segment":
                 rl.edit_segment(lst, body.key, rng, body.slow, body.note)
             elif body.kind == "line":
-                rl.edit_line(lst, body.key, rng, body.slow, body.fair, body.source)
+                rl.edit_line(lst, body.key, rng, body.slow)
             else:
                 raise HTTPException(400, f"不认识的修改：{body.kind}")
         except rl.ListRuleError as e:

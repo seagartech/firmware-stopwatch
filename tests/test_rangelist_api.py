@@ -27,11 +27,11 @@ def test_list_api_before_and_after_measuring(app):  # noqa: F811
     ok = c.post("/api/rangelist/edit", json={"kind": "segment", "key": seg, "range": [0.1, 0.2], "slow": 0.3, "note": "厂家给的"}).json()
     assert ok["list"]["segments"][seg]["note"] == "厂家给的"
     line = j["list"]["lines"][-1]["name"]
-    r = c.post("/api/rangelist/edit", json={"kind": "line", "key": line, "range": None, "slow": None, "fair": 1.2}).json()
+    r = c.post("/api/rangelist/edit", json={"kind": "line", "key": line, "range": [0.001, 0.002], "slow": 0.003}).json()
     l = next(x for x in r["list"]["lines"] if x["name"] == line)
-    assert l["fair"] == 1.2 and l["source"] == "用户设定" and l["range"] is None
+    assert l == {"name": line, "range": [0.001, 0.002], "slow": 0.003}       # 线只有范围和慢阈值，没有手填的体验标准
     rep = c.get("/api/report").json()
-    assert rep["lines"][-1]["exp_std"]["fair"] == 1.2                       # 报告马上按新的判
+    assert next(x for x in rep["lines"] if x["name"] == line)["verdict"] == "超过慢阈值"   # 报告马上按新的判
 
 
 def test_broken_list_is_reported_not_ignored(app):  # noqa: F811
