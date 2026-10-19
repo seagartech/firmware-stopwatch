@@ -1069,7 +1069,7 @@ const realCol=()=>realFlash()&&FSWJ&&FSWJ.status==='done';
 const CX=()=>realCol()&&RCT?RCT:COLLECT[scene];
 async function loadRCT(){const P=IDENT.page,st=(P.measure||'').split('→')[0].trim(),names=Object.fromEntries((P.steps||[]).map(x=>[x.p,x.n]));
  try{const t=await (await fetch('/api/rounds?'+new URLSearchParams({what:hSay===WHOLE?`${P.measure||''} ${P.mainTitle||''}`:hSay||P.mapWhat||'',start:st}))).json();
-  const opt=new Set((P.steps||[]).filter(x=>x.opt).map(x=>x.p));RCT={...t,ph:[...(P.main||[]).filter(k=>!opt.has(k)&&live().some(x=>x.p===k)).map(k=>names[k]).filter(Boolean),'这一轮记好了'],probs:(COLJ&&COLJ.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}))};if(page==='collect')render()}catch(e){}}
+  const opt=new Set((P.steps||[]).filter(x=>x.opt).map(x=>x.p));const pk=(P.main||[]).filter(k=>!opt.has(k)&&live().some(x=>x.p===k)&&names[k]);RCT={...t,pk,ph:[...pk.map(k=>names[k]),'这一轮记好了'],probs:(COLJ&&COLJ.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}))};if(page==='collect')render()}catch(e){}}
 // 体验标准出处末尾的原文网址很长、中间没有断点，会把卡片撑出页面（真测第 29 次）：换成一个短的「原文链接」
 const srcHtml=t=>htmlEsc(t).replace(/https?:\/\/[^\s，。；）]+/g,u=>`<a href="${u}" target="_blank" rel="noopener">原文链接</a>`);
 const noExp=D=>(D&&D.J&&D.J.scenario&&D.J.scenario.exp_skip)||'这个场景没有体验标准';  // 起点比人做完晚一截时说清为什么不比
@@ -1079,6 +1079,9 @@ function realD(){const P=IDENT.page,[,mEnd]=(P.measure||'起点 → 终点').spl
  return {lines,S:{startShort:sShort,exp:COLJ&&COLJ.experience?{fair:COLJ.experience.fair}:null},rounds:okRounds().map(r=>({ends:r.e}))}}
 const DX=()=>realCol()?realD():build(SCENES[scene]);
 const PH=()=>CX().ph;
+// 步骤条：真测时按这一轮真正到了哪几个点涂绿（有的点设备要到一轮结束才打出来，按个数从左往右涂会停在中间、还把没到的涂绿）；加粗第一个还没到的
+function phCls(){const ph=PH(),pk=CX().pk,h=col.have;if(!pk||!h)return ph.map((p,i)=>[p,i<col.phase?'ok':i===col.phase?'cur':'']);
+ const s=new Set(h),cur=pk.findIndex(k=>!s.has(k));return ph.map((p,i)=>[p,i<pk.length?(s.has(pk[i])?'ok':i===cur?'cur':''):(cur<0?'cur':'')])}
 // 多轮实测：后台一行行读设备输出（没真源码时回放演示数据的设备输出），按轮切分、算用时、查问题；这里每 0.3 秒问一次
 let colES=null;
 function colStop(){if(colT){clearInterval(colT);colT=null}if(colES){colES.close();colES=null}}
@@ -1090,7 +1093,7 @@ function colWatch(){colStop();const poll=()=>{if(!colT)colT=setInterval(async()=
 function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>({k:x.key,t:x.name,c:x.level==='bad'?'bad':'warn'}));const C=CX(),before=col.got.length;if(j.status==='done'||j.status==='stopped'||j.status==='suspect'){fetchReport();if(realFlash())histLoad()}
  col.got=(j.rounds||[]).map(r=>r.ok?{n:r.n,e:r.ends,probs:C.probs.filter(p=>(r.probs||[]).includes(p.k)),att:r.att,segs:r.segs}:{bad:true,att:r.att,missing:r.missing||[]});
  col.att=col.got.length?col.got[col.got.length-1].att:0;col.last=j.last||'';col.msg=j.status==='paused'||j.status==='waiting_device'?(j.message||'没看到设备：用 USB 线插上，插上会自动开始'):(j.half_hint||j.hint||'');  // 调试口开着却没有计时点：说是哪种情况，不停下
- const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));
+ const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));col.have=got>=need?null:j.have||null;
  // 收好一轮不响，只有没收全才低响一声：测全程时一轮要等设备把回答整段放完才算收好，那时再"叮"一声人只会觉得提示音晚了
  for(const x of col.got.slice(before))if(x.bad)ding(true)
  if(j.status==='done'){colStop();col.st=2}else if(j.status==='suspect'){colStop();col.st=4}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
@@ -1130,7 +1133,7 @@ function colB(){const k=okRounds().length,cur=Math.min(k,colN-1),C=CX();
  const sq=x=>{const p=x.probs&&x.probs[0];return x.bad?`<i class="sq bad" tabindex="0" data-tip="${tipOf(x)}"></i>`:`<i class="sq" tabindex="0" data-tip="${tipOf(x)}" style="background:${p?`var(--${p.c})`:'var(--ok)'}"></i>`};  // 没收全的格子画斜线，和还没测的空格分得开（真测第 29 次：以为还差一格没测）
  return `<section class="panel" style="text-align:center">
  ${col.st===1?`<p class="note" style="margin:0">第 ${cur+1} 轮 / 共 ${colN} 轮</p><p style="font-size:15px;margin:10px 0 4px">${col.phase===0?C.say:C.said}</p><p style="font-size:26px;font-weight:600;margin:0 0 16px">"${C.items[cur%C.items.length]}"</p>
- <div class="phs">${PH().map((p,i)=>`<span class="${i<col.phase?'ok':i===col.phase?'cur':''}">${p}</span>`).join('<b>→</b>')}</div>`:col.st===4?`<p style="font-size:20px;font-weight:600">已暂停：第 1 轮自动校验没通过</p>`:col.st===3?`<p style="font-size:20px;font-weight:600">已停止：测了 ${k} / ${colN} 轮</p>`:`<p style="font-size:20px;font-weight:600">测完了</p>`}
+ <div class="phs">${phCls().map(([p,c])=>`<span class="${c}">${p}</span>`).join('<b>→</b>')}</div>`:col.st===4?`<p style="font-size:20px;font-weight:600">已暂停：第 1 轮自动校验没通过</p>`:col.st===3?`<p style="font-size:20px;font-weight:600">已停止：测了 ${k} / ${colN} 轮</p>`:`<p style="font-size:20px;font-weight:600">测完了</p>`}
  <div class="sqs">${col.got.map(sq).join('')}${[...Array(Math.max(0,colN-k))].map(()=>'<i class="sq"></i>').join('')}</div>
  <p class="note" style="margin-bottom:2px">一格是一轮，颜色表示这轮有没有出问题（不是快慢）。鼠标移到格子上看这轮各段用时。</p><p class="note"><i class="dot" style="background:var(--ok)"></i>正常　${C.probs.map(p=>`<i class="dot" style="background:var(--${p.c})"></i>${p.t}　`).join('')}<i class="sq bad" style="width:10px;height:10px;vertical-align:-1px"></i> 没收全，不计入，自动补一轮　<i class="sq" style="width:10px;height:10px;vertical-align:-1px"></i> 还没测</p>
  ${col.got.filter(x=>x.bad||x.probs.length).slice(-3).reverse().map(x=>`<p class="note" style="margin:2px 0">${x.bad?'第 '+x.att+' 次':'第 '+x.n+' 轮'}：${issues(x)}</p>`).join('')}

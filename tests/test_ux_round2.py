@@ -443,3 +443,14 @@ def test_failed_trial_stays_on_the_measurement_page():
             "\nconst a=runView();fl.err='build';console.log(JSON.stringify([a,runView()]));")
     assert json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout) == [True, False]
     assert 'data-flx="retry"' in grab("runPage")
+
+
+@node
+def test_step_bar_colours_the_points_that_really_arrived():
+    """10-19：设备要到一轮结束才打出"你说完"那两个点，按个数从左往右涂会一直停在"收到第一段声音"，还把没到的涂绿。"""
+    setup = ("globalThis.CX=()=>({pk:['P1','P2','P3','P6','P8'],ph:['说完','录音发出','听写','开始说话','第一段声音','这一轮记好了']}),"
+             "globalThis.PH=()=>CX().ph,")
+    out = run(["phCls"], f"({setup}globalThis.col={{have:['P3','P6','P8'],phase:3}},phCls())")
+    assert [c for _, c in out] == ["cur", "", "ok", "ok", "ok", ""]
+    out = run(["phCls"], f"({setup}globalThis.col={{have:null,phase:5}},phCls())")  # 收全了：按原来的走，停在"这一轮记好了"
+    assert [c for _, c in out] == ["ok"] * 5 + ["cur"]
