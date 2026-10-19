@@ -31,6 +31,8 @@ HEADER = r"""// fw_stopwatch.h —— 固件码表的计时点工具（只记时
 //
 // 串口每个计时点打印一行：FSW,P<编号>,<开机后微秒>,<附加值>
 // 每轮开始打印：FSW,RESET,<开机后微秒>,0
+// "记最后一次"的点到一轮开始时还没打印出来（比如设备先回到等待、后放空声音）：清零前先补打一行
+// FSW,LATE,P<编号>,<那次的微秒>,<这一轮几次>，码表只把它当"取最后一次"的终点用
 // 开销：取时间用 esp_timer_get_time()，只用原子读写，不分配内存、不加锁。
 #pragma once
 #include <stdint.h>
@@ -96,12 +98,13 @@ static inline void fsw_flush_last(int id) {
     if (us) fsw_print(id, us, n);
 }
 
-// 一轮开始：清零
+// 一轮开始：清零（"记最后一次"还没打印的先补打一行 LATE，不然这一轮就少了这个点）
 static inline void fsw_round_reset(void) {
     for (int i = 0; i < FSW_MAX_ID; i++) {
         __atomic_store_n(&fsw_done[i], (unsigned char)0, __ATOMIC_RELAXED);
-        __atomic_store_n(&fsw_last_us[i], (int64_t)0, __ATOMIC_RELAXED);
-        __atomic_store_n(&fsw_last_n[i], (int32_t)0, __ATOMIC_RELAXED);
+        int64_t us = __atomic_exchange_n(&fsw_last_us[i], (int64_t)0, __ATOMIC_RELAXED);
+        int32_t n = __atomic_exchange_n(&fsw_last_n[i], (int32_t)0, __ATOMIC_RELAXED);
+        if (us) printf("FSW,LATE,P%d,%lld,%ld\n", i, (long long)us, (long)n);
     }
     __atomic_store_n(&fsw_armed, (unsigned char)0, __ATOMIC_RELAXED);
     printf("FSW,RESET,%lld,0\n", (long long)esp_timer_get_time());
@@ -575,7 +578,7 @@ def insert(llm, root, steps, backup, on_progress=None, needs=None):
             "seconds": round(time.time() - t0, 1)}
 
 
-MARK = re.compile(r"^FSW,P(\d+),\d+,-?\d+\s*$")
+MARK = re.compile(r"^FSW,(?:LATE,)?P(\d+),\d+,-?\d+\s*$")
 
 
 def count_marks(lines):

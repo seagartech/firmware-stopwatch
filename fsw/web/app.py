@@ -874,7 +874,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     rounds["cur"] = set()
                     rounds["tail"] = []
                     return
-                if p:
+                if p or meas.LATE.search(line):
                     rounds.setdefault("tail", []).append(line)  # 这一轮到现在的计时点：试通时交给多轮实测，这一轮接着算（不用再多说一句）
                 got = ins.count_marks([line]) & want
                 rounds["seen"] |= got
