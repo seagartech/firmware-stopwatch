@@ -318,7 +318,7 @@ def test_playing_the_answer_is_not_judged_by_range_and_every_line_is_listed():
     cur = lambda i: {"P1": (0, 0), "P2": (500_000, 0), "P3": (900_000, 0), "P4": (4_000_000 + i * 300_000, 0)}  # 回答有长有短
     out = jdg.judge(sc, [{"n": i + 1, **m.compute(cur(i), spec)} for i in range(10)])
     seg = {g["k"]: g["verdict"] for g in out["segments"]}
-    assert seg["P3-P4"] == jdg.ANSWER and seg["P1-P2"] == "正常"
+    assert seg["P3-P4"] == jdg.ANSWER and seg["P1-P2"] == jdg.RECORDED
     last = out["lines"][-1]
     assert last["verdict"] == jdg.ANSWER and last["combo"] == jdg.ANSWER_TXT
     labels = {x["line"]: x for x in out["labels"] if x["kind"] == "line"}
@@ -327,7 +327,7 @@ def test_playing_the_answer_is_not_judged_by_range_and_every_line_is_listed():
 
 
 def test_steady_segment_while_playing_is_still_judged():
-    # 亲测第 20 次："放完设备里剩下的声音"每轮 0.12～0.14 秒，跟回答长短无关，照常按范围判
+    # 亲测第 20 次："放完设备里剩下的声音"每轮 0.12～0.14 秒，跟回答长短无关，照常判（第一次测：只记用时，不算"看回答长短"）
     from fsw import standards as stds, judge as jdg
     steps = _talk([("P1", "收到听写文字"), ("P2", "喇叭出第一声"), ("P3", "服务器说完"), ("P4", "喇叭最后一声")])
     segs = [{"a": "P1", "b": "P2", "t": "等声音"}, {"a": "P2", "b": "P3", "t": "边收边放"}, {"a": "P3", "b": "P4", "t": "放完剩下的"}]
@@ -341,7 +341,7 @@ def test_steady_segment_while_playing_is_still_judged():
         cur = {"P1": (0, 0), "P2": (100_000, 0), "P3": (int((0.1 + play) * 1e6), 0), "P4": (int((0.23 + play) * 1e6), 0)}
         rounds.append({"n": i + 1, **m.compute(cur, spec)})
     seg = {g["k"]: g["verdict"] for g in jdg.judge(sc, rounds)["segments"]}
-    assert seg["P2-P3"] == jdg.ANSWER and seg["P3-P4"] == "正常"
+    assert seg["P2-P3"] == jdg.ANSWER and seg["P3-P4"] == jdg.RECORDED
 
 
 def test_retest_entry_goes_to_the_one_page_run_too():
@@ -352,9 +352,9 @@ def test_retest_entry_goes_to_the_one_page_run_too():
 
 
 def test_no_range_yet_does_not_say_slower_than_it_should_be():
-    # 10-18 真机：第一次测、体验可以，却写"比这套做法该有的慢，可能有隐患"：没有合理范围，没有可比的
+    # 10-18 真机：第一次测、体验可以，却写"比这套做法该有的慢，可能有隐患"：第一次测没有可比的，只说体验
     from fsw import judge as jdg
-    assert jdg.combo("可以", False, "没有范围") == "体验可以；还没有合理范围，先只记用时"
+    assert jdg.combo("可以") == "体验可以"
 
 
 def test_felt_roles_split_lines_for_any_device(tmp_path):

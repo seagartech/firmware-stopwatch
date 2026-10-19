@@ -38,7 +38,7 @@ def test_demo_bar_of_the_prototype_is_not_in_the_real_page(client):
 def test_every_prototype_page_has_a_renderer():
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     for fn in ["settingsPage", "stepsPage", "flashPage", "collectPage", "reportPage",
-               "comparePage", "retestPage", "rangePage", "modalHTML", "popHTML", "flowBar"]:
+               "comparePage", "retestPage", "modalHTML", "popHTML", "flowBar"]:
         assert f"function {fn}(" in js, f"app.js 里没有 {fn}"
     assert "HOME={" in js
 
@@ -300,14 +300,6 @@ def test_suggestions_have_no_duplicates():
     """首页常用语：这个项目测过的 → AI 推荐 → 通用例子，同一句只出现一次。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "new Set(" in js.split("function chips(")[1].split("\nfunction ")[0]
-
-
-def test_real_range_page_shows_this_runs_standard_not_demo():
-    """报告里"合理范围依据"：真流程看这次对上的标准和实测基线（只读），不再显示演示数据的标准文件。"""
-    js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
-    assert "function rangeReal(" in js
-    page = js.split("function rangePage(")[1][:900]
-    assert "if(!RLP&&!(realFlash()&&JREP&&!JREP._none))return rangeDemo()" in page and "if(RL.none)return RLP?" in page and ":rangeReal();" in page
 
 
 def test_task20_plain_hints_and_restore_entries():
