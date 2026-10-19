@@ -572,3 +572,17 @@ def test_header_prints_pending_last_values_before_reset():
     body = ins.HEADER.split("static inline void fsw_round_reset")[1]
     assert body.index("FSW,LATE,P%d") < body.index("FSW,RESET")
     assert ins.count_marks(["FSW,LATE,P9,123,4", "FSW,P2,5,0"]) == {9, 2}
+
+
+def test_late_line_after_the_next_step_is_not_used():
+    # 真测第 41 次第 1 轮：听写结果回来后设备又发出一小段录音，清零前补打的那次比下一步（听写结果）晚 0.014 秒，
+    # 顶替了正常打出的那次，第 1 轮校验报先后反了。补打的那次晚过下一步就不用；线的最后一个点没有下一步，照样补上
+    sc = {"start": {"point": "P1", "name": "你说完"},
+          "segments": {"a": {"from": "P1", "to": "P2", "name": "发录音"}, "b": {"from": "P2", "to": "P3", "name": "听写"}},
+          "lines": [{"name": "到录音发完", "segments": ["a"]}, {"name": "到听写", "segments": ["a", "b"]}], "last_points": ["P2", "P3"]}
+    spec = m.Spec.from_scenario(sc)
+    assert spec.last == {"P2", "P3"}
+    lines = ["FSW,RESET,0,0", "FSW,P1,1000000,0", "FSW,P2,1500000,0", "FSW,P3,2000000,0", "FSW,LATE,P2,2014000,9",
+             "FSW,RESET,9000000,0", "FSW,P1,10000000,0", "FSW,P2,10400000,0", "FSW,P3,11000000,0", "FSW,RESET,14000000,0"]
+    out = m.collect(lines, spec)
+    assert [(r["ok"], r.get("ends")) for r in out] == [(True, [0.5, 1.0]), (True, [0.4, 1.0])]

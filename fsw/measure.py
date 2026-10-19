@@ -112,9 +112,12 @@ def suspects(rnd, scenario):
     """第 1 轮收齐后自动校验计时点位置（决策 158）：哪一段终点比起点先记到（用时为负），两个计时点的先后对不上，多半插错了位置。
     不按"经过服务器的段至少多久"判：服务器常把两条消息连着发，真实只有一两毫秒（第 4 次真机自验误停过）。"""
     out = []
+    last = set(scenario.get("last_points") or []) - {(scenario.get("start") or {}).get("point")}
     for k, g in (scenario.get("segments") or {}).items():
         v = (rnd.get("segs") or {}).get(k)
         if v is None or v >= 0:
+            continue
+        if g.get("from") in last:  # "记最后一次"的中间点越过了下一步：不是插错，报告里把前后两段合成一段（见 judge.merge_overruns）
             continue
         out.append({"segment": k, "name": g.get("name") or k, "seconds": v, "why": "这段终点比起点先记到，两个计时点的先后对不上"})
     return out
@@ -232,8 +235,13 @@ class Collector:
         p = parse_line(line)
         if not p:
             m = LATE.search(line or "")
-            # 只当"取最后一次"的终点用（比如设备先回到等待、后放空声音的最后一声）；别的点（比如没走完的起点）补打出来也不算
+            # 只当"取最后一次"的终点用（比如设备先回到等待、后放空声音的最后一声）；别的点（比如没走完的起点）补打出来也不算。
             if not m or m.group(1) not in self.spec.last:
+                return []
+            # 补打的那次晚过了它的下一步（比如听写结果回来后又发出的一小段录音）：不是这一步该算的那次，不要
+            # （真测第 41 次第 1 轮：拿它顶替正常打出的那次，先后反了 0.014 秒）
+            nxt = [self.cur[b][0] for a, b in self.spec.segments.values() if a == m.group(1) and b in self.cur]
+            if nxt and int(m.group(2)) > min(nxt):
                 return []
             p = (m.group(1), int(m.group(2)), int(m.group(3)))
         self.last = line.strip()

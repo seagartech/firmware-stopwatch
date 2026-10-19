@@ -213,6 +213,8 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
 // 起点按计时点自己的名字叫（比如"设备听出你停了"），不叫"你说完"：它是设备自己察觉的时刻，比人真正做完晚（决策 135）
 function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
 function startLagLine(name,L){return `<p class="note" style="margin:4px 0 0">起点是「${htmlEsc(name)}」，是设备自己察觉的时刻。${L?`人实际停嘴还要再早约 ${(Math.round(L.secs*10)/10).toFixed(1)} 秒（${htmlEsc(L.when||'')} 用 ${htmlEsc(L.how||'录音')}核对过${L.rounds?`，${L.rounds} 轮`:''}），按人的感受，各条线的用时都要再加上这么多。`:'人实际做完的那一刻还要早一点，码表看不到，还没核对过。'}</p>`}
+// 「记最后一次」的中间点越过了下一步：前后两段合成了一段（见 judge.merge_overruns），写明合了哪两段、为什么
+const mergedLine=M=>(M||[]).map(m=>`<p class="note" style="margin:4px 0 0">「${htmlEsc(m.names[0])}」和「${htmlEsc(m.names[1])}」合成一段算：${htmlEsc(m.why)}。</p>`).join('');
 function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:'',Q.nostart?`${Q.nostart} 次没记到起点「${Q.startName||'起点'}」`:''].filter(Boolean);
  return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}。数字都是码表按这些轮算的，不经过 AI。</p>`}
 function subline(D){
@@ -675,7 +677,7 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag)+mergedLine(JREP.merged):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2><details class="lvwhy" style="margin:-4px 0 8px"><summary>画的是第 ${D.rep.n} 轮</summary><p class="note" style="margin:4px 0 0">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p></details>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
