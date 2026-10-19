@@ -260,6 +260,7 @@ def test_best_fix_is_the_biggest_segment_the_device_code_can_change():
     rs = [{"n": i + 1, "segs": {"a": 0.2, "b": 1.0, "c": 0.3, "d": 0.9}, "ends": [2.4], "probs": []} for i in range(10)]
     bf = J.judge(s, rs)["best_fix"]
     assert bf["k"] == "c" and bf["share"] == 12.5          # 服务器那段（设备外）、推算的段不算；只写占多少
+    assert bf["device_share"] == 20.8                      # 设备上能改的段合计：a 0.2 + c 0.3 = 0.5，占 2.4 的 20.8%
 
 
 def test_best_fix_skips_answer_length_segments():

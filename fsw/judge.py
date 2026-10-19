@@ -197,7 +197,9 @@ def judge(scenario, rounds, prev=None):
         if cand:
             k = max(cand, key=lambda k: byk[k]["med"])
             out["best_fix"] = {"k": k, "name": byk[k]["name"], "med": byk[k]["med"], "line": tgt["name"],
-                               "share": round(byk[k]["med"] / tgt["med"] * 100, 1) if tgt["med"] else None}
+                               "share": round(byk[k]["med"] / tgt["med"] * 100, 1) if tgt["med"] else None,
+                               # 设备上能改的段合计占多少：最大那段占得少时，看得出是整条线本来就主要花在设备外
+                               "device_share": round(sum(max(0, byk[x]["med"]) for x in cand) / tgt["med"] * 100, 1) if tgt["med"] else None}
 
     labels = []
     line_by = {l["name"]: l for l in out["lines"]}
