@@ -422,10 +422,26 @@ class Collector:
             return shown[x]
         return [x for x in self.spec.need if ok(x)]
 
+    def close_carried(self):
+        """试一次带过来的那一轮已经收全：马上交出（格子马上变绿），不等下一句开始才知道它结束了
+        （10-19 用户："说完今天星期几格子不变色，说完恐龙一下子绿两个"）。这一轮的结束标记在换调试口时过去了，读不到，
+        所以当它已经结束：后面的点算下一轮；它回答还没放完、晚到的"最后一声"照样算回它（只更新数，见 _prev_update），
+        直到下一个结束标记。"""
+        if not (self.ready and not self.done and self.spec.last):
+            return []
+        r = self._close()
+        self.prev = {"cur": self.cur, "occ": self.occ, "reset_us": self.reset_us, "miss": set(), "until": float("inf"),
+                     "at": time.monotonic(), "ready": True, "sent": r, "carry": True}
+        self.last_cur, self.post = dict(self.cur), {}
+        self.started, self.cur, self.done, self.first = True, {}, False, False
+        self.occ, self.reset_us = {}, None
+        self.ready, self.ready_at = False, None
+        return [r]
+
     def flush(self, settle=0.0):
         """收全了、已经等了 settle 秒（设备可能不再开始下一轮，比如最后一轮）：收尾，交出这一轮。"""
         out = []
-        if self.prev and time.monotonic() - self.prev["at"] > LATE_US / 1e6 + 0.5:  # 等尾巴等过了时（设备之后没再输出）
+        if self.prev and not self.prev.get("carry") and time.monotonic() - self.prev["at"] > LATE_US / 1e6 + 0.5:  # 等尾巴等过了时（设备之后没再输出）
             out += self._prev_close()
         if self.spec.last:
             settle = max(settle, LAST_QUIET)

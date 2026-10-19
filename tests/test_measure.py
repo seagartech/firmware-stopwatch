@@ -289,3 +289,46 @@ def test_step_bar_does_not_light_the_last_one_while_still_playing():
               "FSW,P9,5820000,0", "FSW,P1,4600000,2", "FSW,P2,4950000,80", "FSW,P10,6500000,9"]:
         c.feed(l)
     assert "P10" not in c.have() and "P9" in c.have() and "P1" in c.have()
+
+
+def test_carried_round_turns_green_right_away():
+    """10-19 用户："说完今天星期几格子不变色，说完恐龙一下子绿两个"。试一次带过来的那一轮已收全：开测就交出，
+    下一句照常单独成一轮，两轮的数和整份一起算时一样。"""
+    c = m.Collector(interrupt_spec())
+    out = []
+    for l in MISSED_RESET_LOG[:10]:
+        out += c.feed(l)
+    assert not [r for r in out if r.get("ok")]  # 以前：要等下一句的"你说完"打出来才交
+    first = c.close_carried()
+    assert len(first) == 1 and first[0]["ok"] and round(first[0]["ends"][2], 2) == 10.62
+    c.ready_at = None
+    out += c.flush()  # 等尾巴的这一轮不会被按时清掉
+    assert c.prev and c.prev.get("carry")
+    for l in MISSED_RESET_LOG[10:]:
+        out += c.feed(l)
+    ok = first + [r for r in out if r.get("ok")]
+    assert len(ok) == 2 and [round(r["ends"][2], 2) for r in ok] == [10.62, 7.21]
+    assert round(ok[1]["ends"][1], 3) == round((33478312 - 32387776) / 1e6, 3)
+
+
+def test_carried_round_still_takes_its_late_last_sound():
+    """带过来的那一轮交出后回答还在放：晚到的"声音放完"只更新这一轮的数，不算新的一轮，也不进下一轮。"""
+    c = m.Collector(interrupt_spec())
+    for l in MISSED_RESET_LOG[:10]:
+        c.feed(l)
+    first = c.close_carried()
+    upd = c.feed("FSW,P10,25758257,5")  # 第 1 轮回答又放了 3 秒
+    assert len(upd) == 1 and upd[0].get("update") and upd[0]["n"] == first[0]["n"] and round(upd[0]["ends"][2], 2) == 13.62
+    out = []
+    for l in MISSED_RESET_LOG[10:]:
+        out += c.feed(l)
+    ok = [r for r in m.merge_updates(first + upd + out) if r.get("ok")]
+    assert [round(r["ends"][2], 2) for r in ok] == [13.62, 7.21]
+
+
+def test_carried_round_not_complete_is_left_alone():
+    """带过来的那一轮没收全（比如还差最后一声）：不提前交，照旧等。"""
+    c = m.Collector(interrupt_spec())
+    for l in MISSED_RESET_LOG[:9]:
+        c.feed(l)
+    assert c.close_carried() == []

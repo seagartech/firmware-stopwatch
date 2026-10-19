@@ -1260,6 +1260,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if any((meas.parse_line(l) or (None,))[0] == coll.spec.start for l in carry["lines"]):
                 for l in carry["lines"]:
                     on_line(l)
+                with job["_lock"]:
+                    take(coll.close_carried())  # 带过来的这一轮已经收全：马上交出，格子马上变绿
             else:  # 这一轮没有起点（只喊了唤醒词，其余收齐就试通了）：不是要测的那件事，到下一个结束标记前的都不算，也不报"开头没收到"
                 coll.skip_round()
 
