@@ -454,3 +454,12 @@ def test_step_bar_colours_the_points_that_really_arrived():
     assert [c for _, c in out] == ["cur", "", "ok", "ok", "ok", ""]
     out = run(["phCls"], f"({setup}globalThis.col={{have:null,phase:5}},phCls())")  # 收全了：按原来的走，停在"这一轮记好了"
     assert [c for _, c in out] == ["ok"] * 5 + ["cur"]
+
+
+@node
+def test_report_line_uses_the_round_totals_even_when_a_segment_is_empty():
+    """10-19：被打断那几轮中间两段空着，线的用时后台按首尾算好了；报告网页按段相加把这几轮丢了，中位写成 1.22（实际 1.34）、最慢 1.42（实际 2.44）。"""
+    expr = ("(()=>{const S={lines:[{name:'开口',segs:['a','b'],ok:[0,9]}],segs:{a:{v:[0.5,0.6,0.7]},b:{v:[0.5,null,0.7]}}};"
+            "S.lines[0].ends0=[1.0,2.5,1.4];const L=build(S).lines[0];return [L.med,L.max]})()")
+    assert run(["LCOL", "LSOFT", "num", "sorted", "med", "p90", "mx", "build"], expr) == [1.4, 2.5]
+    assert "ends0:li<0?null:J.rounds.map(r=>(r.ends||[])[li]??null)" in JS  # 真测报告把后台每轮的线用时带进来

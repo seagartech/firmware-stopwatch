@@ -16,7 +16,7 @@ const LSOFT=['var(--face-soft)','var(--speak-soft)','var(--soft)','var(--soft)']
 function build(S){S.lines.forEach(l=>{if(l.slow==null)l.slow=Infinity});  // 没有算慢线：不算慢
   const n=Object.values(S.segs)[0].v.length;
   const use={};S.lines.forEach(l=>l.segs.forEach(k=>use[k]=(use[k]||0)+1));
-  const lines=S.lines.map((l,i)=>{const ends=[...Array(n)].map((_,r)=>l.segs.some(k=>S.segs[k].v[r]==null)?null:l.segs.reduce((t,k)=>t+S.segs[k].v[r],0));
+  const lines=S.lines.map((l,i)=>{const ends=[...Array(n)].map((_,r)=>l.ends0&&l.ends0[r]!=null?l.ends0[r]:l.segs.some(k=>S.segs[k].v[r]==null)?null:l.segs.reduce((t,k)=>t+S.segs[k].v[r],0));
     return {...l,i,col:LCOL[i],soft:LSOFT[i],ends,med:med(ends),p90:p90(ends),max:mx(ends),segMed:l.segs.map(k=>med(S.segs[k].v))}});
   const rounds=[...Array(n)].map((_,r)=>({n:r+1,ends:lines.map(l=>l.ends[r])}));
   let reversed=[];
@@ -62,7 +62,9 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const sc=lenByContent(J),st={...Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),...(sc.points||{})},rng=r=>r?`${r[0]}～${r[1]??'不限'}`:'—';
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,ok:rng(g.range),slow:g.slow,v:val(k)}]));
  const P=IDENT.page,mEnd=sc.cutEnd||(P.measure||'起点 → 终点').split('→').map(x=>x.trim())[1],sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
- const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first?l.end:side?(sEnd||l.end):mEnd;return {name:l.name,end,phrase:(side&&!l.first?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity}});
+ const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first?l.end:side?(sEnd||l.end):mEnd;const li=J.scenario.lines.findIndex(x=>x.name===l.name);
+  // 线的用时用后台每轮按首尾算的数（中间某段空着的轮也有，比如被打断那几轮）；按段相加会把这些轮丢掉（10-19：报告写 1.22、实际中位 1.34）
+  return {name:l.name,end,phrase:(side&&!l.first?'先':'后')+end,segs:l.segments,ok:l.range,slow:l.slow??Infinity,ends0:li<0?null:J.rounds.map(r=>(r.ends||[])[li]??null)}});
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
