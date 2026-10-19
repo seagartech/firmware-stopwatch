@@ -398,7 +398,7 @@ function autoStart(){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=docum
 // 测量页（决策 158，原型 ②）：点了「开始测量」就在这一页走到底；要人操作时大字提示，出问题才回到原来的页面让人处理
 function runView(){if(!AUTO||autoHold||pop)return false;
  if(page==='home')return hStage===3&&stepsRead!==3;
- if(page==='flash')return fl.st!==5;
+ if(page==='flash')return fl.st!==5||fl.err==='try';  // 试测没通过留在测量页，点「再试一次」接着测，不退回老的插点烧录页
  if(page==='collect')return col.st===1||col.st===2||col.st===4;
  return false}
 function runAt(){if(page==='home')return 0;if(page==='flash')return fl.step<=1&&fl.st!==3?1:fl.step<4?2:3;return col.st===2?5:4}
@@ -416,6 +416,7 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
  else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>未检测到设备：连接 USB，或按电源键开机</b><span class="note">设备闲置一段时间会自动关机。计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
  else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?'AI 读取源码，确定每个计时点的插入位置':fl.step===3?'正在写入设备，请勿拔线':'编译带计时点的固件')}</span></div>`;
+ else if(at===3&&fl.st===5){const E=(FSWJ&&FSWJ.err)||{};now=`<div class="errbox"><b>试测没通过${htmlEsc(E.error||'')}</b><p style="margin:6px 0">${htmlEsc(E.message||'')}</p>${E.why?`<p class="note" style="margin:0 0 6px">${htmlEsc(E.why)}</p>`:''}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-flx="retry">再试一次</button></div></div>`}
  else if(at===3){const N=FSWJ?FSWJ.need||FSWJ.total||live().length:live().length,got=FSWJ?(FSWJ.got||[]).length:0;now=tryBox(got,N).replace('<div class="bigask">','<div class="bigask"><span class="lab">人工操作 · 试测（校验计时点，不计入数据）</span>')}
  else if(col.st===4)now=suspectBox();
  else if(col.st===2)now=`<div class="bigask auto"><span class="lab">自动执行</span><b><span class="spin"></span> 正在生成分析报告</b></div>`;
