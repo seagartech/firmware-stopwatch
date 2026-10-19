@@ -470,3 +470,12 @@ def test_range_skips_rounds_without_a_value():
     """10-19：第 2 轮没换表情，表情这条那轮没数，范围写成了 0.00～1.87。"""
     out = run(["f", "fms", "rangeTxt"], "rangeTxt([null,0.62,1.87],[1,2,3])")
     assert out.startswith("0.62") and "0.00" not in out
+
+
+@node
+def test_report_takes_line_and_segment_numbers_from_the_backend():
+    """网页不自己再算一遍一般/最慢/最差，用后台判定里的数。"""
+    expr = ("(()=>{const D={lines:[{name:'开口',med:1.22,p90:1.42,max:1.42}],allSegs:[{k:'a',med:0.1,max:0.2}],rounds:[],main:null};D.main=D.lines[0];"
+            "const J={lines:[{name:'开口',med:1.34,p90:1.46,max:2.44}],segments:[{k:'a',med:0.3,max:0.5}],labels:[]};"
+            "withJudge(D,J);return [D.lines[0].med,D.lines[0].p90,D.lines[0].max,D.allSegs[0].med,D.allSegs[0].max]})()")
+    assert run(["withJudge"], f"(globalThis.VCLS={{}},{expr})") == [1.34, 1.46, 2.44, 0.3, 0.5]
