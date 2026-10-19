@@ -187,3 +187,46 @@ def test_interrupted_answer_does_not_throw_away_the_next_round():
         # "最后一段录音发出"记最后一次、可能越过下一步（报告把两段合一段，见 judge.merge_overruns），不在这里查
         assert all(v is None or v >= 0 for k, v in r["segs"].items() if k not in ("P1-P2", "P2-P3"))
     assert [round(r["ends"][1], 3) for r in ok] == [1.49, 1.45, 1.46]  # 到开始出声 = 开始出声 - 你说完
+
+
+# ---- 10-19 真测：试一次收齐后到正式实测开始读之间，设备回到聆听的那个结束标记没读到 ----
+MISSED_RESET_LOG = """FSW,P3,12486453,0
+FSW,P6,12501091,0
+FSW,P7,12503571,0
+FSW,P4,12940043,0
+FSW,P5,12941039,0
+FSW,P8,13502512,0
+FSW,P9,13518251,0
+FSW,P1,12138079,2
+FSW,P2,12464467,66
+FSW,P10,22758257,155
+I (32683) SystemInfo: free sram: 114059 minimal sram: 33468
+FSW,P3,32712117,0
+FSW,P6,32747663,0
+FSW,P7,32750760,0
+FSW,P4,33058438,0
+FSW,P5,33059364,0
+FSW,P8,33457928,0
+FSW,P9,33478312,0
+FSW,P1,32387776,2
+FSW,P2,32752186,164
+FSW,P10,33958250,9
+FSW,P10,36238257,4
+FSW,P10,39598245,2
+FSW,RESET,39758289,0""".splitlines()
+
+
+def test_next_round_counts_when_its_reset_line_was_missed():
+    """试一次那一轮收全后，下一句的结束标记没读到：以前下一句的点全被并进第 1 轮（只记第一次），这句白说，
+    第 1 轮"声音放完"还取到了下一句的最后一声（27 秒）。现在按新起点分开：两轮都算，各是各的。"""
+    rs = m.collect(MISSED_RESET_LOG, interrupt_spec())
+    ok = [r for r in rs if r.get("ok")]
+    assert len(ok) == 2, rs
+    assert [round(r["ends"][2], 2) for r in ok] == [10.62, 7.21]
+    assert round(ok[1]["ends"][1], 3) == round((33478312 - 32387776) / 1e6, 3)
+
+
+def test_noise_start_again_in_the_same_round_is_not_a_new_round():
+    """起点在同一轮里又报了一次（后面没有新一轮的点）：不分轮。"""
+    log = MISSED_RESET_LOG[:10] + ["FSW,P1,23000000,1", "FSW,RESET,30000000,0"]
+    assert len([r for r in m.collect(log, interrupt_spec()) if r.get("ok")]) == 1

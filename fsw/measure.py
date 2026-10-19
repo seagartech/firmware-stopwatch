@@ -293,12 +293,40 @@ class Collector:
             return out
         if not self.started or self.done:  # 半轮、或这一轮已经收尾：后面的不管
             return out
+        if name == self.spec.start and self.ready and self._missed_reset(us):
+            return out + self._split(us, val)
         self.cur.setdefault(name, (us, val))
         self.occ.setdefault(name, []).append((us, val))  # 同一个点一轮里记了几次（"每次都记"的点）：收尾时挑起点之后的第一次
         if not self.ready and self._complete():
             self.ready, self.ready_at = True, time.monotonic()  # 收全了：进度马上显示，收尾等下一轮开始或 flush
         elif self.ready and name in self.spec.last:
             self.ready_at = time.monotonic()  # 取最后一次的点又报了一次：这一轮还没完，从这次起重新等
+        return out
+
+    def _missed_reset(self, us):
+        """这一轮已经收全，又来一个起点，而且起点之后又有一大半的点：设备已经开始了下一轮，结束标记没收到
+        （比如试一次收齐后到正式实测开始读之间调试口没在读，那一下丢了；10-19 真测：试一次之后说的第一句被并进第 1 轮、白说了）。"""
+        if any(o[0] >= us - STALE_US for o in self.occ.get(self.spec.start, [])):
+            return False  # 起点在这一轮里报了好几次（比如杂音），不是新的一轮（见 _latest_start）
+        later = [x for x in self.spec.need if x != self.spec.start and any(o[0] > us for o in self.occ.get(x, []))]
+        return len(later) * 2 >= len(self.spec.need) - 1
+
+    def _split(self, us, val):
+        """按这个新起点把收到的分成两轮：之前的交出这一轮，之后的（含起点）当作下一轮，等它自己收全、收尾。"""
+        cut = us - STALE_US
+        new = {k: [o for o in v if o[0] >= cut] for k, v in self.occ.items()}
+        self.occ = {k: [o for o in v if o[0] < cut] for k, v in self.occ.items() if any(o[0] < cut for o in v)}
+        self.cur = {k: (v if v[0] < cut else min(self.occ[k])) for k, v in self.cur.items() if k in self.occ}
+        out = [self._close()]
+        self.last_cur = dict(self.cur)
+        self.started, self.done, self.first = True, False, False
+        self.occ = {k: v for k, v in new.items() if v}
+        self.occ.setdefault(self.spec.start, []).append((us, val))
+        self.cur = {k: min(v) for k, v in self.occ.items()}
+        self.reset_us = None
+        self.ready, self.ready_at = False, None
+        if self._complete():
+            self.ready, self.ready_at = True, time.monotonic()
         return out
 
     def _after(self, x):
