@@ -1385,8 +1385,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if len(ok) < rl.MIN_ROUNDS:
             return {"why": f"这次只测了 {len(ok)} 轮，不到 {rl.MIN_ROUNDS} 轮，不和上次比"}
         proj, cur = Path(job["_project_dir"]), Path(job["raw_log"]).parent.name
-        pts = {(g.get("from"), g.get("to")): k for k, g in sc["segments"].items()}
         names = [l["name"] for l in sc["lines"]]
+        at = rl.at_now(sc)
+        sigs = [rl.line_sig(sc, l, at) for l in sc["lines"]]
         other = None
         for log in sorted(proj.glob("runs/*/raw.log"), reverse=True):
             run = log.parent
@@ -1403,8 +1404,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 continue
             if len(rounds) < rl.MIN_ROUNDS:
                 continue
-            # 码表新加了线、段（比如表情线、到第一声那条）时，两次都有的段和线照样比；一段都对不上才不比
-            if not {(g.get("from"), g.get("to")) for g in psc["segments"].values()} & set(pts):
+            # 两次的段、线按计时点在代码里的位置对（重新找步骤后编号会重排，不能按 P7-P8 这种编号比）；
+            # 码表新加了线、段时，两次都有的照样比；一段都对不上才不比
+            pat = rl.at_now(psc)
+            pts = rl.pair_segments(psc["segments"], pat, sc["segments"], at)
+            pl = rl.pair_lines([l["name"] for l in psc["lines"]], [rl.line_sig(psc, l, pat) for l in psc["lines"]], names, sigs)
+            if not pts:
                 other = other or meta.get("measured_at") or run.name
                 continue
             def iqr(v):  # 一次测量的正常波动：中间一半轮次的跨度（第 75 百分位减第 25 百分位）
@@ -1418,23 +1423,23 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             def line_vals(rs, i):
                 return [r["ends"][i] for r in rs if i < len(r["ends"]) and r["ends"][i] is not None]
             segs, noise = {}, {}
-            for k, g in psc["segments"].items():
-                if (g.get("from"), g.get("to")) not in pts:
+            for k in psc["segments"]:
+                if k not in pts:
                     continue
-                v, ck = seg_vals(rounds, k), pts[(g.get("from"), g.get("to"))]
+                v, ck = seg_vals(rounds, k), pts[k]
                 if v:
                     segs[ck] = round(jdg.med(v), 6)
                     c = seg_vals(ok, ck)
                     noise[ck] = round(max(iqr(v), iqr(c) if c else 0), 6)  # 两次各自的正常波动，取大的
             lines, noise_l = {}, {}
             for i, l in enumerate(psc["lines"]):
-                if l["name"] not in names:
+                if l["name"] not in pl:
                     continue
-                v = line_vals(rounds, i)
+                v, cn = line_vals(rounds, i), pl[l["name"]]  # 结果用这次的线名
                 if v:
-                    lines[l["name"]] = round(jdg.med(v), 6)
-                    c = line_vals(ok, names.index(l["name"]))
-                    noise_l[l["name"]] = round(max(iqr(v), iqr(c) if c else 0), 6)
+                    lines[cn] = round(jdg.med(v), 6)
+                    c = line_vals(ok, names.index(cn))
+                    noise_l[cn] = round(max(iqr(v), iqr(c) if c else 0), 6)
             return {"run": run.name, "measured_at": meta.get("measured_at") or run.name, "n": len(rounds), "segs": segs, "lines": lines,
                     "noise": noise, "noise_lines": noise_l}
         return {"why": f"计时点和上次（{other}）不一样，不和上次比"} if other else None

@@ -74,7 +74,7 @@ def test_page_without_standard_has_no_ranges_but_still_judges():
     assert all(g["range"] is None for g in sc["segments"].values()) and sc["experiences"] == []
     rounds = [{"n": i + 1, "segs": {k: 0.1 for k in sc["segments"]}, "ends": [0.3, 0.6], "probs": []} for i in range(20)]
     j = J.judge(sc, rounds)
-    assert j["lines"][-1]["verdict"] == "没有范围" and j["labels"][0]["level"] == "可以不改"
+    assert j["lines"][-1]["verdict"] == "没有范围" and j["labels"][0]["level"] == "未判"  # 没范围也没体验标准：明说没判
 
 
 # ---- 附加值：标准里看附加值的问题规则，对上真插的计时点，插的时候顺带记下；记上了才判 ----

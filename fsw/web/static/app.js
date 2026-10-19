@@ -95,17 +95,17 @@ function headline(D){
   return `${D.S.startShort} `+L.map(l=>`${f(l.med,1)} 秒${l.phrase}`).join('，');
 }
 
-const LV=[['必须改','lv-must'],['建议改','lv-should'],['可以不改','lv-ok']];
+const LV=[['必须改','lv-must'],['建议改','lv-should'],['未判','lv-none'],['可以不改','lv-ok']];
 const lvTag=lv=>`<span class="lvtag ${LV[lv][1]}">${LV[lv][0]}</span>`;
 const jump=(id,t)=>`<button class="lnk" data-jump="${id}">${t}</button>`;
 // 要你拍板的一条 → 讲它的那张卡片：按问题编号对；早先的卡片把几段"偶尔特别慢"都叫 spiky，再按段对
 const cardOf=(FX,d)=>FX.findIndex(F=>F.when.includes(d.k)||(d.seg&&F.when.includes('spiky')&&F.seg===d.seg));
 function decisionsJ(D){const J=D.J,out=[];
   const src={line:['tiers','「三档用时」里“一般”那一列；各段占多少见「一次的计时图」'],spiky:['rounds',`「${D.n} 轮逐轮」图里红底的几轮`],order:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1]?D.lines[1].end:''}晚"的几轮`],problem:['rounds',`「${D.n} 轮逐轮」里出这个问题的几轮`]};
-  for(const x of J.labels){const lv=['必须改','建议改','可以不改'].indexOf(x.level);
+  for(const x of J.labels){const lv=LV.findIndex(v=>v[0]===x.level);
    if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=isMain?D.biggest:([...D.allSegs].filter(s=>l.segs.includes(s.k)).sort((p,q)=>q.med-p.med)[0]||D.biggest),share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
     out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:isMain?`${l.end}要 ${f(l.med,1)} 秒，大头是"${b.name}"`:`${l.end}要 ${f(l.med,1)} 秒`,
-     d:x.why==='取决于回答长短，不判快慢'?`长短主要看这次回答说了多少字，不判快慢。`:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':noExp(D)+'，只按合理范围判。'}`:x.level==='可以不改'?`${x.why}。`:`${x.why}，大头是"${b.name}" ${f(b.med)} 秒，占 ${share}%。`,who:x.why==='取决于回答长短，不判快慢'?'不判快慢':x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
+     d:x.why==='取决于回答长短，不判快慢'?`长短主要看这次回答说了多少字，不判快慢。`:x.level==='未判'?`${x.why}。`:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':noExp(D)+'，只按合理范围判。'}`:x.level==='可以不改'?`${x.why}。`:`${x.why}，大头是"${b.name}" ${f(b.med)} 秒，占 ${share}%。`,who:x.why==='取决于回答长短，不判快慢'?'不判快慢':x.level==='未判'?'这次的用时已记下，测满 10 轮存为合理范围，下次再测就和它比':x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
    else if(x.kind==='spiky'){const s=D.allSegs.find(y=>y.k===x.segment);if(!s||x.with)continue;  // 和对错问题同一根因的，合并到那条里
     out.push({k:x.k,seg:x.segment,lv,src:src.spiky,tag:['偶发','c-warn'],t:`"${s.name}"偶尔特别慢`,d:`平时 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒（${roundList(x.rounds.map(n=>({n})))}）。`,who:`找${s.owner}`})}
    else if(x.order&&D.lines.length>1)out.push({k:'reversed',lv,src:src.order,tag:['要查','c-bad'],t:`${x.rounds.length} 轮${D.lines[0].end}反而比${D.lines[1].end}晚`,d:`${roundList(x.rounds.map(n=>({n})))}。"先给反应"这个设计在这几轮白做了。`,who:'先查是哪一段变慢'});
@@ -121,7 +121,7 @@ function decisions(D){if(D.J)return decisionsJ(D);
   out.push({k:'main',tag:D.exp?[`体验${D.exp[0]}`,D.exp[1]]:D.verdict(D.main),t:`${D.main.end}要 ${f(D.main.med,1)} 秒，大头是"${b.name}"`,d:`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':noExp(D)+'，只按合理范围判。'}`,who:mainOk?'在合理范围里，不用改':`找${b.owner}`});
   // 等级按固定规则算，不由 AI 判断（2026-10-13 用户提出加标签）
   const L=out.map(x=>{let lv;
-    if(x.k==='main')lv=(D.exp&&D.exp[0]==='差')||mv==='超过慢阈值'?0:mv==='偏慢'?1:2;
+    if(x.k==='main')lv=(D.exp&&D.exp[0]==='差')||mv==='超过慢阈值'?0:mv==='偏慢'?1:3;  // 3 = 可以不改（2 是未判）
     else if(x.k==='spiky')lv=D.lines.filter(l=>l.segs.includes(D.spiky.k)).some(l=>l.p90>l.slow)?0:1;
     else lv=D.reversed.length/D.n>.1?0:1;
     const src=x.k==='main'?['tiers','「三档用时」里“一般”那一列；各段占多少见「一次的计时图」']:x.k==='spiky'?['rounds',`「${D.n} 轮逐轮」图里红底的几轮`]:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1].end}晚"的几轮`];
@@ -204,7 +204,7 @@ function lineCards(D){
      <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
 }
 // 负责人版写短（决策 98）：必须改在前、建议改在后，都展开；可以不改的收起来。内容不删，只是默认收起
-function bossSplit(ds){const by=lv=>ds.filter(x=>x.lv===lv);return {open:[...by(0),...by(1)],fold:by(2)}}
+function bossSplit(ds){const by=lv=>ds.filter(x=>x.lv===lv);return {open:[...by(0),...by(1),...by(2)],fold:by(3)}}  // 未判的不收进"不用改"：没判不等于没问题
 // 要你拍板每条加一行：建议做哪个、预计省多少（取卡片里标了"建议"的方案）
 function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;return o?`建议：${o.name}，预计${o.effect}。`:''}
 function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
@@ -214,6 +214,7 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
   <ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
   <li><b class="lvtag lv-must">必须改</b>中位数超过慢阈值，或体验标准判"差"，或"10 次里最慢"超过慢阈值（每 10 次就有 1 次让人等太久）。</li>
   <li><b class="lvtag lv-should">建议改</b>偶尔特别慢、先后顺序反了，但不到每 10 次一次；或中位数超出合理范围、未超过慢阈值。</li>
+  <li><b class="lvtag lv-none">未判</b>还没有合理范围、也没有体验标准（新出现的线，或重新找步骤后和以前对不上），这次没法判快慢，只记用时。</li>
   <li><b class="lvtag lv-ok">可以不改</b>在合理范围里，只是占时最多。</li></ul></details>`}
 // 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
 // 起点按计时点自己的名字叫（比如"设备听出你停了"），不叫"你说完"：它是设备自己察觉的时刻，比人真正做完晚（决策 135）
