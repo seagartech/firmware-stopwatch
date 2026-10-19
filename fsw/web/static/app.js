@@ -319,7 +319,7 @@ const CHIP=()=>REAL?(REAL.chip?`芯片 ${REAL.chip}${REAL.board?`，板子 ${REA
 async function api(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json()}
 async function realPick(body,label,board){if(!board)remeasure=false;const quiet=!!board&&!!REAL;hErr='';envBack='home';hBoardNeed=false;hSrc=label||body.path||'';if(!quiet){hReading=true;hStage=1;if(!board)hSay='';render()}  // 只是选板子：页面不跳回"正在读源码"，不闪（决策 113）
  let r;try{r=await api('/api/source/inspect',{...body,board:board||null})}catch(e){r={ok:false,message:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
- hReading=false;
+ hReading=false;hBoardLoad='';
  if(!r.ok){REAL=null;hSrc='';hStage=0;hErr=r.kind==='multiple'?`<b>${r.message}</b><div class="acts" style="margin:8px 0 0">${r.projects.map(p=>`<button class="btn" data-pickroot="${p.root.replace(/"/g,'&quot;')}">${p.name}<span class="note">　${p.root}</span></button>`).join('')}</div>`:r.message;render();return}
  REAL={...r.info,body,label:hSrc,work:r.work,project_dir:r.project_dir,fingerprint:r.fingerprint,ai:null};if(REAL.board&&!hBoardOpen)hBoardQ=REAL.board;pName=REAL.name+(REAL.board?`（${REAL.board}）`:'');IDENT=null;  // 再测时板子按上次选的填好（决策 130）；项目名称按这次选的源码和板子
  hScan=1;newRun();if(r.status!=='needs_board'&&missing().length)pop='env';render();clearTimeout(hScanT);
@@ -334,14 +334,14 @@ function boardMatch(boards,q){const qn=bNorm(q),toks=String(q||'').toLowerCase()
  const sc=b=>{const id=bNorm(b.id),last=bNorm(b.id.split('/').pop()),chip=bNorm(b.chip);
   return last===qn?6:last.startsWith(qn)?5:id.includes(qn)?4:toks.length>1&&toks.every(t=>id.includes(t))?3:chip.includes(qn)?2:sub(id,qn)?1:0};
  return boards.map(b=>[sc(b),b]).filter(x=>x[0]>0).sort((a,b)=>b[0]-a[0]||a[1].id.length-b[1].id.length||a[1].id.localeCompare(b[1].id)).map(x=>x[1])}
-let hBoardOpen=false,hBoardHi=0;
+let hBoardOpen=false,hBoardHi=0,hBoardLoad='';  // hBoardLoad：刚点选、后台还在按这块板子重读项目
 function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
  const list=boardMatch(REAL.boards,hBoardQ),hi=Math.min(hBoardHi,Math.max(0,list.length-1));
  const drop=hBoardOpen?`<div class="bdrop" id="h-blist" role="listbox" aria-label="匹配的板子">${list.length?list.slice(0,50).map((b,k)=>`<div class="bopt${k===hi?' hi':''}" role="option" aria-selected="${REAL.board===b.id}" data-pickboard="${b.id}">${b.id}<span class="note">　${b.chip}</span></div>`).join('')+(list.length>50?`<div class="note" style="padding:6px 10px">还有 ${list.length-50} 块，多输几个字缩小范围</div>`:''):'<div class="note" style="padding:8px 10px">没有匹配的板子，换个说法试试（比如只输型号里的几个字）</div>'}</div>`:'';
  return `<div class="field" style="margin-top:14px"><label for="h-boardq">这个项目支持 ${REAL.boards.length} 块板子，你用的是哪块？</label>
-  <div class="bpick${REAL.board&&hBoardQ===REAL.board&&!hBoardOpen?' picked':''}"><input type="text" id="h-boardq" role="combobox" aria-expanded="${hBoardOpen}" aria-controls="h-blist" autocomplete="off" placeholder="输入板子型号里的几个字，比如 core-s3" value="${htmlEsc(hBoardQ)}">${drop}</div>
-  ${REAL.chip?`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>已选 ${REAL.board||''}，芯片 ${REAL.chip}${REAL.board_from==='last'?'（按上次选的；想换就在框里重新输入）':''}</p>`:hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}</div>`}
-function boardPick(id){const w=document.getElementById('h-what');hSay=w?w.value:hSay;hBoardQ=id;hBoardOpen=false;hBoardHi=0;const q=document.getElementById('h-boardq');if(q){q.value=id;q.blur()}realPick(REAL.body,REAL.label,id)}
+  <div class="bpick${(hBoardLoad||REAL.board)&&hBoardQ===(hBoardLoad||REAL.board)&&!hBoardOpen?' picked':''}"><input type="text" id="h-boardq" role="combobox" aria-expanded="${hBoardOpen}" aria-controls="h-blist" autocomplete="off" placeholder="输入板子型号里的几个字，比如 core-s3" value="${htmlEsc(hBoardQ)}">${drop}</div>
+  ${hBoardLoad?`<p class="note" style="margin:6px 0 0"><span class="spin"></span>已选 ${htmlEsc(hBoardLoad)}，正在读这块板子的配置</p>`:REAL.chip?`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>已选 ${REAL.board||''}，芯片 ${REAL.chip}${REAL.board_from==='last'?'（按上次选的；想换就在框里重新输入）':''}</p>`:hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}</div>`}
+function boardPick(id){const w=document.getElementById('h-what');hSay=w?w.value:hSay;hBoardQ=id;hBoardOpen=false;hBoardHi=0;hBoardLoad=id;hBoardNeed=false;const q=document.getElementById('h-boardq');if(q){q.value=id;q.blur()}render();realPick(REAL.body,REAL.label,id)}  // 点了马上收起列表、显示已选，不等后台读完（第 34 次走查：几秒不变，人以为没点上）
 async function uploadDrop(items){const tok=Math.random().toString(36).slice(2,12),files=[];
  const skip=new Set(['.git','build','managed_components','node_modules']);
  const walk=async(entry,pre)=>{if(entry.isFile){files.push([pre+entry.name,await new Promise((ok,no)=>entry.file(ok,no))])}
@@ -439,7 +439,7 @@ m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件�
   :`<div class="field"><label for="h-path">固件源码位置</label><div class="inrow"><input type="text" id="h-path" value="${hSrc}" readonly><button class="btn" data-pick="reset">换一个</button></div></div>${boardRow()}
    <dl class="kv" style="margin-top:14px"><dt>测量范围</dt><dd>全程：从设备收到触发，到最后一个对外输出；起点和终点由 AI 读代码确定</dd></dl>
    ${estBox()}
-   <div class="acts" style="justify-content:flex-start;align-items:center"><button class="btn pri" data-autostart="1" ${REAL&&!REAL.chip?blk('#h-boardq','先选板子'):''}>开始测量</button><span class="note">点了以后自动执行，需要人工操作时页面提示并响一声</span></div>`}
+   <div class="acts" style="justify-content:flex-start;align-items:center"><button class="btn pri" data-autostart="1" ${hBoardLoad?blk('#h-boardq','正在读这块板子的配置'):REAL&&!REAL.chip?blk('#h-boardq','先选板子'):''}>开始测量</button><span class="note">点了以后自动执行，需要人工操作时页面提示并响一声</span></div>`}
   </section>
   <section class="panel"><h2>以前测过的</h2>${recentList()}</section></div>`}}
 };
