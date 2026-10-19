@@ -1207,7 +1207,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if bad:
                     job["suspect"] = bad
                     job["_stop"] = True
-            job["progress"], job["last"] = list(coll.progress()), coll.last
+            job["progress"], job["last"], job["have"] = list(coll.progress()), coll.last, coll.have()
             if ok_count() >= job["target"] and not coll.prev:  # 最后一轮还在等晚到的最后一声：等完（见 flush）再停
                 job["_stop"] = True
 

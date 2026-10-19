@@ -387,6 +387,14 @@ class Collector:
             return len([x for x in self.spec.need if x == self.spec.start or self._after(x)]), len(self.spec.need)
         return len([x for x in self.spec.need if x in (self.cur or {})]), len(self.spec.need)
 
+    def have(self):
+        """正在收的这一轮已经到了哪几个点（页面步骤条按这个涂绿：有的点设备要到一轮结束才打出来，不能按个数从左往右涂）。"""
+        if self.done:
+            return []
+        if self.spec.start in self.cur:
+            return [x for x in self.spec.need if x == self.spec.start or self._after(x)]
+        return [x for x in self.spec.need if x in self.cur]
+
     def flush(self, settle=0.0):
         """收全了、已经等了 settle 秒（设备可能不再开始下一轮，比如最后一轮）：收尾，交出这一轮。"""
         out = []
