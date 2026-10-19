@@ -1087,13 +1087,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if body.project_dir:  # 插计时点时顺带记了附加值的计时点（插入记录里），看附加值的问题规则才用
                 values = (ins.current(Path(body.project_dir) / "fsw-backup") or {}).get("values") or None
             scenario = stds.real_scenario(page, standard, values)
-            if body.project_dir:  # 项目有合理范围清单：测的时候也按它画范围
-                try:
-                    lst = rl.read(body.project_dir)
-                except rl.ListFormatError:
-                    lst = None
-                if lst:
-                    scenario = rl.apply(scenario, lst)
             std_hash = stds.digest(standard)
         elif body.demo in demos:
             scenario = demos[body.demo]["scenario"]
@@ -1305,6 +1298,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     take(coll.finish())
                 if job is col["job"]:
                     job["status"] = "suspect" if job.get("suspect") else "done" if ok_count() >= job["target"] else "stopped"
+                    _keep_rounds(job)
                     if body.source == "device":
                         T().end("collect")
 
@@ -1345,6 +1339,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         name = (sc.get("point_names") or {}).get((sc.get("start") or {}).get("point"))
         return lag if lag and name and lag.get("point_name") == name else None
 
+    def _keep_rounds(job):
+        """真测（有项目文件夹）测完：把收全的每一轮存在原始日志旁边，以后和它比都读这份（meas.save_rounds）。"""
+        if job.get("_page") is None or not job.get("_project_dir"):
+            return
+        try:
+            meas.save_rounds(Path(job["raw_log"]).parent, job.get("rounds") or [])
+        except OSError:
+            pass
+
     @app.get("/api/report")
     def report(demo: str | None = None):
         """报告用的判断：这次收齐的轮，按固定规则算（判快慢、两把尺子、结论标签），不用大模型。
@@ -1354,18 +1357,22 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         same = job and (demo is None or job.get("demo") == demo)
         if ok and same:
             sc, raw = job["_scenario"], job["raw_log"]
-            if job.get("_page") is not None and job.get("_project_dir"):  # 真测：每次都按项目现在的合理范围清单判
-                sc = job["_scenario"] = _judge_scenario(job, ok)
-                if job.get("status") in ("done", "stopped") and "_prev" not in job:
-                    job["_prev"] = _prev_run(job, sc, ok)
+            if job.get("_page") is not None and job.get("_project_dir"):  # 真测：体验标准按设备类别从标准库挂
+                sc = job["_scenario"] = _judge_scenario(job)
+                if job.get("status") in ("done", "stopped"):
+                    _keep_rounds(job)  # 晚到的最后一声会改已交出的那一轮：打开报告时再存一次，存的和报告用的一样
+                    if "_prev" not in job:
+                        job["_prev"] = _prev_run(job, sc, ok)
         elif demo in demos:
             sc, ok, raw = demos[demo]["scenario"], _demo_rounds(demos[demo]), None
         else:
             raise HTTPException(404, "还没有测完的轮")
+        prev = (job or {}).get("_prev") if ok and same else None
         sc, ok, merged = jdg.merge_overruns(sc, ok)
-        out = jdg.judge(sc, ok)
+        out = jdg.judge(sc, ok, prev)
         out["merged"] = merged
-        keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points", "range_list",
+        sc = {**sc, "first_run": not (prev and prev.get("segs") is not None)}  # 没有上次可比：第一次测
+        keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points",
                 "first_run", "exp_skip")
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
@@ -1375,8 +1382,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                    "gap": [{"n": r["n"], "names": r["gap"]} for r in ok if r.get("gap")]}
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
                 "timing": _timing() if raw else None, "quality": quality, "start_lag": _start_lag(raw, sc),
-                "list_filled": (job or {}).get("_filled") if ok and same else None,
-                "prev": (job or {}).get("_prev") if ok and same else None,
+                "prev": prev,
                 "measured_at": (job or {}).get("measured_at") if ok and same else None}
 
     def _prev_run(job, sc, ok):
@@ -1385,8 +1391,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         if len(ok) < rl.MIN_ROUNDS:
             return {"why": f"这次只测了 {len(ok)} 轮，不到 {rl.MIN_ROUNDS} 轮，不和上次比"}
         proj, cur = Path(job["_project_dir"]), Path(job["raw_log"]).parent.name
-        pts = {(g.get("from"), g.get("to")): k for k, g in sc["segments"].items()}
         names = [l["name"] for l in sc["lines"]]
+        at = rl.at_now(sc)
+        sigs = [rl.line_sig(sc, l, at) for l in sc["lines"]]
         other = None
         for log in sorted(proj.glob("runs/*/raw.log"), reverse=True):
             run = log.parent
@@ -1397,14 +1404,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 continue
             try:
                 psc = stds.real_scenario(meta["page"], stds.find(meta["page"].get("steps") or []), meta.get("values"))
-                rounds = [r for r in meas.collect(log.read_text(encoding="utf-8", errors="replace").splitlines(),
-                                                  meas.Spec.from_scenario(psc)) if r["ok"]]
+                rounds = meas.run_rounds(run, meas.Spec.from_scenario(psc))
             except Exception:  # 老数据格式对不上：这一次不拿来比
                 continue
             if len(rounds) < rl.MIN_ROUNDS:
                 continue
-            # 码表新加了线、段（比如表情线、到第一声那条）时，两次都有的段和线照样比；一段都对不上才不比
-            if not {(g.get("from"), g.get("to")) for g in psc["segments"].values()} & set(pts):
+            # 两次的段、线按计时点在代码里的位置对（重新找步骤后编号会重排，不能按 P7-P8 这种编号比）；
+            # 码表新加了线、段时，两次都有的照样比；一段都对不上才不比
+            pat = rl.at_now(psc)
+            pts = rl.pair_segments(psc["segments"], pat, sc["segments"], at)
+            pl = rl.pair_lines([l["name"] for l in psc["lines"]], [rl.line_sig(psc, l, pat) for l in psc["lines"]], names, sigs)
+            if not pts:
                 other = other or meta.get("measured_at") or run.name
                 continue
             def iqr(v):  # 一次测量的正常波动：中间一半轮次的跨度（第 75 百分位减第 25 百分位）
@@ -1418,141 +1428,31 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             def line_vals(rs, i):
                 return [r["ends"][i] for r in rs if i < len(r["ends"]) and r["ends"][i] is not None]
             segs, noise = {}, {}
-            for k, g in psc["segments"].items():
-                if (g.get("from"), g.get("to")) not in pts:
+            for k in psc["segments"]:
+                if k not in pts:
                     continue
-                v, ck = seg_vals(rounds, k), pts[(g.get("from"), g.get("to"))]
+                v, ck = seg_vals(rounds, k), pts[k]
                 if v:
                     segs[ck] = round(jdg.med(v), 6)
                     c = seg_vals(ok, ck)
                     noise[ck] = round(max(iqr(v), iqr(c) if c else 0), 6)  # 两次各自的正常波动，取大的
             lines, noise_l = {}, {}
             for i, l in enumerate(psc["lines"]):
-                if l["name"] not in names:
+                if l["name"] not in pl:
                     continue
-                v = line_vals(rounds, i)
+                v, cn = line_vals(rounds, i), pl[l["name"]]  # 结果用这次的线名
                 if v:
-                    lines[l["name"]] = round(jdg.med(v), 6)
-                    c = line_vals(ok, names.index(l["name"]))
-                    noise_l[l["name"]] = round(max(iqr(v), iqr(c) if c else 0), 6)
+                    lines[cn] = round(jdg.med(v), 6)
+                    c = line_vals(ok, names.index(cn))
+                    noise_l[cn] = round(max(iqr(v), iqr(c) if c else 0), 6)
             return {"run": run.name, "measured_at": meta.get("measured_at") or run.name, "n": len(rounds), "segs": segs, "lines": lines,
                     "noise": noise, "noise_lines": noise_l}
         return {"why": f"计时点和上次（{other}）不一样，不和上次比"} if other else None
 
-    def _judge_scenario(job, ok):
-        """这份报告按什么判：项目有合理范围清单就按清单；测满 10 轮、清单还没有或有空着的，按这次实测自动填上（只填空的）。"""
-        page, d = job["_page"], Path(job["_project_dir"])
-        sc = stds.real_scenario(page, stds.find(page.get("steps") or []), job.get("_values"))
-        try:
-            lst = rl.read(d)
-        except rl.ListFormatError as e:
-            return {**sc, "range_list": {"file": rl.FILENAME, "broken": str(e), "text": "合理范围清单格式不对，这次按码表自带的范围判"}}
-        if job.get("status") in ("done", "stopped"):
-            try:
-                name = json.loads((d / "project.json").read_text(encoding="utf-8")).get("name")
-            except (OSError, ValueError):
-                name = None
-            fresh = not lst or not any(x.get("range") for x in list(lst["segments"].values()) + lst["lines"])
-            lst, filled = rl.fill(lst, sc, ok, project=name or d.name)
-            if filled:
-                rl.save(d, lst)
-                job["_filled"] = filled
-                job["_fresh"] = fresh  # 填之前清单里一个数都没有：这次就是第一次测
-                job["_filled_vals"] = {x["name"]: (x.get("range"), x.get("slow"))
-                                       for x in list(lst["segments"].values()) + lst["lines"] if x["name"] in filled}
-        out = rl.apply(sc, lst) if lst else sc
-        auto = job.get("_filled_vals") or {}
-        if auto:  # 合理范围就是拿这次的轮填的：不拿它再判这次（只会全"正常"），这次快慢只按体验标准看，下次再测和它比；手动改过的照改过的判
-            for x in list(out["segments"].values()) + out["lines"]:
-                if x.get("name") in auto and (x.get("range"), x.get("slow")) == auto[x["name"]]:
-                    x.update(range=None, slow=None, new=True)
-            # 填之前清单里没有任何数才算第一次测（按条数比会错：同名的段和线、没测到的段都会让条数对不上，真测第 29 次）；只补了新出现的几项照常判其余的
-            out["first_run"] = bool(job.get("_fresh"))
-        return stds.with_default_experience(out)
-
-    def _list_dir(project_dir=None):
-        """清单在哪个项目：给了项目文件夹就用它（只限码表结果文件夹里，设置页进来的）；没给就是这份报告对应的项目。"""
-        if project_dir:
-            d = Path(project_dir).expanduser().resolve()
-            if Path(live["data"]).resolve() not in d.parents:
-                raise HTTPException(403, "只能打开码表结果文件夹里的项目")
-            return d
-        job = col["job"]
-        if not job or not job.get("_project_dir") or job.get("_page") is None:
-            raise HTTPException(409, "先测完一次，才有这个项目的合理范围清单")
-        return Path(job["_project_dir"])
-
-    @app.get("/api/rangelists")
-    def rangelists():
-        """设置页"合理范围清单"：每个测过的项目一行，有没有清单、几项、上次改的时间。"""
-        out = []
-        for pj in sorted(Path(live["data"]).glob("*/project.json")):
-            d = pj.parent
-            if not any(d.glob("runs/*/raw.log")):
-                continue
-            try:
-                info = json.loads(pj.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            row = {"project_dir": str(d), "name": info.get("name", d.name) + (f"（{info['board']}）" if info.get("board") else ""),
-                   "has": False, "items": 0, "changed": None, "broken": None}
-            p = rl.path_of(d)
-            if p.exists():
-                row.update(has=True, changed=time.strftime("%m-%d %H:%M", time.localtime(p.stat().st_mtime)))
-                try:
-                    lst = rl.read(d)
-                    row["items"] = len(lst["segments"]) + len(lst["lines"])
-                except rl.ListFormatError as e:
-                    row["broken"] = str(e)
-            out.append(row)
-        return out
-
-    def _list_out(d):
-        try:
-            lst = rl.read(d)
-        except rl.ListFormatError as e:
-            return {"path": str(rl.path_of(d)), "broken": str(e), "errors": [{"line": n, "msg": m} for n, m in e.errors]}
-        if lst is None:
-            raise HTTPException(404, f"这个项目还没有合理范围清单：测满 {rl.MIN_ROUNDS} 轮后码表按实测自动建")
-        return {"path": str(rl.path_of(d)), "list": lst}
-
-    @app.get("/api/rangelist")
-    def rangelist_get(project_dir: str | None = None):
-        """合理范围清单页：给的项目（设置页进来）或这份报告对应项目的清单。"""
-        return _list_out(_list_dir(project_dir))
-
-    class ListEditBody(BaseModel):
-        kind: str                       # segment / line
-        key: str                        # 分段编号 / 测量线名字
-        range: list[float | None] | None = None
-        slow: float | None = None
-        note: str = ""
-        fair: float | None = None       # 体验标准：超过多少秒算差，不设就空着
-        source: str = ""
-        project_dir: str | None = None  # 设置页进来时是哪个项目
-
-    @app.post("/api/rangelist/edit")
-    def rangelist_edit(body: ListEditBody):
-        """改一段或一条线的数（清单页的「修改」）；改完报告自动按新的判。"""
-        d = _list_dir(body.project_dir)
-        try:
-            lst = rl.read(d)
-        except rl.ListFormatError as e:
-            raise HTTPException(409, str(e))
-        if lst is None:
-            raise HTTPException(404, "这个项目还没有合理范围清单")
-        rng = None if not body.range or body.range[0] is None else [body.range[0], body.range[1] if len(body.range) > 1 else None]
-        try:
-            if body.kind == "segment":
-                rl.edit_segment(lst, body.key, rng, body.slow, body.note)
-            elif body.kind == "line":
-                rl.edit_line(lst, body.key, rng, body.slow, body.fair, body.source)
-            else:
-                raise HTTPException(400, f"不认识的修改：{body.kind}")
-        except rl.ListRuleError as e:
-            raise HTTPException(400, str(e))
-        rl.save(d, lst)
-        return _list_out(d)
+    def _judge_scenario(job):
+        """这份报告按什么判：真找完的步骤 + 按设备类别从标准库挂的体验标准（合理范围清单 10-19 去掉了，项目文件夹里留着的老清单不读）。"""
+        page = job["_page"]
+        return stds.with_default_experience(stds.real_scenario(page, stds.find(page.get("steps") or []), job.get("_values")))
 
     def _timing():
         job = col["job"]
@@ -1640,11 +1540,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def _run_med(proj, run, meta):
         page = meta.get("page") or {}
         sc = stds.real_scenario(page, stds.find(page.get("steps") or []), meta.get("values"))
-        lines = (run / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
         # 有"第一下感觉到的结果"那条线时，最后一条（到全部做完）看内容长短、不判快慢：首页的主数用第一下那条（真测第 40 次：显示成"声音放完 10.11 秒"）
         ls = sc.get("lines") or []
         i = next((k for k, l in enumerate(ls) if l.get("first")), len(ls) - 1)
-        ok = [r for r in meas.collect(lines, meas.Spec.from_scenario(sc)) if r["ok"] and r["ends"][i] is not None]
+        ok = [r for r in meas.run_rounds(run, meas.Spec.from_scenario(sc)) if i < len(r["ends"]) and r["ends"][i] is not None]
         end = ls[i].get("end") if ls and i < len(ls) - 1 else None
         # 留 4 位小数：网页再取两位，和报告一样（真测第 41 次：1.325206 先四舍五入成 1.325，网页显示 1.32、报告 1.33）
         return (round(jdg.med([r["ends"][i] for r in ok]), 4), len(ok), end) if ok else (None, 0, end)

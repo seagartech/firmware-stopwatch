@@ -27,19 +27,18 @@ def rounds_from_log(log, scenario):
 
 # ---------- 和验证期的结论对得上 ----------
 def test_dialogue_mock_log_matches_sample_report():
-    """对话（验证 06 样例报告用的那份模拟日志 + 验证 03 的合理范围）。"""
+    """对话（验证 06 样例报告用的那份模拟日志）。合理范围清单 10-19 去掉了：第一次测只按体验标准判，段只记用时。"""
     s = load("对话.json")
     j = J.judge(s, rounds_from_log("v07/mock_log.txt", s))
     line = j["lines"][0]
     assert line["med"] == pytest.approx(3.51, abs=0.01)
     assert line["exp"] == "差"                         # 体验标准：超过 1.5 秒算差
-    assert line["verdict"] == "偏慢"                   # 超出合理范围 0.7～2.75；验证 03 没给总等待的"算慢"线
-    assert line["combo"] == "先查哪段做坏了"            # 体验差 + 超出合理范围
+    assert line["verdict"] == "已记录" and line["vs"] is None   # 第一次测：没有上次可比
+    assert line["combo"].startswith("体验差：慢在「")   # 直接说慢在哪一段
     seg = {g["k"]: g for g in j["segments"]}
-    assert seg["think"]["verdict"] == "超过慢阈值" and seg["think"]["med"] == pytest.approx(2.68, abs=0.01)
-    assert seg["asr"]["verdict"] == "正常" and seg["net"]["verdict"] == "正常"
+    assert seg["think"]["verdict"] == "已记录" and seg["think"]["med"] == pytest.approx(2.68, abs=0.01)
     assert seg["queue"]["verdict"] == "推算"            # 推算的段只标推算，不判快慢
-    assert all(seg[k]["verdict"] == "正常" for k in ("decode", "speak", "state", "clear", "face"))
+    assert all(seg[k]["verdict"] == "已记录" for k in ("asr", "net", "decode", "speak", "state", "clear", "face"))
     assert seg["asr"]["outside"] and not seg["decode"]["outside"]  # 设备外段单独标
     assert j["biggest"] == "think"
     items = {x["k"]: x for x in j["labels"]}
@@ -57,10 +56,9 @@ def test_emotion_line_mock_log_matches_validation_09():
     assert [round(r["segs"]["dec"] * 1000, 1) for r in rs] == pytest.approx([float(w["决策模型选表情并发回"]) for w in want], abs=0.051)
     j = J.judge(s, rs)
     face, speak = j["lines"]
-    assert speak["med"] == pytest.approx(2.17, abs=0.01) and speak["verdict"] == "正常" and speak["exp"] == "差"
-    assert speak["combo"] == "每段都没做坏，是做法本身慢，要换做法才会快"
-    assert face["med"] == pytest.approx(1.17, abs=0.01) and face["verdict"] == "正常" and face["exp"] is None
-    assert face["over_slow"] == 2                          # 2 轮超过算慢线
+    assert speak["med"] == pytest.approx(2.17, abs=0.01) and speak["verdict"] == "已记录" and speak["exp"] == "差"
+    assert speak["combo"].startswith("体验差")
+    assert face["med"] == pytest.approx(1.17, abs=0.01) and face["verdict"] == "已记录" and face["exp"] is None
     items = {x["k"]: x for x in j["labels"]}
     assert items["problem:rev"]["rounds"] == [6, 15] and items["problem:rev"]["level"] == "建议改"
     assert items["spiky:dec"]["level"] == "建议改"         # 决策模型偶尔特别慢
@@ -69,14 +67,12 @@ def test_emotion_line_mock_log_matches_validation_09():
     assert [x["level"] for x in j["labels"]] == sorted((x["level"] for x in j["labels"]), key=J.LEVELS.index)
 
 
-# ---------- 每种组合、每种标签一组数据 ----------
-def sc(line_range=(1.0, 2.0), slow=3.0, fair=None, seg_basis="measured", problems=()):
+# ---------- 每种组合、每种标签一组数据（10-19 去掉合理范围清单：体验标准 + 和上次比 + 忽快忽慢） ----------
+def sc(fair=None, seg_basis="measured", problems=()):
     return {"start": {"point": "P1", "name": "起点"},
-            "segments": {"a": {"name": "前一段", "owner": "固件", "side": "device", "from": "P1", "to": "P2",
-                               "range": [0.4, 0.8], "slow": 1.0, "basis": seg_basis},
-                         "b": {"name": "后一段", "owner": "服务器", "side": "outside", "from": "P2", "to": "P3",
-                               "range": [0.5, 1.2], "slow": 2.0, "basis": "measured"}},
-            "lines": [{"name": "主线", "end": "终点", "segments": ["a", "b"], "range": list(line_range), "slow": slow}],
+            "segments": {"a": {"name": "前一段", "owner": "固件", "side": "device", "from": "P1", "to": "P2", "basis": seg_basis},
+                         "b": {"name": "后一段", "owner": "服务器", "side": "outside", "from": "P2", "to": "P3", "basis": "measured"}},
+            "lines": [{"name": "主线", "end": "终点", "segments": ["a", "b"]}],
             "experience": {"line": "主线", "fair": fair} if fair else None, "problems": list(problems)}
 
 
@@ -87,45 +83,55 @@ def rounds(a, b, n=20, probs=None):
              "probs": (probs or {}).get(i + 1, [])} for i in range(n)]
 
 
-@pytest.mark.parametrize("a,b,fair,combo", [
-    (0.6, 1.0, 1.5, "每段都没做坏，是做法本身慢，要换做法才会快"),  # 体验差 + 在合理范围内
-    (0.6, 1.6, 1.5, "先查哪段做坏了"),                           # 体验差 + 超出合理
-    (0.6, 1.6, 9.0, "可能有隐患"),                               # 体验可以 + 超出合理
-    (0.6, 1.0, 9.0, "正常"),                                     # 都正常
+def prev(line, a=0.6, b=1.0, noise=0.0):
+    """上次：各段、各条线的中位数和正常波动（网页后台"和上次比"给的样子）。"""
+    return {"segs": {"a": a, "b": b}, "lines": {"主线": line}, "noise": {"a": noise, "b": noise}, "noise_lines": {"主线": noise}}
+
+
+def label(j):
+    return next(x for x in j["labels"] if x["k"] == "line:主线")
+
+
+@pytest.mark.parametrize("a,b,fair,pv,level,why", [
+    (0.6, 1.0, 1.5, None, "必须改", "体验标准判差"),                                       # 中位数 1.6 超过 1.5
+    ([0.6] * 20, [0.6] * 17 + [1.6] * 3, 1.5, None, "必须改", "10 次里最慢超过体验标准"),  # 中位数 1.2，10 次里最慢 2.2
+    (0.6, 1.0, 9.0, prev(1.4), "建议改", "比上次慢了 0.20 秒"),                            # 体验可以，比上次慢 0.2（超出 0.03 和 5%）
+    (0.6, 1.0, 9.0, prev(1.59), "可以不改", "在体验标准内，和上次比持平"),                   # 慢 0.01：持平
+    (0.6, 1.0, None, prev(1.8), "可以不改", "比上次快了 0.20 秒"),
+    (0.6, 1.0, None, None, "未判", "没有体验标准，也没有上次可比，这次只记用时"),           # 第一次测，也没有体验标准
 ])
-def test_four_combinations(a, b, fair, combo):
-    j = J.judge(sc(fair=fair), rounds(a, b))
-    assert j["lines"][0]["combo"] == combo
+def test_line_labels(a, b, fair, pv, level, why):
+    j = J.judge(sc(fair=fair), rounds(a, b), pv)
+    assert (label(j)["level"], label(j)["why"]) == (level, why)
 
 
-@pytest.mark.parametrize("b,combo", [(1.0, "只按合理范围判：正常"), (1.6, "只按合理范围判：先查哪段做坏了")])
-def test_no_experience_standard_only_uses_ranges(b, combo):
-    j = J.judge(sc(fair=None), rounds(0.6, b))
-    assert j["lines"][0]["exp"] is None and j["lines"][0]["combo"] == combo
+def test_slower_but_inside_normal_noise_is_flat():
+    j = J.judge(sc(), rounds(0.6, 1.0), prev(1.4, noise=0.3))   # 慢 0.2，但两次各自的正常波动有 0.3
+    assert j["lines"][0]["vs"]["change"] == "持平" and label(j)["level"] == "可以不改"
 
 
-@pytest.mark.parametrize("a,b,why,level", [
-    (0.6, 2.6, "中位数超过慢阈值", "必须改"),
-    ([0.6] * 17 + [0.6] * 3, [1.0] * 17 + [2.6] * 3, "10 次里最慢超过慢阈值", "必须改"),
-    (0.6, 1.6, "超出合理范围但未超过慢阈值", "建议改"),
-    (0.6, 1.0, "在合理范围内", "可以不改"),
-])
-def test_line_labels(a, b, why, level):
-    j = J.judge(sc(fair=None), rounds(a, b))
-    item = next(x for x in j["labels"] if x["k"] == "line:主线")
-    assert item["level"] == level, why
+def test_compare_with_last_only_when_both_have_10_rounds():
+    j = J.judge(sc(), rounds(0.6, 1.0, n=9), prev(1.4))
+    assert j["lines"][0]["vs"] is None and label(j)["level"] == "未判"
 
 
-def test_experience_bad_is_must_even_inside_ranges():
-    j = J.judge(sc(fair=1.5), rounds(0.6, 1.0))
-    assert next(x for x in j["labels"] if x["k"] == "line:主线")["level"] == "必须改"
+def test_combo_sentence_says_experience_and_change():
+    j = J.judge(sc(fair=9.0), rounds(0.6, 1.0), prev(1.4))
+    assert j["lines"][0]["combo"] == "体验可以；比上次慢了 0.20 秒"
+    assert J.judge(sc(), rounds(0.6, 1.0))["lines"][0]["combo"].startswith("没有体验标准、也没有上次可比")
+
+
+def test_experience_bad_is_must_even_when_not_slower_than_last():
+    j = J.judge(sc(fair=1.5), rounds(0.6, 1.0), prev(1.6))
+    assert label(j)["level"] == "必须改"
 
 
 def test_spiky_segment_should_or_must():
-    b = [1.0] * 19 + [5.0]                                   # 偶尔一次特别慢，10 次最慢没超
-    assert next(x for x in J.judge(sc(), rounds(0.6, b))["labels"] if x["k"] == "spiky:b")["level"] == "建议改"
-    b2 = [1.0] * 17 + [5.0] * 3                              # 偶发但每 10 次就有 1 次以上让整条线超过算慢线
-    assert next(x for x in J.judge(sc(), rounds(0.6, b2))["labels"] if x["k"] == "spiky:b")["level"] == "必须改"
+    b = [1.0] * 19 + [5.0]                                   # 偶尔一次特别慢，10 次里最慢没超体验标准
+    assert next(x for x in J.judge(sc(fair=2.0), rounds(0.6, b))["labels"] if x["k"] == "spiky:b")["level"] == "建议改"
+    b2 = [1.0] * 17 + [5.0] * 3                              # 偶发但每 10 次就有 1 次以上让整条线超过体验标准
+    assert next(x for x in J.judge(sc(fair=2.0), rounds(0.6, b2))["labels"] if x["k"] == "spiky:b")["level"] == "必须改"
+    assert next(x for x in J.judge(sc(), rounds(0.6, b2))["labels"] if x["k"] == "spiky:b")["level"] == "建议改"  # 没有体验标准
 
 
 def test_problem_levels():
@@ -142,13 +148,14 @@ def test_problem_levels():
 def test_segment_verdicts_and_estimated():
     j = J.judge(sc(seg_basis="estimated"), rounds(0.9, 1.5))
     seg = {g["k"]: g for g in j["segments"]}
-    assert seg["a"]["verdict"] == "推算" and seg["b"]["verdict"] == "偏慢"
-    assert J.judge(sc(), rounds(1.5, 1.0))["segments"][0]["verdict"] == "超过慢阈值"
+    assert seg["a"]["verdict"] == "推算" and seg["b"]["verdict"] == "已记录"      # 第一次测：只记用时
+    seg2 = {g["k"]: g for g in J.judge(sc(), rounds(0.9, 1.0), prev(1.6, a=0.6, b=1.0))["segments"]}
+    assert seg2["a"]["verdict"] == "慢了" and seg2["a"]["vs"]["d"] == pytest.approx(0.3) and seg2["b"]["verdict"] == "持平"
 
 
 def test_tiers_and_first_reaction():
     two = sc()
-    two["lines"].insert(0, {"name": "反应线", "end": "亮灯", "segments": ["a"], "range": [0.4, 0.8], "slow": 1.0})
+    two["lines"].insert(0, {"name": "反应线", "end": "亮灯", "segments": ["a"]})
     rs = [{"n": i + 1, "segs": {"a": 0.5 + i / 100, "b": 1.0}, "ends": [0.5 + i / 100, 1.5 + i / 100], "probs": []} for i in range(20)]
     j = J.judge(two, rs)
     assert j["first"]["line"] == "反应线"
@@ -162,14 +169,14 @@ def test_fewer_than_20_rounds_is_reference_only():
 
 def test_labels_sorted_must_first():
     warn = {"key": "rev", "name": "先后反了", "level": "warn", "rule": {"type": "line_order", "first": "主线", "second": "主线"}}
-    j = J.judge(sc(problems=[warn]), rounds(0.6, 2.6, probs={3: ["rev"]}))
+    j = J.judge(sc(fair=1.5, problems=[warn]), rounds(0.6, 2.6, probs={3: ["rev"]}))
     assert [x["level"] for x in j["labels"]] == ["必须改", "建议改"]
 
 
 def test_under_10_rounds_slowest_in_10_is_not_used():
     """少于 10 轮："10 次里最慢"没意义，不拿它判"必须改"。"""
-    s = {"segments": {"a": {"name": "a", "from": "P1", "to": "P2", "range": [0, 1], "slow": 2.0}},
-         "lines": [{"name": "线", "segments": ["a"], "range": [0, 1], "slow": 2.0}], "problems": []}
+    s = {"segments": {"a": {"name": "a", "from": "P1", "to": "P2"}},
+         "lines": [{"name": "线", "segments": ["a"]}], "experience": {"line": "线", "fair": 2.0}, "problems": []}
     rounds = [{"n": i + 1, "segs": {"a": v}, "ends": [v], "probs": []} for i, v in enumerate([0.5, 0.6, 2.5])]
     j = J.judge(s, rounds)
     lab = next(x for x in j["labels"] if x["kind"] == "line")
@@ -182,7 +189,7 @@ def test_line_with_fewer_than_10_values_does_not_use_10_slowest():
     for r in rs[:2]:
         r["ends"] = [None]
         r["segs"] = {}
-    j = J.judge(sc(fair=None), rs)
+    j = J.judge(sc(fair=2.0), rs)
     assert j["lines"][0]["count"] == 8
     assert next(x for x in j["labels"] if x["k"] == "line:主线")["level"] != "必须改"
     assert all(x["level"] != "必须改" for x in j["labels"] if x["kind"] == "spiky")
@@ -199,7 +206,7 @@ def test_keep_last_middle_point_that_overruns_the_next_step_merges_two_segments(
     rounds = [{"n": i + 1, "segs": {"a": 0.4, "b": -0.011 if i % 2 else 0.02, "c": 0.9}, "ends": [1.3], "probs": []} for i in range(10)]
     sc, rs, notes = J.merge_overruns(s, rounds)
     assert list(sc["segments"]) == ["a", "c"] and sc["segments"]["a"]["to"] == "P3" and sc["lines"][0]["segments"] == ["a", "c"]
-    assert sc["segments"]["a"]["range"] == [0, 1.0] and sc["segments"]["a"]["slow"] == 2.0
+    assert "range" not in sc["segments"]["a"] and "slow" not in sc["segments"]["a"]   # 合理范围不再用（10-19）
     assert {r["segs"]["a"] for r in rs} == {0.389, 0.42} and "b" not in rs[0]["segs"]
     assert notes[0]["names"] == ["发剩下的录音", "上传听写"] and "最后一段录音发出" in notes[0]["why"]
     assert J.judge(sc, rs)["segments"][0]["name"] == "发剩下的录音、上传听写"
@@ -215,6 +222,6 @@ def test_merged_segment_gets_new_code_and_a_short_name():
          "lines": [{"name": "到听写", "segments": ["P1-P2", "P2-P3"]}], "problems": []}
     rounds = [{"n": 1, "segs": {"P1-P2": 0.4, "P2-P3": -0.01}, "ends": [0.39], "probs": []}]
     sc, rs, notes = J.merge_overruns(s, rounds)
-    assert sc["segments"] == {"P1-P3": {"name": "你说完到收到听写", "from": "P1", "to": "P3", "range": None, "slow": None}}
+    assert sc["segments"] == {"P1-P3": {"name": "你说完到收到听写", "from": "P1", "to": "P3"}}
     assert sc["lines"][0]["segments"] == ["P1-P3"] and rs[0]["segs"] == {"P1-P3": 0.39}
     assert notes[0]["segment"] == "P1-P3" and notes[0]["names"] == ["发完剩下的录音", "上传听写"]

@@ -38,10 +38,10 @@ def run(names, expr):
 
 @node
 def test_must_and_should_open_no_change_folded():
-    ds = [{"k": "a", "lv": 1}, {"k": "b", "lv": 2}, {"k": "c", "lv": 0}, {"k": "d", "lv": 2}]
+    ds = [{"k": "a", "lv": 1}, {"k": "b", "lv": 3}, {"k": "c", "lv": 0}, {"k": "d", "lv": 3}, {"k": "e", "lv": 2}]
     r = run(["bossSplit"], f"bossSplit({json.dumps(ds)})")
-    assert [x["k"] for x in r["open"]] == ["c", "a"]  # 必须改在前、建议改在后
-    assert [x["k"] for x in r["fold"]] == ["b", "d"]
+    assert [x["k"] for x in r["open"]] == ["c", "a", "e"]  # 必须改、建议改、未判（没判不等于没问题，不收起来）
+    assert [x["k"] for x in r["fold"]] == ["b", "d"]       # 可以不改的收起来
 
 
 @node
