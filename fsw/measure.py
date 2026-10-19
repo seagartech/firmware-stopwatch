@@ -359,33 +359,6 @@ class Collector:
         return {"ok": False, "att": self.att, "missing": miss}
 
 
-OUTLIER_X = 5      # 一段比这段的中位数长这么多倍、
-OUTLIER_ABS = 3.0  # 而且多出这么多秒：这一轮多半是杂音、误触发记错了，不计入
-
-
-def outliers(rounds, scenario):
-    """哪几轮有一段长得离谱（比这段平时长 5 倍以上、多出 3 秒以上）：多半是记错了，不拿来下结论（真测第 31 次）。
-    放回答这类长短看内容的段（到第一声之后才有的段）不查。少于 5 轮看不出平时多长，不查。"""
-    if len(rounds) < 5:
-        return set()
-    lines = scenario.get("lines") or []
-    first = next((l for l in lines if l.get("first")), None)
-    playing = set(lines[-1]["segments"]) - set(first["segments"]) if first and lines else set()
-    bad = set()
-    for k in scenario.get("segments") or {}:
-        if k in playing:
-            continue
-        vals = sorted(r["segs"][k] for r in rounds if r["segs"].get(k) is not None)
-        if len(vals) < 5:
-            continue
-        med = vals[len(vals) // 2] if len(vals) % 2 else (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2
-        for r in rounds:
-            v = r["segs"].get(k)
-            if v is not None and v > max(med, 0.0) * OUTLIER_X and v - med > OUTLIER_ABS:
-                bad.add(r["n"])
-    return bad
-
-
 def collect(lines, spec):
     c = Collector(spec)
     out = []
