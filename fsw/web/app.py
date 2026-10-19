@@ -1324,8 +1324,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job = col["job"]
         ok = [r for r in (job or {}).get("rounds", []) if r["ok"]]
         same = job and (demo is None or job.get("demo") == demo)
-        odd = sorted(meas.outliers(ok, job["_scenario"])) if ok and same else []
-        ok = [r for r in ok if r["n"] not in odd]  # 有一段长得离谱的轮不计入（多半是杂音让起点记错了），数据检查里写上
         if ok and same:
             sc, raw = job["_scenario"], job["raw_log"]
             if job.get("_page") is not None and job.get("_project_dir"):  # 真测：每次都按项目现在的合理范围清单判
@@ -1343,7 +1341,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
                    "nostart": (job or {}).get("nostart", 0) if raw else 0,
-                   "outlier": odd,
                    "startName": (sc.get("start") or {}).get("name", "")}
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
                 "timing": _timing() if raw else None, "quality": quality, "start_lag": _start_lag(raw, sc),

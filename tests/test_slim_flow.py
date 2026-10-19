@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from fsw import judge as jdg
 from fsw import measure as m
 from fsw.web.app import create_app
 from tests.test_collect_api import FakeSerialDevice
@@ -504,14 +505,15 @@ def test_start_reported_many_times_uses_the_one_right_before_the_next_step():
     assert len(r) == 1 and r[0]["ends"] == [1.17]
 
 
-def test_round_with_an_absurdly_long_segment_is_left_out():
-    sc = {"segments": {"a": {}, "b": {}, "c": {}},
+def test_round_with_an_absurdly_long_segment_counts_and_is_named():
+    # 一段长得离谱的轮照样算进结论，在"偶发特别慢"里点名是哪一轮（真慢还是记错交给人看，码表不替人删）
+    sc = {"segments": {"a": {"name": "上传"}, "b": {"name": "等声音"}, "c": {"name": "放回答"}},
           "lines": [{"name": "到开口", "segments": ["a", "b"], "first": True}, {"name": "到放完", "segments": ["a", "b", "c"]}]}
-    rounds = [{"n": i + 1, "segs": {"a": 0.4, "b": 0.8, "c": 5.0 + i}} for i in range(10)]
-    rounds[0]["segs"]["a"] = 40.0   # 杂音让起点记早了 40 秒
-    rounds[3]["segs"]["c"] = 30.0   # 放回答长短看内容，不查
-    assert m.outliers(rounds, sc) == {1}
-    assert m.outliers(rounds[:4], sc) == set()  # 太少看不出平时多长
+    rounds = [{"n": i + 1, "segs": {"a": 0.4, "b": 0.8, "c": 5.0 + i}, "ends": [1.2, 6.2 + i]} for i in range(10)]
+    rounds[0]["segs"]["a"], rounds[0]["ends"] = 40.0, [40.8, 45.8]
+    out = jdg.judge(sc, rounds)
+    assert out["n"] == 10
+    assert [x["rounds"] for x in out["labels"] if x["kind"] == "spiky" and x["segment"] == "a"] == [[1]]
 
 
 def test_last_point_reported_just_after_the_round_end_marker_still_counts():
