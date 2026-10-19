@@ -42,9 +42,17 @@ async function advStart(){ADV={status:'running',read:''};fixPick=null;render();
 function advWatch(){clearInterval(advT);
  advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render();if(EXP.state==='wait'&&pop!=='export')EXP.state='';  // 等的时候点了取消（或关掉了对话框）：不再自动导出
  if(x.status==='done'&&EXP.state==='wait'){EXP.state='saving';render();exportReport(EXP.dir)}else if(x.status==='failed'&&EXP.state==='wait'){EXP.state='';render()}}catch(e){}},1000)}
-function advBox(){if(!ADV||ADV.status==='done')return '';
+function advBox(D){if(!ADV||ADV.status==='done')return '';
  if(ADV.status==='failed')return `<div class="errbox"><b>为什么、怎么改还没写出来</b><p style="margin:6px 0">${ADV.message||''}</p><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-advretry="1">重试</button></div></div>`;
- return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(String(ADV.read).replace(/^(Read|Grep|Glob|LS|Bash)\s*:?\s*/,''))}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
+ // 生成中：上面的数和结论照常看；这里先按"要你拍板"里要改的问题占好位置，写好后原地换成卡片（2026-10-19 用户要占位和明确的生成进度）
+ const sec=ADV.elapsed||0,typ=ADV.expect||90,todo=decisions(D).filter(d=>d.lv===0||d.lv===1);
+ const head=`<div class="panel"><p style="margin:0"><span class="spin"></span> <b>正在生成"为什么、怎么改"</b>：AI 在读代码和这次的数据，已用 ${mmss(sec)}，${ADV.expect?`上次用了 ${mmss(ADV.expect)}`:'一般 1～3 分钟'}。</p>
+  <span class="pbar"><i style="width:${estPct(sec,typ)}%"></i></span><p class="note" style="margin:4px 0 0">进度条是按${ADV.expect?'上次':'一般'}用时估的，不是真实进度。${ADV.reads?`已看了 ${ADV.reads} 处代码${ADV.read?`，最近在看：<span class="code">${htmlEsc(String(ADV.read).replace(/^(Read|Grep|Glob|LS|Bash)\s*:?\s*/,''))}</span>`:''}。`:''}</p>
+  <p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。写好后下面自动换上，不用刷新。</p></div>`;
+ return head+todo.map((d,i)=>`<div class="panel advwait" style="border-left:3px solid ${d.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(d.lv)}问题 ${i+1}：${d.t}</div>
+  <p style="margin:8px 0 4px"><b>为什么：</b><span class="note">正在生成…</span></p><i class="skel"></i>
+  <p style="margin:8px 0 4px"><b>怎么改：</b><span class="note">正在生成…</span></p><i class="skel"></i><i class="skel" style="width:60%"></i></div>`).join('')}
 const repKey=()=>(realFlash()&&FSWJ&&FSWJ.status==='done'?'real':'demo:'+scene)+':'+okRounds().length;
 async function fetchReport(){const key=repKey(),u=key.startsWith('real')?'/api/report':'/api/report?demo='+encodeURIComponent(scene);
  try{const r=await fetch(u);JREP=r.ok?{...(await r.json()),_key:key}:{_key:key,_none:true}}catch(e){JREP={_key:key,_none:true}}if(page==='report')render()}
@@ -699,7 +707,7 @@ function reportPage(D){
   return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag)+mergedLine(JREP.merged):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2>${timeline(D)}</section>
-  <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
+  <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox(D):fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
   <section class="grid3" id="sec-lines">${lineCards(D)}</section>
   <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">三档用时<span class="tiernote">${D.n<10?`只测了 ${D.n} 轮，不算"10 次里最慢"`:`<i class="rdot"></i>"10 次里最慢"：每 10 次大约有 1 次会这么慢或更慢${D.n<20?'（这次只收了 '+D.n+' 轮，这一档只供参考）':''}`}</span></h2>${tiers(D)}</section>

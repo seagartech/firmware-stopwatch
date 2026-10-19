@@ -263,3 +263,4 @@ table.segtab td.wrap .note,table.segtab td.wrap .up,table.segtab td.wrap .down{w
 .runtl .who.hum{color:var(--speak);border-color:var(--speak)}
 @keyframes rspin{to{transform:rotate(360deg)}}
 .src .lnk{display:inline-block;line-height:1.5;vertical-align:baseline}.decide .src{display:inline-block;line-height:2}
+.skel{display:block;height:10px;margin:4px 0;border-radius:3px;background:linear-gradient(90deg,var(--soft) 25%,var(--line) 50%,var(--soft) 75%);background-size:200% 100%;animation:skel 1.4s ease-in-out infinite}@keyframes skel{to{background-position:-200% 0}}

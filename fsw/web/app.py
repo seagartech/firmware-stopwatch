@@ -1666,7 +1666,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 root = src
         except (OSError, ValueError, KeyError, TypeError):
             pass
-        job = {"status": "running", "started": time.time(), "read": "", "fixes": None, "fine": "", "message": "", "root": root}
+        expect = None  # 上次真调用大模型写了多久：进度条按它估；没有就按一般用时
+        try:
+            last = json.loads((Path(body.project_dir) / "advice" / "advice.json").read_text(encoding="utf-8"))
+            expect = float(last["seconds"]) if last.get("called", True) and float(last["seconds"]) > 0 else None
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        job = {"status": "running", "started": time.time(), "read": "", "reads": 0, "expect": expect,
+               "fixes": None, "fine": "", "message": "", "root": root}
         adv["job"] = job
         T().begin("advise")
         T().count("clicks")
@@ -1675,7 +1682,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             save = Path(body.project_dir) / "advice" if body.project_dir else None
             try:
                 r = advs.advise(model, root, j, sc, steps=body.steps, what=body.what or "", save_to=save,
-                                on_progress=lambda p: job.update(read=p.get("read", "")))
+                                on_progress=lambda p: job.update(read=p.get("read", ""), reads=job["reads"] + 1))
             except Exception as e:
                 r = {"ok": False, "kind": "other", "message": f"写建议时码表出错了：{e}"}
             job["seconds"] = r.get("seconds", round(time.time() - job["started"], 1))
@@ -1694,7 +1701,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.get("/api/advise")
     def advise_status():
-        return adv["job"] or {"status": "idle"}
+        job = adv["job"]
+        if not job:
+            return {"status": "idle"}
+        if job["status"] == "running":
+            return {**job, "elapsed": round(time.time() - job["started"], 1)}  # 用码表这边的钟算已用多久，不受浏览器时钟影响
+        return job
 
     @app.get("/api/collect")
     def collect_status():

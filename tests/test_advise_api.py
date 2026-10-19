@@ -130,3 +130,40 @@ def test_same_problems_reuse_saved_advice_without_calling_llm(run, tmp_path):
     saved.write_text(json.dumps({**d, "for": "别的问题"}, ensure_ascii=False), encoding="utf-8")   # 问题变了
     c.post("/api/advise/start", json=body)
     assert advice_wait(c)["status"] == "done" and len(made) == 2
+
+
+def test_running_shows_progress_and_last_time(run, tmp_path):
+    """生成中：后台给出已用多久、看了几处代码、上次用了多久，网页拿来画进度和占位（2026-10-19 用户要明确的生成进度）。"""
+    import threading
+    gate = threading.Event()
+
+    class SlowLLM(FakeLLM):
+        def investigate(self, prompt, root, on_text=None, on_tool=None):
+            on_tool and on_tool("Read: main/application.cc")
+            on_tool and on_tool("Grep: OnWakeWord")
+            gate.wait(5)
+            return self.reply
+    work = tmp_path / "work"
+    work.mkdir()
+    adv_dir = tmp_path / "p" / "advice"
+    adv_dir.mkdir(parents=True)
+    (adv_dir / "advice.json").write_text(json.dumps({"seconds": 84.0, "called": True, "for": "别的问题"}), encoding="utf-8")
+    body = {"work": str(work), "steps": PAGE["steps"], "project_dir": str(tmp_path / "p")}
+    made_slow = SlowLLM(reply(GOOD))
+    c2 = TestClient(create_app(data_dir=tmp_path / "d2", config_dir=tmp_path / "cfg", idf_finder=lambda: [],
+                               cc_status=lambda: {"found": True, "logged_in": True},
+                               port_finder=lambda: ["/dev/cu.usbmodem1101"], device=FakeSerialDevice(real_log()),
+                               llm_factory=lambda p, k: made_slow, wait_step=0.01))
+    c2.post("/api/settings", json={"llm_provider": "cc"})
+    c2.post("/api/collect/start", json={"page": PAGE, "source": "device", "rounds": 20, "project_dir": str(tmp_path / "p")})
+    wait(c2, lambda j: j["status"] == "done")
+    j = c2.post("/api/advise/start", json=body).json()
+    assert j["status"] == "running" and j["expect"] == 84.0
+    t = time.time()
+    while c2.get("/api/advise").json()["reads"] < 2 and time.time() - t < 5:
+        time.sleep(0.02)
+    s = c2.get("/api/advise").json()
+    assert s["status"] == "running" and s["reads"] == 2 and s["read"] == "Grep: OnWakeWord" and s["elapsed"] >= 0
+    gate.set()
+    done = advice_wait(c2)
+    assert done["status"] == "done" and "elapsed" not in done
