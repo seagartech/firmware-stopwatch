@@ -174,3 +174,15 @@ def test_under_10_rounds_slowest_in_10_is_not_used():
     j = J.judge(s, rounds)
     lab = next(x for x in j["labels"] if x["kind"] == "line")
     assert lab["level"] != "必须改" or "10 次里最慢" not in lab["why"]
+
+
+def test_line_with_fewer_than_10_values_does_not_use_10_slowest():
+    """10 轮里有 2 轮没走到这条线：只剩 8 个数，"10 次里最慢"就是最慢那一个，一轮异常不该判"必须改"。"""
+    rs = rounds([0.6] * 10, [1.0] * 7 + [2.6] + [1.0] * 2, n=10)
+    for r in rs[:2]:
+        r["ends"] = [None]
+        r["segs"] = {}
+    j = J.judge(sc(fair=None), rs)
+    assert j["lines"][0]["count"] == 8
+    assert next(x for x in j["labels"] if x["k"] == "line:主线")["level"] != "必须改"
+    assert all(x["level"] != "必须改" for x in j["labels"] if x["kind"] == "spiky")

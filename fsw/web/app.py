@@ -1627,8 +1627,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         page = meta.get("page") or {}
         sc = stds.real_scenario(page, stds.find(page.get("steps") or []), meta.get("values"))
         lines = (run / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
-        ok = [r for r in meas.collect(lines, meas.Spec.from_scenario(sc)) if r["ok"] and r["ends"][-1] is not None]
-        return (round(jdg.med([r["ends"][-1] for r in ok]), 3), len(ok)) if ok else (None, 0)
+        # 有"第一下感觉到的结果"那条线时，最后一条（到全部做完）看内容长短、不判快慢：首页的主数用第一下那条（真测第 40 次：显示成"声音放完 10.11 秒"）
+        ls = sc.get("lines") or []
+        i = next((k for k, l in enumerate(ls) if l.get("first")), len(ls) - 1)
+        ok = [r for r in meas.collect(lines, meas.Spec.from_scenario(sc)) if r["ok"] and r["ends"][i] is not None]
+        end = ls[i].get("end") if ls and i < len(ls) - 1 else None
+        return (round(jdg.med([r["ends"][i] for r in ok]), 3), len(ok), end) if ok else (None, 0, end)
 
     def _latest_report(proj):
         cands = []
@@ -1662,17 +1666,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if not meta or not meta.get("page"):
                     continue
                 try:
-                    m, n = _run_med(proj, log.parent, meta)
+                    m, n, end = _run_med(proj, log.parent, meta)
                 except Exception:
                     continue
                 if m is not None:
-                    done.append((meta, m, n))
+                    done.append((meta, m, n, end))
             if not done:
                 continue
-            meta, now, n = done[-1]
+            meta, now, n, end = done[-1]
             full = [d for d in done[:-1] if d[2] >= 10]  # 不足 10 轮（跑流程）的不拿来比，也不当"上次"
             page = meta["page"]
-            metric = (page.get("measure") or "").split("→")[-1].strip() or "终点"
+            metric = end or (page.get("measure") or "").split("→")[-1].strip() or "终点"
             out.append({"name": info.get("name", proj.name) + (f"（{info['board']}）" if info.get("board") else ""),
                         "what": meta.get("what") or "", "last": meta.get("measured_at") or "", "rounds": n, "metric": metric,
                         "now": now, "prev": full[-1][1] if full and n >= 10 else None, "few": n < 10, "path": info.get("source"),
