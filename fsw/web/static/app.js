@@ -1087,7 +1087,10 @@ const DX=()=>realCol()?realD():build(SCENES[scene]);
 const PH=()=>CX().ph;
 // 步骤条：真测时按这一轮真正到了哪几个点涂绿（有的点设备要到一轮结束才打出来，按个数从左往右涂会停在中间、还把没到的涂绿）；加粗第一个还没到的
 function phCls(){const ph=PH(),pk=CX().pk,h=col.have;if(!pk||!h)return ph.map((p,i)=>[p,i<col.phase?'ok':i===col.phase?'cur':'']);
- const s=new Set(h),cur=pk.findIndex(k=>!s.has(k));return ph.map((p,i)=>[p,i<pk.length?(s.has(pk[i])?'ok':i===cur?'cur':''):(cur<0?'cur':'')])}
+ // 从左往右涂到已经到了的最靠后那一步（10-19 用户："上面的字变绿会乱变"）：设备要到一轮结束才打出头两步，打断后那一轮"收到开始说话"空着，
+ // 按"到了哪几个"涂会中间先绿、头上后绿、中间缺一块；后面的步到了，前面的一定已经过去了。这一轮还没收尾时，最后一步只加粗不涂绿
+ const s=new Set(h),far=Math.max(-1,...pk.map((k,i)=>s.has(k)?i:-1)),cur=Math.min(far+1,pk.length-1);
+ return ph.map((p,i)=>[p,i<pk.length?(i===cur?'cur':i<=far?'ok':''):''])}
 // 多轮实测：后台一行行读设备输出（没真源码时回放演示数据的设备输出），按轮切分、算用时、查问题；这里每 0.3 秒问一次
 let colES=null;
 function colStop(){if(colT){clearInterval(colT);colT=null}if(colES){colES.close();colES=null}}
