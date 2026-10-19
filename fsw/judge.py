@@ -126,7 +126,7 @@ def judge(scenario, rounds):
         es = experience_of(scenario, l["name"])
         e = experience(l["name"], st, es)
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
-                             "slow": l.get("slow"), "verdict": v, "exp": e, "inside": v == "正常", "new": bool(l.get("new")),
+                             "slow": l.get("slow"), "count": len(ends), "verdict": v, "exp": e, "inside": v == "正常", "new": bool(l.get("new")),
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category")} if es else None,
                              "combo": ANSWER_TXT if by_answer and e is None else combo(e, v == "正常", v, _big(l, seg_st, segs_def, st)),
                              "over_slow": 0 if by_answer else sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
@@ -154,7 +154,7 @@ def judge(scenario, rounds):
     line_by = {l["name"]: l for l in out["lines"]}
     for l in out["lines"]:
         slow = None if l["verdict"] == ANSWER else l["slow"]
-        p90_ok = n >= 10  # 少于 10 轮，"10 次里最慢"没意义，不拿它判
+        p90_ok = l["count"] >= 10  # 这条线收到的数少于 10 个（比如有几轮没走到它），"10 次里最慢"就是最慢那一个，不拿它判
         if (slow is not None and (l["med"] > slow or (p90_ok and l["p90"] > slow))) or l["exp"] == "差":
             lv = "必须改"
         elif l["verdict"] == "偏慢":
@@ -181,7 +181,7 @@ def judge(scenario, rounds):
     for g in out["segments"]:
         if not g["spiky"]:
             continue
-        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and l["verdict"] != ANSWER and n >= 10 and l["p90"] > l["slow"]]
+        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and l["verdict"] != ANSWER and l["count"] >= 10 and l["p90"] > l["slow"]]
         labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
                        "level": "必须改" if hit else "建议改",
                        "why": "偶发特别慢，而且每 10 次就有 1 次让人等太久" if hit else "偶发特别慢"})
