@@ -74,6 +74,9 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
 const VCLS={'超过慢阈值':'c-bad','偏慢':'c-warn','正常':'c-ok','推算':'c-gray','没有范围':'c-gray','看回答长短':'c-gray'};
 function withJudge(D,J){const L=n=>J.lines.find(x=>x.name===n)||{};
+  // 一般、10 次里最慢、最差都用后台算好的，网页不再自己算一遍（两边规则不一样就会对不上：10-19 报告写 1.22、实际 1.34）
+  D.lines.forEach(l=>{const b=L(l.name);if(b.med!=null)Object.assign(l,{med:b.med,p90:b.p90,max:b.max})});
+  D.allSegs.forEach(g=>{const b=(J.segments||[]).find(x=>x.k===g.k);if(b&&b.med!=null)Object.assign(g,{med:b.med,max:b.max})});
   D.verdict=l=>{const v=L(l.name).verdict||'正常';return [v==='没有范围'?'还没有合理范围':v,VCLS[v]||'c-gray']};
   const e=L(D.main.name).exp;D.exp=e?[e,e==='差'?'c-bad':'c-ok']:null;
   const sp=J.labels.find(x=>x.kind==='spiky'&&!x.with);  // 和对错问题同一根因的，算进那条
