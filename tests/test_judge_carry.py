@@ -60,22 +60,36 @@ def test_old_list_without_locations_needs_same_name():
     assert s["P2-P3"]["range"] is None and s["P1-P2"]["range"] is not None
 
 
-def test_renamed_line_keeps_range_and_experience_standard():
+def test_renamed_line_keeps_its_range():
     a = door()
     lst, _ = rl.fill(None, a, rounds(a))
-    rl.edit_line(lst, "开门线", lst["lines"][0]["range"], lst["lines"][0]["slow"], 1.0, "省级门禁指南")
+    rl.edit_line(lst, "开门线", [0.4, 0.7], 0.9)
     lst = rl.loads(rl.dumps(lst))
     b = door(order=("开锁", "刷卡", "校验回来", "锁到位"), line="到锁到位")    # 线改了名、编号也变了，起点终点没变
     s = rl.apply(b, lst)
-    assert s["lines"][0]["range"] == lst["lines"][0]["range"]
-    assert s["experiences"] == [{"line": "到锁到位", "fair": 1.0, "source": "省级门禁指南"}]
+    assert s["lines"][0]["range"] == [0.4, 0.7] and s["lines"][0]["slow"] == 0.9
 
 
-def test_empty_source_is_not_called_user_set():
-    a = door()
-    lst, _ = rl.fill(None, a, rounds(a))
-    lst["lines"][0].update(fair=1.0, source="")                            # 文件里有数、出处空着
-    assert rl.apply(a, lst)["experiences"][0]["source"] != "用户设定"
+def test_old_list_with_hand_typed_standard_reads_but_standard_is_ignored():
+    """老清单多「体验标准」「出处」两列（以前能手填）：照样能读，手填的标准不用，写回去就没这两列了。"""
+    old = """# 合理范围清单：门禁
+
+## 分段
+
+| 编号 | 分段 | 起止计时点 | 合理范围（秒） | 慢阈值（秒） | 备注 |
+|---|---|---|---|---|---|
+| P1-P2 | 读卡号并校验 | P1→P2 | 0.3～0.5 | 0.6 | — |
+
+## 测量线
+
+| 测量线 | 合理范围（秒） | 慢阈值（秒） | 体验标准：超过多少秒算差 | 出处 |
+|---|---|---|---|---|
+| 开门线 | 0.5～0.7 | 0.9 | 1.0 | 用户设定 |
+"""
+    lst = rl.loads(old)
+    assert lst["lines"] == [{"name": "开门线", "range": [0.5, 0.7], "slow": 0.9}]
+    assert rl.apply(door(), lst)["experiences"] == []
+    assert "体验标准" not in rl.dumps(lst) and "用户设定" not in rl.dumps(lst)
 
 
 def test_meta_line_survives_code_with_comment_end():
@@ -103,3 +117,8 @@ def test_line_without_range_or_standard_says_not_judged():
     assert lab["level"] == "未判" and "没判" in lab["why"]
     a["experiences"] = [{"line": "开门线", "fair": 1.0, "source": "x"}]    # 有体验标准就照常判
     assert next(x for x in J.judge(a, rounds(a))["labels"] if x["kind"] == "line")["level"] == "可以不改"
+
+
+def test_range_list_page_has_no_hand_typed_standard():
+    from tests.test_boss_short import JS
+    assert "rl-fair" not in JS and "rl-src" not in JS and "用户设定" not in JS

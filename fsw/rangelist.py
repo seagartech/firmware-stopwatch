@@ -2,7 +2,8 @@
 
 两张表，人能直接读、直接改：
 - 分段：编号、分段、起止计时点、合理范围、慢阈值、备注；
-- 测量线：测量线、合理范围、慢阈值、体验标准（超过多少秒算差，可以不填）、出处。
+- 测量线：测量线、合理范围、慢阈值。
+体验标准（用户等不等得了）不在清单里：只从标准库按设备类别挑，出处是公开资料，人不手填（2026-10-19 用户定）。
 
 第一次测满 10 轮，码表按实测自动填（范围 = 最快×0.9～最慢×1.1，慢阈值 = 最慢×1.4）；
 之后只给新出现的、或空着的段补上，已经有数的不动。报告每次都按这份表判。
@@ -22,7 +23,8 @@ FILENAME = "合理范围清单.md"
 MIN_ROUNDS = 10  # 测满这么多轮才拿来自动填清单：跑流程的几轮不算数
 NONE = "—"
 SEG_HEAD = ["编号", "分段", "起止计时点", "合理范围（秒）", "慢阈值（秒）", "备注"]
-LINE_HEAD = ["测量线", "合理范围（秒）", "慢阈值（秒）", "体验标准：超过多少秒算差", "出处"]
+LINE_HEAD = ["测量线", "合理范围（秒）", "慢阈值（秒）"]
+OLD_LINE_HEAD = LINE_HEAD + ["体验标准：超过多少秒算差", "出处"]  # 老清单多这两列：读的时候不管，下次写回去就没了
 
 
 class ListFormatError(ValueError):
@@ -98,8 +100,7 @@ def dumps(lst):
          "## 分段", ""]
     L += _table(SEG_HEAD, [[k, g["name"], f"{g['from']}→{g['to']}", _range_txt(g.get("range")), _num_txt(g.get("slow")), g.get("note")]
                            for k, g in lst["segments"].items()]) + ["", "## 测量线", ""]
-    L += _table(LINE_HEAD, [[l["name"], _range_txt(l.get("range")), _num_txt(l.get("slow")), _num_txt(l.get("fair")),
-                             l.get("source") if l.get("fair") is not None else NONE] for l in lst["lines"]]) + [""]
+    L += _table(LINE_HEAD, [[l["name"], _range_txt(l.get("range")), _num_txt(l.get("slow"))] for l in lst["lines"]]) + [""]
     if lst.get("at"):
         meta = json.dumps({"at": lst["at"], "line_at": lst.get("line_at") or {}}, ensure_ascii=False).replace("-->", "--\\u003e")
         L += [META + meta + " -->", ""]
@@ -130,19 +131,20 @@ def loads(text, path=None):
             if sec is None:
                 errs.append((n, f"不认识的标题「{s[3:].strip()}」，只认「分段」「测量线」"))
         elif sec and s.startswith("|"):
-            cells, want = _split(raw), SEG_HEAD if sec == "seg" else LINE_HEAD
+            cells = _split(raw)
+            want = heads.get(sec) or (SEG_HEAD if sec == "seg" else LINE_HEAD)
             if cells is None:
                 errs.append((n, "表格的一行要以 | 开头、以 | 结尾"))
             elif sec not in heads:
-                heads[sec] = n
-                if cells != want:
+                heads[sec] = OLD_LINE_HEAD if sec == "line" and cells == OLD_LINE_HEAD else want
+                if cells != heads[sec]:
                     errs.append((n, f"表头改了：应为「{' | '.join(want)}」"))
             elif all(re.fullmatch(r":?-{3,}:?", c) for c in cells):
                 continue
             elif len(cells) != len(want):
                 errs.append((n, f"这一行有 {len(cells)} 列，应为 {len(want)} 列（{'、'.join(want)}）"))
             else:
-                _row(lst, sec, n, cells, errs)
+                _row(lst, sec, n, cells[:3] if sec == "line" else cells, errs)  # 老清单的体验标准、出处两列不读
     for sec, zh in (("seg", "分段"), ("line", "测量线")):
         if sec not in heads:
             errs.append((0, f"缺「## {zh}」这张表"))
@@ -181,14 +183,13 @@ def _row(lst, sec, n, c, errs):
         lst["segments"][key] = {"name": name, "from": a.strip(), "to": b.strip(), "range": r, "slow": slow,
                                 "note": "" if note == NONE else note}
     else:
-        name, r_txt, s_txt, fair, src = c
+        name, r_txt, s_txt = c
         what = f"测量线「{name}」"
         r, slow = rng(r_txt, what), num(s_txt, f"{what}的慢阈值")
         bad = check(r, slow, what)
         if bad:
             errs.append((n, bad))
-        lst["lines"].append({"name": name, "range": r, "slow": slow, "fair": num(fair, f"{what}的体验标准"),
-                             "source": "" if src == NONE else src})
+        lst["lines"].append({"name": name, "range": r, "slow": slow})
 
 
 def path_of(project_dir):
@@ -310,12 +311,9 @@ def fill(lst, scenario, rounds, project=None):
             cur["range"], cur["slow"] = backfill(vals)
             cur["note"] = f"实测 {len(vals)} 轮自动填"
             done.append(cur["name"])
-    from fsw.scenario import experience_of
     for i, l in enumerate(scenario["lines"]):
-        old = line_of.get(l["name"])
-        es = {} if old else experience_of(scenario, l["name"]) or {}
-        cur = {"name": l["name"], "range": None, "slow": None, "fair": es.get("fair"), "source": es.get("source") or "",
-               **({k: old.get(k) for k in ("range", "slow", "fair", "source")} if old else {})}
+        old = line_of.get(l["name"]) or {}
+        cur = {"name": l["name"], "range": old.get("range"), "slow": old.get("slow")}
         lines.append(cur)
         vals = [r["ends"][i] for r in rounds if i < len(r["ends"]) and r["ends"][i] is not None]
         if cur.get("range") is None and vals:
@@ -340,9 +338,7 @@ def apply(scenario, lst):
     for l in s["lines"]:
         got = line_of.get(l["name"]) or {}
         l.update(range=got.get("range"), slow=got.get("slow"))
-    # 出处空着不冒充"用户设定"：只有清单页里人改过的才写用户设定（edit_line）
-    s["experiences"] = [{"line": l["name"], "fair": line_of[l["name"]]["fair"], "source": line_of[l["name"]].get("source") or "清单里填的，没写出处"}
-                        for l in s["lines"] if (line_of.get(l["name"]) or {}).get("fair") is not None]
+    s["experiences"] = []  # 体验标准不在清单里：报告最后按设备类别从标准库挂（standards.with_default_experience）
     s.pop("experience", None)
     s["standard"] = None
     s["range_list"] = {"file": FILENAME, "text": f"{lst.get('project') + ' 的' if lst.get('project') else ''}合理范围清单（{FILENAME}）"}
@@ -365,14 +361,12 @@ def edit_segment(lst, key, rng, slow, note=""):
     return lst
 
 
-def edit_line(lst, name, rng, slow, fair, source=""):
+def edit_line(lst, name, rng, slow):
     l = next((x for x in lst["lines"] if x["name"] == name), None)
     if l is None:
         raise ListRuleError(f"清单里没有测量线「{name}」")
     bad = check(rng, slow, f"「{name}」")
     if bad:
         raise ListRuleError(bad)
-    if fair is not None and fair <= 0:
-        raise ListRuleError("体验标准要写大于 0 的秒数，不设就空着")
-    l.update(range=rng, slow=slow, fair=fair, source=((source or "").strip() or "用户设定") if fair is not None else "")
+    l.update(range=rng, slow=slow)
     return lst
