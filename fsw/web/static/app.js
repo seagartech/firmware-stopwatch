@@ -87,10 +87,11 @@ const roundList=a=>'第 '+a.map(r=>r.n).join('、')+' 轮';
 function rangeTxt(v,ns){const pos=v.filter(x=>x!=null&&x>=0),  // 某轮这条线没数（null>=0 在 JS 里是真，会被当成 0）
  neg=ns.filter((n,i)=>v[i]<0);
   return (pos.length?`${fms(Math.min(...pos))}～${fms(Math.max(...pos))}`:'—')+(neg.length?`<br><span class="note">第 ${neg.join('、')} 轮先后反了</span>`:'')}  // 备注换一行写：不把这一列撑宽
+// 线的中位数在标题、要你拍板、计时图终点都写两位小数：同一个数写成一个样（10-19 用户：标题 1.4、图上 1.45）
 function headline(D){
   const L=D.lines;
-  if(L.length===1)return `${D.S.startShort} ${f(L[0].med,1)} 秒${L[0].phrase}`;
-  return `${D.S.startShort} `+L.map(l=>`${f(l.med,1)} 秒${l.phrase}`).join('，');
+  if(L.length===1)return `${D.S.startShort} ${f(L[0].med)} 秒${L[0].phrase}`;
+  return `${D.S.startShort} `+L.map(l=>`${f(l.med)} 秒${l.phrase}`).join('，');
 }
 
 const LV=[['必须改','lv-must'],['建议改','lv-should'],['未判','lv-none'],['可以不改','lv-ok']];
@@ -102,7 +103,7 @@ function decisionsJ(D){const J=D.J,out=[];
   const src={line:['tiers','「三档用时」里“一般”那一列；各段占多少见「一次的计时图」'],spiky:['rounds',`「${D.n} 轮逐轮」图里红底的几轮`],order:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1]?D.lines[1].end:''}晚"的几轮`],problem:['rounds',`「${D.n} 轮逐轮」里出这个问题的几轮`]};
   for(const x of J.labels){const lv=LV.findIndex(v=>v[0]===x.level);
    if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=isMain?D.biggest:([...D.allSegs].filter(s=>l.segs.includes(s.k)).sort((p,q)=>q.med-p.med)[0]||D.biggest),share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
-    out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:isMain?`${l.end}要 ${f(l.med,1)} 秒，大头是"${b.name}"`:`${l.end}要 ${f(l.med,1)} 秒`,
+    out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:isMain?`${l.end}要 ${f(l.med)} 秒，大头是"${b.name}"`:`${l.end}要 ${f(l.med)} 秒`,
      d:x.why==='取决于回答长短，不判快慢'?`长短主要看这次回答说了多少字，不判快慢。`:x.level==='未判'?`${x.why}。`:isMain?`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':noExp(D)+'，只按合理范围判。'}`:x.level==='可以不改'?`${x.why}。`:`${x.why}，大头是"${b.name}" ${f(b.med)} 秒，占 ${share}%。`,who:x.why==='取决于回答长短，不判快慢'?'不判快慢':x.level==='未判'?'这次的用时已记下，测满 10 轮存为合理范围，下次再测就和它比':x.level==='可以不改'?(v==='还没有合理范围'?(J.scenario&&J.scenario.first_run?(ex?'第一次测，按体验标准不用改':'第一次测，先只记用时'):'还没有合理范围，先只记用时'):'在合理范围里，不用改'):`找${b.owner}`})}
    else if(x.kind==='spiky'){const s=D.allSegs.find(y=>y.k===x.segment);if(!s||x.with)continue;  // 和对错问题同一根因的，合并到那条里
     out.push({k:x.k,seg:x.segment,lv,src:src.spiky,tag:['偶发','c-warn'],t:`"${s.name}"偶尔特别慢`,d:`平时 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒（${roundList(x.rounds.map(n=>({n})))}）。`,who:`找${s.owner}`})}
@@ -116,7 +117,7 @@ function decisions(D){if(D.J)return decisionsJ(D);
   if(D.spiky)out.push({k:'spiky',tag:['偶发','c-warn'],t:`"${D.spiky.name}"偶尔特别慢`,d:`平时 ${f(D.spiky.med)} 秒，最慢 ${f(D.spiky.max)} 秒（${roundList(D.allSegs.find(s=>s.k===D.spiky.k).v.map((x,i)=>({x,n:i+1})).filter(o=>o.x>D.spiky.med*2.5))}）。`,who:`找${D.spiky.owner}`});
   const b=D.biggest,share=Math.round(b.med/D.main.med*100);
   const mv=D.verdict(D.main)[0],mainOk=!(D.exp&&D.exp[0]==='差')&&mv==='正常';
-  out.push({k:'main',tag:D.exp?[`体验${D.exp[0]}`,D.exp[1]]:D.verdict(D.main),t:`${D.main.end}要 ${f(D.main.med,1)} 秒，大头是"${b.name}"`,d:`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':noExp(D)+'，只按合理范围判。'}`,who:mainOk?'在合理范围里，不用改':`找${b.owner}`});
+  out.push({k:'main',tag:D.exp?[`体验${D.exp[0]}`,D.exp[1]]:D.verdict(D.main),t:`${D.main.end}要 ${f(D.main.med)} 秒，大头是"${b.name}"`,d:`这一段 ${f(b.med)} 秒，占 ${share}%。${D.exp?'':noExp(D)+'，只按合理范围判。'}`,who:mainOk?'在合理范围里，不用改':`找${b.owner}`});
   // 等级按固定规则算，不由 AI 判断（2026-10-13 用户提出加标签）
   const L=out.map(x=>{let lv;
     if(x.k==='main')lv=(D.exp&&D.exp[0]==='差')||mv==='超过慢阈值'?0:mv==='偏慢'?1:3;  // 3 = 可以不改（2 是未判）
@@ -237,7 +238,7 @@ function gapLine(G){if(!G||!G.length)return '';const by={};G.forEach(g=>g.names.
  return '；'+Object.entries(by).map(([x,ns])=>`第 ${ns.join('、')} 轮的「${x}」记在这一轮开始之前（多半是上一轮被中途打断，剩下的一次晚到了），这几轮用到它的两段空着，整条线照样按首尾算`).join('；')}
 function subline(D){
   const bits=[];
-  if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med,1)} 秒`);
+  if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med)} 秒`);
   const je=D.J&&D.J.lines?D.J.lines.filter(x=>x.exp):[];  // 体验标准挂在哪条线上就说哪条（比如只挂在"到喇叭出第一声"）
   if(je.length)bits.push(je.map(x=>`${(D.lines.find(l=>l.name===x.name)||{end:x.name}).end}按体验标准算<span class="chip ${x.exp==='差'?'c-bad':'c-ok'}">${x.exp}</span>`).join('，'));
   else if(D.exp)bits.push(`按体验标准算<span class="chip ${D.exp[1]}">${D.exp[0]}</span>`);else bits.push(noExp(D));
