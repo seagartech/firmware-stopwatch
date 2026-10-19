@@ -28,9 +28,7 @@ function build(S){S.lines.forEach(l=>{if(l.slow==null)l.slow=Infinity});  // 没
   const main=lines[lines.length-1];
   const verdict=l=>l.med>l.slow?['超过慢阈值','c-bad']:l.med>l.ok[1]?['偏慢','c-warn']:['正常','c-ok'];
   const exp=S.exp?(main.med>S.exp.fair?['差','c-bad']:['可以','c-ok']):null;
-  // 计时图画"真实的一轮"：选各条线都最接近中位数的那一轮（2026-10-13 用户问"是某一次还是平均值"后改）
-  const rep=[...rounds].map(r=>({r,d:r.ends.reduce((t,e,i)=>t+(e==null?9:Math.abs(e-lines[i].med)/lines[i].med),0)})).sort((a,b)=>a.d-b.d)[0].r;
-  const out={S,n,use,lines,rounds,reversed,slowRounds,allSegs,biggest,spiky,main,verdict,exp,rep};
+  const out={S,n,use,lines,rounds,reversed,slowRounds,allSegs,biggest,spiky,main,verdict,exp};
   return S.J?withJudge(out,S.J):out;
 }
 // 报告用这次多轮实测真收到的数（演示数据回放时和演示数据一样）；选了真源码时，段、线、范围都按真步骤和对上的标准
@@ -132,8 +130,13 @@ function decisions(D){if(D.J)return decisionsJ(D);
 // ===== 计时图：同一起点、多条横线（按数据画）=====
 function niceT(x){return Math.max(.5,Math.ceil(x*1.2/.5)*.5)}
 function step(T){return T<=1?.1:T<=2?.25:T<=4?.5:1}
+// 一次的计时图按中位数画（10-19 用户定"一套标准"）：每条线总长 = 这条线的中位数（和标题、三档用时里的"一般"同一个数）；
+// 线里各段按各段中位数的比例分。不再挑某一轮画：挑出来的那轮和标题对不上（标题 1.45、图上 1.51）
+function segMed(D,k){return (D.allSegs.find(x=>x.k===k)||{med:med(D.S.segs[k].v)}).med}
+function lineParts(D,l){const m=l.segs.map(k=>Math.max(0,segMed(D,k)||0)),sum=m.reduce((t,x)=>t+x,0);
+  return l.segs.map((k,j)=>({k,real:segMed(D,k),share:sum>0?m[j]/sum:1/l.segs.length,d:l.med==null?0:(sum>0?m[j]/sum:1/l.segs.length)*l.med}))}
 function timeline(D){
-  const R=D.rep.n-1,T=niceT(Math.max(...D.rep.ends));const W=900,X0=150,X1=820,sx=t=>X0+(X1-X0)*t/T,h=22,gap=64,top=60;
+  const T=niceT(Math.max(...D.lines.map(l=>l.med).filter(x=>x!=null&&isFinite(x))));const W=900,X0=150,X1=820,sx=t=>X0+(X1-X0)*t/T,h=22,gap=64,top=60;
   const H=top+D.lines.length*gap+30;
   let g='';const st=step(T);
   for(let t=0;t<=T+1e-9;t+=st){g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="30" y2="${H-30}" stroke="var(--soft)"/><text x="${sx(t)}" y="${H-10}" text-anchor="middle" font-size="12" fill="var(--muted)" class="num">${+t.toFixed(2)} 秒</text>`}
@@ -146,27 +149,28 @@ function timeline(D){
   const shown=new Map();let merged=false;  // 图例只列图上画成单独一块的段；合并了的几段另列一项
   D.lines.forEach((l,i)=>{const y=top+i*gap;let t0=0;
     g+=`<text x="${X0-14}" y="${y+h/2+5}" text-anchor="end" font-size="14" font-weight="700" fill="${l.col}">${l.name}</text>`;
-    if(D.rep.ends[i]==null){g+=`<text x="${sx(0)+8}" y="${y+h/2+5}" font-size="12" fill="var(--muted)">这一轮没收到</text>`;return}
+    if(l.med==null||!isFinite(l.med)){g+=`<text x="${sx(0)+8}" y="${y+h/2+5}" font-size="12" fill="var(--muted)">没收到</text>`;return}
     // 几段连着都很短（画出来不到 8 像素）：合成一小块、用灰色，鼠标移上去看是哪几段；段与段之间留一道缝（决策 139）
-    let tiny=null;const flush=()=>{if(!tiny)return;const n=tiny.n.length;merged=true;g+=`<rect class="hit" data-tip="${htmlEsc(`${n>1?`<b>${n} 段合并显示</b>（每段过短，无法单独显示）<br>合计 ${f(tiny.b-tiny.a)} 秒，起止时刻 ${f(tiny.a)} → ${f(tiny.b)} 秒<br>`:''}${tiny.n.map(htmlEsc).join('<br>')}`)}" x="${sx(tiny.a)}" y="${y}" width="${Math.max(3,sx(tiny.b)-sx(tiny.a))}" height="${h}" fill="var(--est)" opacity=".6" stroke="var(--panel)" stroke-width="1" rx="1"></rect>`;tiny=null};
-    l.segs.forEach((k,j)=>{const d=D.S.segs[k].v[R],a=t0,b=t0+d;t0=b;const last=j===l.segs.length-1;const shared=D.use[k]>1;
-      if(!last&&sx(b)-sx(a)<8){tiny=tiny||{a,b,n:[]};tiny.b=b;tiny.n.push(`${D.S.segs[k].name} ${f(d)} 秒`);return}
+    let tiny=null;const flush=()=>{if(!tiny)return;const n=tiny.n.length;merged=true;g+=`<rect class="hit" data-tip="${htmlEsc(`${n>1?`<b>${n} 段合并显示</b>（每段过短，无法单独显示）<br>各段中位数：<br>`:''}${tiny.n.map(htmlEsc).join('<br>')}`)}" x="${sx(tiny.a)}" y="${y}" width="${Math.max(3,sx(tiny.b)-sx(tiny.a))}" height="${h}" fill="var(--est)" opacity=".6" stroke="var(--panel)" stroke-width="1" rx="1"></rect>`;tiny=null};
+    lineParts(D,l).forEach(({k,real,share,d},j)=>{const a=t0,b=t0+d;t0=b;const last=j===l.segs.length-1;const shared=D.use[k]>1;
+      if(!last&&sx(b)-sx(a)<8){tiny=tiny||{a,b,n:[]};tiny.b=b;tiny.n.push(`${D.S.segs[k].name} ${fms(real)} 秒`);return}
       flush();
       const c=last?l.col:shared?'var(--soft)':l.soft;if(!shown.has(k))shown.set(k,c);
-      g+=`<g class="hit" data-tip="${htmlEsc(segTip(D,i,k,a,b))}"><rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
-      if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(d)}</text>`}
-      else if(sx(b)-sx(a)>34&&!last)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)" class="num">${f(d)}</text>`;g+='</g>'});flush();
-    g+=`<circle class="hit" data-tip="${htmlEsc(`<b>${htmlEsc(l.name)}</b><br>${htmlEsc(l.end)}：本轮总耗时 ${f(D.rep.ends[i])} 秒<br>${D.n} 轮中位数 ${f(l.med)} 秒`)}" cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(D.rep.ends[i])} 秒</text>`;});
-  if(D.lines.length>1&&D.rep.ends[0]!=null&&D.rep.ends[1]!=null){const a=D.rep.ends[0],b=D.rep.ends[1],y=top+gap-12;
+      g+=`<g class="hit" data-tip="${htmlEsc(segTip(D,i,k,real,share))}"><rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
+      if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(real)}</text>`}
+      else if(sx(b)-sx(a)>34&&!last)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)" class="num">${f(real)}</text>`;g+='</g>'});flush();
+    g+=`<circle class="hit" data-tip="${htmlEsc(`<b>${htmlEsc(l.name)}</b><br>${htmlEsc(l.end)}：${D.n} 轮中位数 ${f(l.med)} 秒<br>${D.n>=10?`10 次里最慢 ${f(l.p90)}`:`最慢 ${f(l.max)}`} 秒`)}" cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
+  const L0=D.lines[0],L1=D.lines[1];
+  if(L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)){const a=L0.med,b=L1.med,y=top+gap-12;
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(b-a,2)} 秒</text>`;}
   const segLegend=[...shown].map(([k,c])=>`<span><i class="sw" style="background:${c}"></i>${D.S.segs[k].name}${D.use[k]>1?'（共用）':''}</span>`).join('')+(merged?`<span><i class="sw" style="background:var(--est);opacity:.6"></i>几段很短、合成一块（鼠标移上去看是哪几段）</span>`:'');
-  const rule=`颜色规则：每条线一种颜色；到达终点的最后一段为深色，之前各段为浅色${[...shown.keys()].some(k=>D.use[k]>1)?'；多条线共用的段为灰色':''}${merged?'；相邻的极短段合并为一块（见图例最后一项）':''}。色块宽度＝该段耗时。<br>鼠标悬停在色块或终点圆点上，查看本轮耗时、占比、起止时刻和 ${D.n} 轮中位数。`;
+  const rule=`颜色规则：每条线一种颜色；到达终点的最后一段为深色，之前各段为浅色${[...shown.keys()].some(k=>D.use[k]>1)?'；多条线共用的段为灰色':''}${merged?'；相邻的极短段合并为一块（见图例最后一项）':''}。<br>总长是这条线的中位数（${D.n} 轮）；各段按各自中位数的比例分，悬停看每段的中位数。`;
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
   <div class="legend">${segLegend}</div><p class="note" style="margin:6px 0 0">${rule}</p>`;
 }
 // 计时图色块的悬停提示：只用段名、线名和数字，不带任何场景专用说法
-function segTip(D,i,k,a,b){const s=D.S.segs[k],l=D.lines[i],tot=D.rep.ends[i],sh=D.use[k]>1;
- return `<b>${htmlEsc(s.name)}</b>${sh?'（多条线共用）':''}<br>本轮耗时 ${f(b-a)} 秒${tot>0?`，占「${htmlEsc(l.name)}」${Math.round((b-a)/tot*100)}%`:''}<br>起止时刻 ${f(a)} → ${f(b)} 秒<br>${D.n} 轮中位数 ${f((D.allSegs.find(x=>x.k===k)||{med:med(s.v)}).med)} 秒`}
+function segTip(D,i,k,real,share){const s=D.S.segs[k],l=D.lines[i],sh=D.use[k]>1,v=num(s.v);
+ return `<b>${htmlEsc(s.name)}</b>${sh?'（多条线共用）':''}<br>${D.n} 轮中位数 ${fms(real)} 秒，占「${htmlEsc(l.name)}」${Math.round(share*100)}%${v.length?`<br>最快～最慢 ${fms(Math.min(...v))}～${fms(Math.max(...v))} 秒`:''}`}  // 不到 0.1 秒写三位小数，免得写成 0.00
 // "偶发特别慢"点名的那几轮（和拍板区说的"逐轮图里红底的几轮"对上，真测第 36 次）：轮号 → 哪一段
 function spikyRounds(D){const m=new Map(),J=D.J;
  if(J)J.labels.filter(x=>x.kind==='spiky'&&!x.with).forEach(x=>{const s=D.allSegs.find(y=>y.k===x.segment);(x.rounds||[]).forEach(n=>m.set(n,s?s.name:x.segment))});
@@ -693,7 +697,7 @@ function reportPage(D){
   if(mode==='dev')return dev(D);
   return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag)+mergedLine(JREP.merged):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
-  <section class="panel" id="sec-tl"><h2>一次的计时图</h2><details class="lvwhy" style="margin:-4px 0 8px"><summary>画的是第 ${D.rep.n} 轮</summary><p class="note" style="margin:4px 0 0">画的是真实的一轮：第 ${D.rep.n} 轮。${D.n} 轮里它最接近一般情况，所以拿它当代表。<br>每轮的情况见下方「${D.n} 轮逐轮」图，一般、${D.n<10?'':'10 次里最慢、'}最差见「三档用时」。</p></details>${timeline(D)}</section>
+  <section class="panel" id="sec-tl"><h2>一次的计时图</h2>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
   <section class="grid3" id="sec-lines">${lineCards(D)}</section>
