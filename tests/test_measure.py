@@ -263,3 +263,20 @@ def test_late_start_alone_still_does_not_count():
 def test_answer_pausing_over_ten_seconds_is_not_taken_as_done():
     """回答中途服务器停了 10 秒多（10-19"老师今天表扬了我"）：不能按 10 秒安静就当放完。"""
     assert m.LAST_QUIET > 10.25
+
+
+def test_step_bar_does_not_light_the_leftover_before_you_speak():
+    """10-19：打断回答后，服务器补发的"收到开始说话"在你还没说话时就到了，步骤条先把它涂绿。"""
+    c = m.Collector(interrupt_spec())
+    for l in ["FSW,RESET,1000000,0", "FSW,P6,1100000,0"]:
+        c.feed(l)
+    assert c.have() == []
+    c.feed("FSW,P3,5000000,0")
+    assert c.have() == ["P3"]  # 补发的那次比"收到听写文字"还早，不算
+    for l in ["FSW,P7,5060000,0", "FSW,P8,5800000,0", "FSW,P9,5820000,0"]:
+        c.feed(l)
+    assert c.have() == ["P3", "P7", "P8", "P9"]  # 后面的照样一步步涂绿
+    c2 = m.Collector(interrupt_spec())
+    for l in ["FSW,RESET,1000000,0", "FSW,P3,5000000,0", "FSW,P6,5050000,0", "FSW,P7,5060000,0"]:
+        c2.feed(l)
+    assert c2.have() == ["P3", "P6", "P7"]  # 没打断时照常
