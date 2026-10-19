@@ -388,7 +388,11 @@ class Collector:
         return len([x for x in self.spec.need if x in (self.cur or {})]), len(self.spec.need)
 
     def have(self):
-        """正在收的这一轮已经到了哪几个点（页面步骤条按这个涂绿：有的点设备要到一轮结束才打出来，不能按个数从左往右涂）。"""
+        """正在收的这一轮已经到了哪几个点（页面步骤条按这个涂绿：有的点设备要到一轮结束才打出来，不能按个数从左往右涂）。
+        取最后一次的点（比如声音放完）一轮里会报好几次（每句放完报一次），报过不等于做完了：这一轮收尾前不涂绿。"""
+        return [x for x in self._have() if x not in self.spec.last]
+
+    def _have(self):
         if self.done:
             return []
         if self.spec.start in self.cur:

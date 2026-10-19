@@ -280,3 +280,12 @@ def test_step_bar_does_not_light_the_leftover_before_you_speak():
     for l in ["FSW,RESET,1000000,0", "FSW,P3,5000000,0", "FSW,P6,5050000,0", "FSW,P7,5060000,0"]:
         c2.feed(l)
     assert c2.have() == ["P3", "P6", "P7"]  # 没打断时照常
+
+
+def test_step_bar_does_not_light_the_last_one_while_still_playing():
+    """10-19：回答说到一半，句子之间停一下就报了一次"声音放完"，步骤条全绿，其实还在说。"""
+    c = m.Collector(interrupt_spec())
+    for l in ["FSW,RESET,1000000,0", "FSW,P3,5000000,0", "FSW,P6,5050000,0", "FSW,P7,5060000,0", "FSW,P8,5800000,0",
+              "FSW,P9,5820000,0", "FSW,P1,4600000,2", "FSW,P2,4950000,80", "FSW,P10,6500000,9"]:
+        c.feed(l)
+    assert "P10" not in c.have() and "P9" in c.have() and "P1" in c.have()
