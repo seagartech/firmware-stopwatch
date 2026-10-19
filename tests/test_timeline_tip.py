@@ -103,3 +103,8 @@ def test_headline_writes_the_same_median_as_the_chart_end():
     out = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
     assert out.startswith("刷卡 0.07 秒先亮灯") and "0.91 秒后开门" in out
     assert "med,1)" not in JS                                                # 线的中位数没有哪里还只写一位
+
+
+def test_report_names_category_start_gap_and_best_fix_without_scene_words_in_code():
+    assert "function bestFix(" in JS and "const startGap=" in JS
+    assert "最值得优化的一段" in JS and "这个标准只有及格线" in JS
