@@ -486,3 +486,44 @@ def test_wake_round_after_try_is_skipped_silently(setup):
     j = _collect_after_try(setup, WakeThenStream(), 3)
     assert j["status"] == "done" and not j.get("half") and not j.get("nostart")
     assert [x["ok"] for x in j["rounds"]] == [True, True, True]
+
+
+class TrialDoneThenQuiet(FakeDevice):
+    """试一次那一轮收全（含"取最后一次"的最后一声），结束标记在换调试口时过去了；正式实测开头设备一会儿没输出。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,RESET,1,0", "FSW,P1,10,1", "FSW,P2,20,0", "FSW,P5,30,0"]
+        for l in out:
+            on_line(l)
+        return out
+
+    def stream(self, port, on_line, stop):
+        t = time.time()
+        while time.time() - t < 1.5 and not stop():
+            time.sleep(0.01)
+        for l in ["FSW,P1,310,1", "FSW,P2,350,0", "FSW,P5,360,0", "FSW,RESET,500,0",
+                  "FSW,P1,510,1", "FSW,P2,550,0", "FSW,P5,560,0", "FSW,RESET,700,0"]:
+            if stop():
+                return
+            on_line(l)
+        while not stop():
+            time.sleep(0.01)
+
+
+def test_carried_round_turns_green_as_soon_as_measuring_starts(setup):
+    # 10-19 用户："说完今天星期几格子不变色，说完恐龙一下子绿两个"：试一次带过来的那一轮已经收全，开测就算第 1 轮
+    c, r, *_ = setup(device=TrialDoneThenQuiet())
+    start_insert(c, r)
+    wait(c, lambda j: j["status"] == "inserted")
+    assert run_to_try(c)["status"] == "done"
+    steps = [{"p": s["p"], "n": s["n"], "line": s["line"], **({"once": "last"} if s["p"] == "P5" else {})} for s in STEPS]
+    page = {"steps": steps, "segs": [{"a": "P1", "b": "P2", "t": "读卡号"}, {"a": "P2", "b": "P5", "t": "开锁"}], "fsegs": [], "ln": {"talk": "开锁这条"}}
+    res = c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3})
+    assert res.status_code == 200, res.text
+    time.sleep(0.5)  # 设备还没新输出
+    j = c.get("/api/collect").json()
+    assert [x["ok"] for x in j["rounds"]] == [True], j
+    t = time.time()
+    while time.time() - t < 10 and j["status"] not in ("done", "stopped"):
+        time.sleep(0.05)
+        j = c.get("/api/collect").json()
+    assert j["status"] == "done" and [x["ok"] for x in j["rounds"]] == [True, True, True]
