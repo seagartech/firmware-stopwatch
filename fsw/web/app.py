@@ -767,6 +767,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         job, a = fsw["job"], fsw["args"]
         _, orig_fw, fsw_fw = _fsw_dirs(a)
         job.update(status="running", err=None, cancel=False, gen=job.get("gen", 0) + 1)  # 第几趟：上一趟还没停的"试一次"见到就停，让出调试口
+        if start == "try" and not job.get("_just_flashed"):  # 再试一次、没重新烧录：设备开着，页面别先闪一下"设备正在重启"
+            job.update(phase="try", dev_seen=time.time())
 
         def build():
             T().end("confirm")
