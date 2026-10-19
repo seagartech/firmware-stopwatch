@@ -423,3 +423,12 @@ def test_spiky_rounds_are_red_in_the_round_chart():
          'allSegs:[{k:"a",name:"上传录音、服务器听写"},{k:"b",name:"b"}]}')
     assert run(["spikyRounds"], f"[...spikyRounds({D})]") == [[6, "上传录音、服务器听写"]]
     assert "spk.has(r.n)" in grab("roundsChart")
+
+
+def test_page_follows_a_stop_made_outside_the_page():
+    # 真测：后台被别处停下（status=stopped）时测量页还显示"正在编译 0%"；页面要跟着停、回首页并说明
+    pre = ("let FSWJ,fswT=1,runT=1,AUTO=true,page='flash',hStage=3,said='';const fl={st:1};"
+           "const clearInterval=()=>{},render=()=>{},window={scrollTo(){}},toast=m=>{said=m};")
+    code = pre + grab("fswApply") + "\nfswApply({status:'stopped',phase:'build'});console.log(JSON.stringify([page,AUTO,fl.st,said]));"
+    r = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
+    assert r[:3] == ["home", False, 0] and "后台停止" in r[3]

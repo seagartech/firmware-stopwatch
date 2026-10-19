@@ -555,3 +555,20 @@ def test_round_missing_only_the_answer_length_point_still_counts():
     out = m.collect(lines, spec)
     assert [(r["ok"], r.get("ends")) for r in out] == [(True, [1.0, 4.0]), (True, [1.5, None]), (False, None)]
     assert m.Spec.from_scenario({**sc, "lines": [{**l, "first": False} for l in sc["lines"]]}).soft == set()  # 没有"第一下"那条线时都要
+
+
+def test_last_value_still_pending_at_round_start_is_printed_as_late_and_counted():
+    # 真测第 38 次"一周有几天"：设备先回到等待（清零）、后放空声音，暂存的最后一声被清掉，这一轮少了"放完"。
+    # 计时点工具清零前先补打 FSW,LATE,P..：码表只把它当"取最后一次"的终点用，别的点（比如没走完的起点）补打出来不算
+    lines = ["FSW,RESET,0,0", "FSW,P1,1000000,0", "FSW,P2,2250000,0", "FSW,LATE,P3,6000000,40",
+             "FSW,RESET,9000000,0", "FSW,LATE,P1,9500000,1",                     # 唤醒那一下：起点补打出来也不算
+             "FSW,RESET,12000000,0", "FSW,P1,13000000,0", "FSW,P2,14000000,0", "FSW,P3,16000000,1", "FSW,RESET,20000000,0"]
+    out = m.collect(lines, _last_spec())
+    assert [(r["ok"], r.get("ends")) for r in out] == [(True, [1.25, 5.0]), (True, [1.0, 3.0])]
+
+
+def test_header_prints_pending_last_values_before_reset():
+    from fsw import instrument as ins
+    body = ins.HEADER.split("static inline void fsw_round_reset")[1]
+    assert body.index("FSW,LATE,P%d") < body.index("FSW,RESET")
+    assert ins.count_marks(["FSW,LATE,P9,123,4", "FSW,P2,5,0"]) == {9, 2}

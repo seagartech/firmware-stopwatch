@@ -900,6 +900,9 @@ function fswApply(j){FSWJ=j;const PH={insert:1,build:2,flash:3,try:4};
  else if(j.status==='inserted'){fl.st=3;fl.step=2}
  else if(j.status==='ready_try'){fl.st=6;fl.step=4}
  else if(j.status==='failed'){fl.st=5;fl.err=j.err.kind}
+ else if(j.status==='stopped'&&page==='flash'&&fl.st!==0){  // 后台被别处停下（不是点这页的「停止测量」）：页面跟着停，回首页说明
+  clearInterval(fswT);fswT=null;fl.st=0;AUTO=false;clearInterval(runT);runT=null;page='home';hStage=1;
+  toast('测量已在后台停止（不是在这个页面点的停止），已回到首页；要接着测，重新点「开始测量」');render();window.scrollTo(0,0);return}
  else if(j.status==='done'&&fl.st!==2){fl.st=2;fl.step=5;onDev='fsw';clearInterval(fswT);fswT=null;loadRCT();
   }  // 试通了不自己跳走（用户：等我主动点「开始多轮实测」）
  if(j.status!=='running'&&j.status!=='waiting_device'&&j.status!=='ready_try'){clearInterval(fswT);fswT=null}

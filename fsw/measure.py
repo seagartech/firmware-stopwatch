@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 
 POINT = re.compile(r"FSW,(P\d+|RESET),(-?\d+),(-?\d+)")
+LATE = re.compile(r"FSW,LATE,(P\d+),(-?\d+),(-?\d+)")  # 一轮开始时补打的"记最后一次"（见 fw_stopwatch.h 的 fsw_round_reset）
 
 
 def parse_line(line):
@@ -230,7 +231,11 @@ class Collector:
     def feed(self, line):
         p = parse_line(line)
         if not p:
-            return []
+            m = LATE.search(line or "")
+            # 只当"取最后一次"的终点用（比如设备先回到等待、后放空声音的最后一声）；别的点（比如没走完的起点）补打出来也不算
+            if not m or m.group(1) not in self.spec.last:
+                return []
+            p = (m.group(1), int(m.group(2)), int(m.group(3)))
         self.last = line.strip()
         name, us, val = p
         out = []
