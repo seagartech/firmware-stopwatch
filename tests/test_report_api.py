@@ -41,26 +41,19 @@ def test_open_raw_log_folder_only_inside_our_folders(app):
     assert c.post("/api/open-folder", json={"path": "/etc/passwd"}).status_code == 403
 
 
-def test_first_full_run_fills_the_list_and_report_follows_edits_without_refresh(app):
-    """测满 10 轮：按实测自动建合理范围清单；之后改清单，报告下次打开就按新的判，用时不变，不用点"更新"。"""
-    from fsw import rangelist as rl
+def test_first_full_run_only_records_and_old_range_list_is_ignored(app):
+    """合理范围清单 10-19 去掉了：测满 10 轮也不建清单；项目文件夹里留着的老清单（哪怕写坏了）不读、不报错、不删。"""
     c, _, _, tmp_path = app
+    proj = tmp_path / "data" / "xiaozhi-1"
+    proj.mkdir(parents=True)
+    (proj / "合理范围清单.md").write_text("# 合理范围清单：老的\n| 坏 |", encoding="utf-8")
     measured(c, tmp_path)
     r = c.get("/api/report").json()
-    proj = tmp_path / "data" / "xiaozhi-1"
-    lst = rl.read(proj)
-    assert lst and r["list_filled"] and r["scenario"]["range_list"]["file"] == rl.FILENAME
     seg = {g["k"]: g for g in r["segments"]}["P2-P5"]
-    assert seg["verdict"] == "没有范围" and r["scenario"]["first_run"]  # 范围就是按这次填的：不拿它判这次自己（只会全"正常"）
-    lseg = next(g for g in lst["segments"].values() if (g["from"], g["to"]) == ("P2", "P5"))
-    assert lseg["range"][0] <= seg["min"] and lseg["range"][1] >= seg["max"]  # 清单里按实测填好了，下次和它比
-    assert "stale" not in r
-    lk = next(k for k, g in lst["segments"].items() if (g["from"], g["to"]) == ("P2", "P5"))
-    c.post("/api/rangelist/edit", json={"kind": "segment", "key": lk, "range": [0.001, seg["med"] / 2], "slow": seg["med"] / 1.5})
-    r2 = c.get("/api/report").json()
-    seg2 = {g["k"]: g for g in r2["segments"]}["P2-P5"]
-    assert seg2["verdict"] == "超过慢阈值" and seg2["med"] == seg["med"]
-    assert not r2["list_filled"] or r2["list_filled"] == r["list_filled"]                   # 有数的段不再自动改
+    assert seg["verdict"] == "已记录" and seg["vs"] is None and r["scenario"]["first_run"]  # 第一次测：只记用时
+    assert "list_filled" not in r and "range_list" not in r["scenario"]
+    assert (proj / "合理范围清单.md").read_text(encoding="utf-8") == "# 合理范围清单：老的\n| 坏 |"   # 不动用户的文件
+    assert c.get("/api/rangelist").status_code == 404 and c.get("/api/rangelists").status_code == 404
 
 
 # ---- 导出：一个 HTML 文件，存在项目文件夹的 reports/，文件名"场景_测完时间.html"，断网能开 ----

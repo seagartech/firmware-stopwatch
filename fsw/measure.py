@@ -551,6 +551,33 @@ class Collector:
         return {"ok": False, "att": self.att, "missing": miss}
 
 
+ROUNDS_FILE = "rounds.json"
+
+
+def save_rounds(run_dir, rounds):
+    """测完存下这次收全的每一轮（各段、各条线的用时），放在原始日志旁边。
+    以后"和上次比"、首页"以前测过的"都读它，和测的时候是同一组数；不再重读原始日志重算
+    （重算时认不出试一次带过来的那一轮，10 轮算成 9 轮，10-19）。"""
+    import json
+    from pathlib import Path
+    keep = [{"n": r.get("n"), "segs": r.get("segs") or {}, "ends": r.get("ends") or []} for r in rounds if r.get("ok")]
+    (Path(run_dir) / ROUNDS_FILE).write_text(json.dumps({"rounds": keep}, ensure_ascii=False), encoding="utf-8")
+
+
+def run_rounds(run_dir, spec):
+    """一次测量收全的每一轮：测完时存下的（save_rounds）；老数据没存，才按原始日志重算。"""
+    import json
+    from pathlib import Path
+    p = Path(run_dir) / ROUNDS_FILE
+    if p.exists():
+        try:
+            return [{**r, "ok": True} for r in json.loads(p.read_text(encoding="utf-8"))["rounds"]]
+        except (ValueError, KeyError, TypeError):
+            pass  # 文件坏了：退回重算
+    lines = (Path(run_dir) / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
+    return [r for r in collect(lines, spec) if r["ok"]]
+
+
 def collect(lines, spec):
     c = Collector(spec)
     out = []

@@ -176,7 +176,7 @@ def test_user_asks_1017_noise_retest_label_advice_reuse_short_totals(run_ok=None
     """10-17 用户：①差值没超出两次各自正常波动写"在正常波动内"；②再测时步骤条不写"第一次测"；③问题没变沿用上次的"为什么、怎么改"；④两行合计名字改短、各段放悬停。"""
     from tests.test_boss_short import JS, grab
     c = grab("cmpTxt")
-    assert "Math.abs(d)<=noise" in c and "在正常波动内" in c
+    assert "Math.abs(d)<=Math.max(noise||0,.03,Math.abs(prev)*.05)" in c and "在正常波动内" in c  # 和后台 judge.vs_prev 同一条规则
     assert "flow==='retest'||remeasure?'改完再测':'第一次测'" in JS and "if(!REAL)return;remeasure=true;" in JS
     assert "沿用 ${htmlEsc(ADV.at)} 写的" in JS
     rows = next(x for x in JS.splitlines() if "const lineRows=" in x)

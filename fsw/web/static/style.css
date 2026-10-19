@@ -162,7 +162,7 @@ details.mapbox summary{cursor:pointer;list-style-position:inside}
 details.panel>summary{list-style-position:inside}
 details.manual{margin-top:8px}
 .lvtag{display:inline-block;flex:0 0 auto;font-size:12.5px;font-weight:700;border-radius:4px;padding:1px 8px;margin-right:8px;white-space:nowrap}
-.lv-must{background:var(--bad);color:#fff}.lv-should{background:var(--warn);color:#fff}.lv-ok{background:var(--soft);color:var(--muted)}
+.lv-must{background:var(--bad);color:#fff}.lv-should{background:var(--warn);color:#fff}.lv-ok{background:var(--soft);color:var(--muted)}.lv-none{background:transparent;color:var(--muted);box-shadow:inset 0 0 0 1px var(--muted)}
 ul.decide{list-style:none;padding:0;margin:0}ul.decide li{display:flex;align-items:flex-start;gap:0;margin-bottom:12px}
 .src{font-size:13px;color:var(--muted)}
 .lnk{font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:1px 8px;border-radius:6px;cursor:pointer;margin:2px 0}.lnk:hover{border-color:var(--fg)}
@@ -235,6 +235,13 @@ svg text.halo{paint-order:stroke;stroke:var(--panel);stroke-width:5px;stroke-lin
 th.own,td.own{min-width:6.5em}
 /* 分段用时：多了"上次"一栏后段名别被挤成两三个字一行 */
 th.segn{min-width:9em}
+/* 分段用时表（10-19 用户：桌面宽度出了横向滚动条）：格子左右留白收一点；"最小～最大""合理"在"～"后面可以换行，
+   "上次"一栏数字下面那句可以换行；数字本身不拆开。手机宽度放不下时外面的 .scroll 照旧横向滚动 */
+table.segtab th,table.segtab td{padding:8px 6px}
+table.num.segtab td.r.wrap{white-space:normal}
+table.segtab .chip{margin:0 0 3px}
+table.segtab th.segn{width:11em}                                  /* 段名最多占这么宽，多的换行，把地方让给数字 */
+table.segtab td.wrap .note,table.segtab td.wrap .up,table.segtab td.wrap .down{white-space:nowrap}  /* "在正常波动内"这类一句不拆开 */
 .tipname{text-decoration:underline dotted;text-underline-offset:3px;cursor:help}  /* 悬停看包含哪几段 */
 /* 首页预计总耗时（精简流程，决策 158） */
 .estbox{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:12px 0}

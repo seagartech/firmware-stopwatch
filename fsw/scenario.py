@@ -34,7 +34,7 @@ class ScenarioError(ValueError):
 
 
 def experiences(s):
-    """体验标准：每条线一条（决策 149，写在 experiences 里；fair 为 null = 待用户设定）。
+    """体验标准：每条线一条（写在 experiences 里；fair 为 null = 这条线没有）。来源只有标准库（2026-10-19 起不再由人手填）。
     旧数据只有一条 experience（挂在某一条线上），照样能读：当成那条线的体验标准。"""
     if s.get("experiences") is not None:
         return list(s["experiences"])
@@ -43,7 +43,7 @@ def experiences(s):
 
 
 def experience_of(s, line):
-    """某条线已设定的体验标准；没有或待用户设定返回 None。"""
+    """某条线的体验标准；没有返回 None。"""
     return next((e for e in experiences(s) if e.get("line") == line and e.get("fair") is not None), None)
 
 
@@ -55,7 +55,7 @@ def main_experience(s):
 
 
 def normalize(s):
-    """旧写法（一条 experience）→ 新写法（每条线一条 experiences，没有的待用户设定）。"""
+    """旧写法（一条 experience）→ 新写法（每条线一条 experiences，没有的 fair 为 null）。"""
     import copy
     out = copy.deepcopy(s)
     have = {e["line"]: e for e in experiences(out)}
@@ -165,7 +165,7 @@ def check(s):
             errs.append(f"「{exp['line']}」的体验标准写了两条")
         seen.add(exp["line"])
         if exp.get("fair") is not None and not _num(exp.get("fair")):
-            errs.append(f"「{exp['line']}」的体验标准要写多少秒算差（fair），待用户设定写 null")
+            errs.append(f"「{exp['line']}」的体验标准要写多少秒算差（fair），没有写 null")
         if s.get("experiences") is None and exp.get("fair") is None:
             errs.append("体验标准要写多少秒算差（fair）")
     order = s.get("expect_order")

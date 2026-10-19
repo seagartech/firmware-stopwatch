@@ -1,24 +1,20 @@
-"""判快慢、两把尺子、结论标签。全部按固定规则从数据算，不用大模型、不由 AI 判断（决策 52）。
+"""判快慢、结论标签。全部按固定规则从数据算，不用大模型、不由 AI 判断（决策 52）。
 
-两把尺子：
-- 体验标准（用户等不等得了）：只挂在有公认标准的那条线上（比如对话开口 1.5 秒），定结论；
-- 合理范围（这套做法有没有做坏）：每段、每条线都有，放技术细节。
-每条线按两把尺子的组合给一句话：
-- 体验差 + 在合理范围内：每段都没做坏，是做法本身慢，要换做法才会快
-- 体验差 + 超出合理范围：先查哪段做坏了
-- 体验可以 + 超出合理范围：可能有隐患
-- 都正常：正常
+两把尺子（10-19 用户定：去掉合理范围清单）：
+- 体验标准（用户等不等得了）：按设备类别从标准库挑，挂在"第一下感觉到结果"的那条线上，判整条线；
+- 和上次比（第二次起）：每段、每条线和上次比快了、慢了还是持平（两次都满 10 轮才比）。
 结论标签：
-- 必须改：中位数超过慢阈值，或体验标准判"差"，或 10 次里最慢超过慢阈值；对错问题（比如回答开头被吞）出现就算
-- 建议改：偶发特别慢、先后反了，但没到上一条（不到每 10 次 1 次以上）；或超出合理范围但未超过慢阈值
-- 可以不改：在合理范围内
+- 必须改：体验标准判"差"（中位数超过），或 10 次里最慢超过体验标准；对错问题出现就算；偶发特别慢且 10 次里最慢超过体验标准
+- 建议改：比上次慢了（超出正常波动）；偶发特别慢、先后反了，但没到上一条
+- 未判：既没有体验标准、也没有上次可比，这次只记用时，明说，不算"可以不改"
+- 可以不改：体验标准内，且没比上次慢
 """
 
 import math
 
 from fsw.scenario import experience_of
 
-LEVELS = ["必须改", "建议改", "可以不改"]
+LEVELS = ["必须改", "建议改", "未判", "可以不改"]
 FEW = 20          # 少于 20 轮：结论只供参考
 SPIKE_RATIO, SPIKE_GAP = 2.5, 0.3   # 偶发特别慢：最慢一次超过一般的 2.5 倍，且多出 0.3 秒以上
 OFTEN = 0.1       # 每 10 次 1 次以上算"经常"
@@ -42,21 +38,17 @@ def stats(vals):
 
 ANSWER = "看回答长短"  # 放回答的几段、到全部放完那条：长短跟这次回答说了多少字有关，不判快慢
 ANSWER_TXT = "取决于回答长短，不判快慢"
+RECORDED = "已记录"  # 第一次测（没有上次可比）：段只记用时
+FLAT_S, FLAT_PCT = 0.03, 0.05  # 和上次比：变化不到 0.03 秒或 5%，或在两次各自的正常波动内，算持平（决策 156）
 
 
-def verdict(st, rng, slow, basis="measured"):
-    """每段 / 每条线按中位数判：正常（不超过合理范围上限）、偏慢（超过上限、未超过慢阈值）、超过慢阈值；
-    推算的段只标"推算"；没有范围的不判。"""
-    if basis == "estimated":
-        return "推算"
-    if not rng:
-        return "没有范围"
-    lo, hi = rng
-    if slow is not None and st["med"] > slow:
-        return "超过慢阈值"
-    if hi is not None and st["med"] > hi:
-        return "偏慢"
-    return "正常"
+def vs_prev(now, prev, noise=None):
+    """和上次比：{"prev": 上次中位数, "d": 这次 − 上次, "change": 慢了 / 快了 / 持平}；没有上次返回 None。"""
+    if prev is None or now is None:
+        return None
+    d = now - prev
+    flat = abs(d) <= max(noise or 0, FLAT_S, abs(prev) * FLAT_PCT)
+    return {"prev": round(prev, 6), "d": round(d, 6), "change": "持平" if flat else "慢了" if d > 0 else "快了"}
 
 
 def experience(line_name, st, exp):
@@ -66,18 +58,16 @@ def experience(line_name, st, exp):
     return "差" if st["med"] > exp["fair"] else "可以"
 
 
-def combo(exp, inside, verdict="正常", big=None):
-    if verdict == "没有范围" and exp is None:
-        return "还没有合理范围：只记下用时，先不判快慢"
-    if verdict == "没有范围" and exp == "差" and big:  # 第一次测：没有范围可查"哪段做坏了"，直接说慢在哪一段
-        return f"体验差：慢在「{big[0]}」（{big[1]:.2f} 秒，占 {big[2]}%）"
-    if verdict == "没有范围":  # 体验标准判了、还没有合理范围：只说体验，不说"比这套做法该有的慢"（没有可比的）
-        return "体验可以；还没有合理范围，先只记用时" if exp == "可以" else "体验差；还没有合理范围，先只记用时"
-    if exp is None:
-        return "只按合理范围判：正常" if inside else "只按合理范围判：先查哪段做坏了"
-    if exp == "差":
-        return "每段都没做坏，是做法本身慢，要换做法才会快" if inside else "先查哪段做坏了"
-    return "正常" if inside else "可能有隐患"
+def combo(exp, vs=None, big=None):
+    """每条线一句话：体验标准 + 和上次比。"""
+    if exp == "差" and big:
+        head = f"体验差：慢在「{big[0]}」（{big[1]:.2f} 秒，占 {big[2]}%）"
+    else:
+        head = {"差": "体验差", "可以": "体验可以"}.get(exp)
+    tail = None if not vs else "和上次比持平" if vs["change"] == "持平" else f"比上次{vs['change']} {abs(vs['d']):.2f} 秒"
+    if not head and not tail:
+        return "没有体验标准、也没有上次可比：只记下用时，先不判快慢"
+    return "；".join(x for x in (head, tail) if x)
 
 
 def _big(line, seg_st, segs_def, st):
@@ -106,10 +96,7 @@ def merge_overruns(scenario, rounds):
         # 段的编号是"起点-终点"写法的（比如 P1-P2）跟着改成新的起止；名字用"前一步到下一步"，原来两段的名字放进合并说明
         nk = f"{g1['from']}-{g2['to']}" if k1 == f"{g1['from']}-{a}" else k1
         name = f"{pn[g1['from']]}到{pn[g2['to']]}" if g1["from"] in pn and g2["to"] in pn else f"{g1['name']}、{g2['name']}"
-        add = lambda x, y: None if x is None or y is None else round(x + y, 6)
-        both = lambda x, y: [add(p, q) for p, q in zip(x, y)] if isinstance(x, list) and isinstance(y, list) else None if isinstance(x, list) or isinstance(y, list) else add(x, y)
-        merged = {**g1, "to": g2["to"], "name": name,
-                  "range": both(g1.get("range"), g2.get("range")), "slow": both(g1.get("slow"), g2.get("slow"))}
+        merged = {**{x: v for x, v in g1.items() if x not in ("range", "slow")}, "to": g2["to"], "name": name}  # 合理范围不再用（10-19）
         segs = {(nk if k == k1 else k): (merged if k == k1 else g) for k, g in segs.items() if k != k2}
         rounds = [{**r, "segs": {**{k: v for k, v in r["segs"].items() if k not in (k1, k2)},
                                  nk: None if r["segs"].get(k1) is None or r["segs"].get(k2) is None
@@ -122,11 +109,13 @@ def merge_overruns(scenario, rounds):
     return scenario, rounds, notes
 
 
-def judge(scenario, rounds):
-    """scenario：fsw-scenario/1（段、线、合理范围、体验标准、问题规则）；rounds：多轮实测收齐的每一轮。"""
+def judge(scenario, rounds, prev=None):
+    """scenario：fsw-scenario/1（段、线、体验标准、问题规则）；rounds：多轮实测收齐的每一轮；
+    prev：上次的中位数（{"segs", "lines", "noise", "noise_lines"}，见网页后台的"和上次比"），第一次测没有。"""
     n = len(rounds)
     segs_def, lines_def = scenario["segments"], scenario["lines"]
-    out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": [], "range_list": scenario.get("range_list")}
+    pv = prev if prev and prev.get("segs") is not None and n >= 10 else None  # 两次都满 10 轮才比
+    out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": []}
 
     # 有"到第一声"那条线时，第一声之后到全部放完的那几段是在放回答：长短跟回答说了多少有关，不算"偶发特别慢"
     first = next((l for l in lines_def if l.get("first")), None)
@@ -141,9 +130,10 @@ def judge(scenario, rounds):
         # 放回答那几段里每轮都差不多长的（比如放完设备里剩下的声音，每轮 0.12～0.14 秒）跟回答长短无关：照常判
         by_answer = k in playing and st["max"] - st["min"] > SPIKE_GAP
         spiky = not by_answer and st["max"] > st["med"] * SPIKE_RATIO and st["max"] - st["med"] > SPIKE_GAP
+        vs = None if by_answer or not pv else vs_prev(st["med"], pv["segs"].get(k), (pv.get("noise") or {}).get(k))
         out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
-                                "range": g.get("range"), "slow": g.get("slow"), "outside": g.get("side") == "outside",
-                                "verdict": ANSWER if by_answer else verdict(st, g.get("range"), g.get("slow"), g.get("basis", "measured")),
+                                "outside": g.get("side") == "outside",
+                                "verdict": "推算" if g.get("basis") == "estimated" else ANSWER if by_answer else vs["change"] if vs else RECORDED, "vs": vs,
                                 "spiky": spiky,
                                 "spiky_rounds": [r["n"] for r in rounds if r["segs"].get(k) is not None
                                                  and r["segs"][k] > st["med"] * SPIKE_RATIO] if spiky else []})
@@ -153,16 +143,15 @@ def judge(scenario, rounds):
         if not ends:
             continue
         st = stats(ends)
-        # 有"到第一声"那条时，"到全部放完"那条主要看回答说了多少字：不按合理范围判快慢
+        # 有"到第一声"那条时，"到全部放完"那条主要看回答说了多少字：不判快慢
         by_answer = bool(first) and l is lines_def[-1] and l is not first
-        v = ANSWER if by_answer else verdict(st, l.get("range"), l.get("slow"))
         es = experience_of(scenario, l["name"])
         e = experience(l["name"], st, es)
-        out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "range": l.get("range"),
-                             "slow": l.get("slow"), "count": len(ends), "verdict": v, "exp": e, "inside": v == "正常", "new": bool(l.get("new")),
+        vs = None if by_answer or not pv else vs_prev(st["med"], (pv.get("lines") or {}).get(l["name"]), (pv.get("noise_lines") or {}).get(l["name"]))
+        out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "count": len(ends),
+                             "verdict": ANSWER if by_answer else vs["change"] if vs else RECORDED, "exp": e, "vs": vs,
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category")} if es else None,
-                             "combo": ANSWER_TXT if by_answer and e is None else combo(e, v == "正常", v, _big(l, seg_st, segs_def, st)),
-                             "over_slow": 0 if by_answer else sum(1 for x in ends if l.get("slow") is not None and x > l["slow"]),
+                             "combo": ANSWER_TXT if by_answer and e is None else combo(e, vs, _big(l, seg_st, segs_def, st)),
                              "segments": l["segments"]})
 
     # 第一次反应：每轮几条线里最早到的那一下
@@ -185,22 +174,27 @@ def judge(scenario, rounds):
 
     labels = []
     line_by = {l["name"]: l for l in out["lines"]}
-    for l in out["lines"]:
-        slow = None if l["verdict"] == ANSWER else l["slow"]
-        p90_ok = l["count"] >= 10  # 这条线收到的数少于 10 个（比如有几轮没走到它），"10 次里最慢"就是最慢那一个，不拿它判
-        if (slow is not None and (l["med"] > slow or (p90_ok and l["p90"] > slow))) or l["exp"] == "差":
-            lv = "必须改"
-        elif l["verdict"] == "偏慢":
-            lv = "建议改"
+    def tail(l):  # 这条线 10 次里最慢超过体验标准：每 10 次就有 1 次让人等太久（这条线收到的数少于 10 个时不拿它判）
+        fair = (l.get("exp_std") or {}).get("fair")
+        return fair is not None and l["verdict"] != ANSWER and l["count"] >= 10 and l["p90"] > fair
+
+    for l in out["lines"]:  # 每条线都列：没问题的收在"另有 N 条不用改"里，条数才对得上
+        vs = l["vs"]
+        if l["verdict"] == ANSWER:
+            lv, why = "可以不改", ANSWER_TXT
+        elif l["exp"] == "差":
+            lv, why = "必须改", "体验标准判差"
+        elif tail(l):
+            lv, why = "必须改", "10 次里最慢超过体验标准"
+        elif vs and vs["change"] == "慢了":
+            lv, why = "建议改", f"比上次慢了 {vs['d']:.2f} 秒"
+        elif l["exp"] is None and not vs:
+            lv, why = "未判", "没有体验标准，也没有上次可比，这次只记用时"
         else:
             lv = "可以不改"
-        if True:  # 每条线都列：没问题的收在"另有 N 条不用改"里，条数才对得上
-            why = ("体验标准判差" if l["exp"] == "差" else "中位数超过慢阈值" if slow is not None and l["med"] > slow
-                   else "10 次里最慢超过慢阈值" if slow is not None and p90_ok and l["p90"] > slow
-                   else "超出合理范围但未超过慢阈值" if lv == "建议改" else "还没有合理范围" if l["verdict"] == "没有范围"
-                   else ANSWER_TXT if l["verdict"] == ANSWER
-                   else "在合理范围内")
-            labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
+            why = "，".join(x for x in ("在体验标准内" if l["exp"] == "可以" else None,
+                                         None if not vs else "和上次比持平" if vs["change"] == "持平" else f"比上次快了 {-vs['d']:.2f} 秒") if x)
+        labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
     for p in scenario.get("problems") or []:
         rs = [r["n"] for r in rounds if p["key"] in (r.get("probs") or [])]
         if not rs:
@@ -214,7 +208,7 @@ def judge(scenario, rounds):
     for g in out["segments"]:
         if not g["spiky"]:
             continue
-        hit = [l for l in out["lines"] if g["k"] in l["segments"] and l["slow"] is not None and l["verdict"] != ANSWER and l["count"] >= 10 and l["p90"] > l["slow"]]
+        hit = [l for l in out["lines"] if g["k"] in l["segments"] and tail(l)]
         labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
                        "level": "必须改" if hit else "建议改",
                        "why": "偶发特别慢，而且每 10 次就有 1 次让人等太久" if hit else "偶发特别慢"})
