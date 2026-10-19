@@ -93,3 +93,13 @@ def test_legend_states_how_it_is_drawn_and_color_rule_without_scene_words():
     for w in ("说话", "语音", "开口", "表情", "服务器"):
         assert w not in out
     assert "共用的段为灰色" in svg(voice())
+
+
+def test_headline_writes_the_same_median_as_the_chart_end():
+    """标题和图终点写同一个中位数：都是两位小数（10-19 用户：标题 1.4、图上 1.45 对不上）。"""
+    D = {"S": {"startShort": "刷卡"}, "lines": [{"med": 0.0712, "phrase": "先亮灯"}, {"med": 0.9149, "phrase": "后开门"}]}
+    names = ["f", "headline"]
+    code = "\n".join(grab(n) for n in names) + f"\nconsole.log(JSON.stringify(headline({json.dumps(D, ensure_ascii=False)})));"
+    out = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
+    assert out.startswith("刷卡 0.07 秒先亮灯") and "0.91 秒后开门" in out
+    assert "med,1)" not in JS                                                # 线的中位数没有哪里还只写一位
