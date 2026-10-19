@@ -1636,7 +1636,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         i = next((k for k, l in enumerate(ls) if l.get("first")), len(ls) - 1)
         ok = [r for r in meas.collect(lines, meas.Spec.from_scenario(sc)) if r["ok"] and r["ends"][i] is not None]
         end = ls[i].get("end") if ls and i < len(ls) - 1 else None
-        return (round(jdg.med([r["ends"][i] for r in ok]), 3), len(ok), end) if ok else (None, 0, end)
+        # 留 4 位小数：网页再取两位，和报告一样（真测第 41 次：1.325206 先四舍五入成 1.325，网页显示 1.32、报告 1.33）
+        return (round(jdg.med([r["ends"][i] for r in ok]), 4), len(ok), end) if ok else (None, 0, end)
 
     def _latest_report(proj):
         cands = []
