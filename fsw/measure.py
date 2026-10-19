@@ -393,7 +393,30 @@ class Collector:
             return []
         if self.spec.start in self.cur:
             return [x for x in self.spec.need if x == self.spec.start or self._after(x)]
-        return [x for x in self.spec.need if x in self.cur]
+        # 起点还没打出来（设备一轮结束才打）：按先后看，上一步没到的不算到（打断回答后服务器补发的"开始说话"，你还没说话就先涂绿了）；
+        # 上一步到过、但比它的上一步还早的（就是那个补发的）跳过去，往前接着比
+        shown = {}
+
+        def ok(x):
+            if x in shown:
+                return shown[x]
+            shown[x] = False
+            if x not in self.cur:
+                return False
+            t = None
+            for a, b in self.spec.segments.values():
+                if b != x:
+                    continue
+                while a is not None and a != self.spec.start and a not in self.spec.marks:
+                    if a not in self.cur:
+                        return False
+                    if ok(a):
+                        t = self.cur[a][0]
+                        break
+                    a = next((g[0] for g in self.spec.segments.values() if g[1] == a), None)
+            shown[x] = t is None or any(o[0] >= t for o in self.occ.get(x, []))
+            return shown[x]
+        return [x for x in self.spec.need if ok(x)]
 
     def flush(self, settle=0.0):
         """收全了、已经等了 settle 秒（设备可能不再开始下一轮，比如最后一轮）：收尾，交出这一轮。"""
