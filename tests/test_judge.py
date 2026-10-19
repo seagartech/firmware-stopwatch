@@ -205,3 +205,16 @@ def test_keep_last_middle_point_that_overruns_the_next_step_merges_two_segments(
     assert J.judge(sc, rs)["segments"][0]["name"] == "发剩下的录音、上传听写"
     assert m.suspects(rounds[1], s) == []
     assert J.merge_overruns(s, [{**r, "segs": {**r["segs"], "b": 0.02}} for r in rounds])[2] == []  # 没越过就不合
+
+
+def test_merged_segment_gets_new_code_and_a_short_name():
+    """合并后的段：编号是"起点-终点"写法的跟着改（P1-P2 → P1-P3），名字写"前一步到下一步"，原来两段的名字在合并说明里。"""
+    s = {"start": {"point": "P1", "name": "你说完"}, "last_points": ["P2"],
+         "point_names": {"P1": "你说完", "P2": "最后一段录音发出", "P3": "收到听写"},
+         "segments": {"P1-P2": {"name": "发完剩下的录音", "from": "P1", "to": "P2"}, "P2-P3": {"name": "上传听写", "from": "P2", "to": "P3"}},
+         "lines": [{"name": "到听写", "segments": ["P1-P2", "P2-P3"]}], "problems": []}
+    rounds = [{"n": 1, "segs": {"P1-P2": 0.4, "P2-P3": -0.01}, "ends": [0.39], "probs": []}]
+    sc, rs, notes = J.merge_overruns(s, rounds)
+    assert sc["segments"] == {"P1-P3": {"name": "你说完到收到听写", "from": "P1", "to": "P3", "range": None, "slow": None}}
+    assert sc["lines"][0]["segments"] == ["P1-P3"] and rs[0]["segs"] == {"P1-P3": 0.39}
+    assert notes[0]["segment"] == "P1-P3" and notes[0]["names"] == ["发完剩下的录音", "上传听写"]

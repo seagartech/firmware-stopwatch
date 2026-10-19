@@ -102,16 +102,20 @@ def merge_overruns(scenario, rounds):
         if a not in last or not k1 or not any((r["segs"].get(k2) or 0) < 0 for r in rounds):
             continue
         g1 = segs[k1]
+        pn = scenario.get("point_names") or {}
+        # 段的编号是"起点-终点"写法的（比如 P1-P2）跟着改成新的起止；名字用"前一步到下一步"，原来两段的名字放进合并说明
+        nk = f"{g1['from']}-{g2['to']}" if k1 == f"{g1['from']}-{a}" else k1
+        name = f"{pn[g1['from']]}到{pn[g2['to']]}" if g1["from"] in pn and g2["to"] in pn else f"{g1['name']}、{g2['name']}"
         add = lambda x, y: None if x is None or y is None else round(x + y, 6)
         both = lambda x, y: [add(p, q) for p, q in zip(x, y)] if isinstance(x, list) and isinstance(y, list) else None if isinstance(x, list) or isinstance(y, list) else add(x, y)
-        segs = {**segs, k1: {**g1, "to": g2["to"], "name": f"{g1['name']}、{g2['name']}",
-                             "range": both(g1.get("range"), g2.get("range")), "slow": both(g1.get("slow"), g2.get("slow"))}}
-        segs.pop(k2)
-        rounds = [{**r, "segs": {**{k: v for k, v in r["segs"].items() if k != k2},
-                                 k1: None if r["segs"].get(k1) is None or r["segs"].get(k2) is None
+        merged = {**g1, "to": g2["to"], "name": name,
+                  "range": both(g1.get("range"), g2.get("range")), "slow": both(g1.get("slow"), g2.get("slow"))}
+        segs = {(nk if k == k1 else k): (merged if k == k1 else g) for k, g in segs.items() if k != k2}
+        rounds = [{**r, "segs": {**{k: v for k, v in r["segs"].items() if k not in (k1, k2)},
+                                 nk: None if r["segs"].get(k1) is None or r["segs"].get(k2) is None
                                  else round(r["segs"][k1] + r["segs"][k2], 6)}} for r in rounds]
-        lines = [{**l, "segments": [k for k in l["segments"] if k != k2]} for l in scenario["lines"]]
-        notes.append({"segment": k1, "point": a, "names": [g1["name"], g2["name"]],
+        lines = [{**l, "segments": [nk if k == k1 else k for k in l["segments"] if k != k2]} for l in scenario["lines"]]
+        notes.append({"segment": nk, "point": a, "names": [g1["name"], g2["name"]],
                       "why": f"「{(scenario.get('point_names') or {}).get(a, a)}」这一步在下一步之后还在发生（有的轮比下一步还晚），"
                              f"分不出两段各占多少，合成一段算"})
         scenario = {**scenario, "segments": segs, "lines": lines}
