@@ -21,9 +21,10 @@ def test_restore_keeps_saying_restoring_while_the_page_redraws():
     assert "restoring=true" in h and "restoring=false" in h
 
 
-def test_tiny_segments_are_drawn_as_one_block_with_separators():
+def test_tiny_segments_fold_into_stages_with_separators():
+    """极短段不再画成灰色小块，并进相邻的大段（10-20 用户定，见 test_timeline_tip）；段与段之间照样留一道缝。"""
     t = grab("timeline")
-    assert "tiny" in t and 'stroke="var(--panel)"' in t
+    assert "stages(" in t and 'stroke="var(--panel)"' in t
 
 
 def test_stop_button_sits_on_the_left_away_from_the_grey_report_button():
