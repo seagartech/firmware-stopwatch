@@ -115,6 +115,8 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - 让别人拿哪几轮去查，看那一段自己的数据：每轮都差不多慢的段，拿全部轮次去查；只有个别轮特别慢的，才点名那几轮。
   不要把整条线超标的轮次套到别的段上（那几轮可能是另一段慢）。
 - 同一件事（同一个人改同一处）出现在几张卡片里，name 要一字不差，码表按名字把待办合成一件。
+- 问题里写了"超过标准 1.5 倍"的那几轮，why 要说那几轮多出来的时间在哪一段（对照上面各段"偶发特别慢"的轮次）；对不上就写"推断"。
+- 要加计时点的方案，先看上面"计时点在代码里的位置"：新点要能把一段拆开，不能和已有的点在同一处或紧挨着。
 - 加计时点把一段拆开的方案不算查原因：按改一处判工作量，effect 写"能把这 X 秒拆成哪几截，看清慢在哪一截"。
 - dev.verify 用线的名字写（比如"「从说完到听到第一声」一般用时降到 1.0 秒以下"），不写计时点编号。
 说明文字里写段和计时点的中文名（比如"服务器想回答"），不要写 P2-P5 这样的编号；代码位置写文件名和行号。
@@ -147,7 +149,7 @@ def build_prompt(j, scenario, steps=None, what=""):
         sd = scenario["segments"][g["k"]]
         seg_lines.append(f"- {g['k']}：{g['name']}（{sd['from']}→{sd['to']}，{g['owner']}{'，设备外' if g['outside'] else ''}）"
                          f"一般 {g['med']:.3f}，最慢 {g['max']:.3f}；{_fmt_vs(g)}"
-                         f"{'（偶发特别慢）' if g['spiky'] else ''}")
+                         (f"（偶发特别慢：第 {'、'.join(map(str, g.get('spiky_rounds') or []))} 轮）" if g['spiky'] else ""))
     line_txt = "\n".join(f"- 线「{l['name']}」：一般 {l['med']:.2f} 秒，最慢 {l['max']:.2f}"
                          f"{'，达标率 %d%%（%d 轮里 %d 轮没超过体验标准）' % (round(l['pass_rate'] * 100), l['count'], l['pass_n']) if l.get('pass_rate') is not None else ''}；{_fmt_vs(l)}"
                          f"{'；体验标准判' + l['exp'] if l['exp'] else ''}" for l in j["lines"])
@@ -298,7 +300,7 @@ def _rounds_said(text):
 
 
 # 写法要求改了就加一，旧的建议不再沿用
-PROMPT_VER = 8
+PROMPT_VER = 9
 
 
 def signature(j, scenario):
