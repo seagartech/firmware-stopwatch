@@ -4,12 +4,13 @@
 - 体验标准（用户等不等得了）：按设备类别从标准库挑，挂在"第一下感觉到结果"的那条线上，判整条线；
 - 和上次比（第二次起）：每段、每条线和上次比快了、慢了还是持平（两次都满 10 轮才比）。
 结论标签（10-20 用户定，决策 167）：
-- 必须改：中位数超过体验标准（判"差"）；或"10 次里最慢"（第 90% 那一轮）超过标准的 1.5 倍
-- 建议改："10 次里最慢"在标准和 1.5 倍之间；或比上次慢了（中位数高出 10% 与 0.1 秒中较大的那个以上）
+- 必须改：达标率 < 50%（判"差"）；或超过标准 1.5 倍的轮次 > 10%
+- 建议改：达标率 < 90%；或比上次慢了（中位数高出 10% 与 0.1 秒中较大的那个以上）
+- 达标率：没超过体验标准的轮次占几成（10-20 用户定，换掉自造的"10 次里最慢"）；后两条测满 10 轮才判
 - 出错：对错问题（比如回答开头被吞），单独一块，只写出错的轮次，不分必须 / 建议
 - 未判：既没有体验标准、也没有上次可比，这次只记用时，明说
 - 达标：体验标准内，且没比上次慢；放回答的线不判快慢，也收在这里（页面上只写"另有 N 条达标 / 不判快慢"）
-"偶发特别慢"不再单独出标签：判断用户等多久只看"10 次里最慢"这一个数
+"偶发特别慢"不再单独出标签：偶尔慢由达标率 < 90% 管
 """
 
 import math
@@ -17,7 +18,8 @@ import math
 from fsw.scenario import experience_of
 
 LEVELS = ["出错", "必须改", "建议改", "未判", "达标"]   # 越重要越靠前：出错（功能坏了）＞ 必须改 ＞ 建议改
-TAIL_BIG = 1.5   # "10 次里最慢"超过标准的几倍算必须改
+TAIL_BIG = 1.5   # 超过标准几倍的轮次 > 10% 算必须改
+PASS_BAD, PASS_OK = 0.5, 0.9   # 达标率 < 50% 必须改，< 90% 建议改
 FEW = 20          # 少于 20 轮：结论只供参考
 SPIKE_RATIO, SPIKE_GAP = 2.5, 0.3   # 偶发特别慢：最慢一次超过一般的 2.5 倍，且多出 0.3 秒以上
 OFTEN = 0.1       # 每 10 次 1 次以上算"经常"
@@ -54,12 +56,18 @@ def vs_prev(now, prev, noise=None):
     return {"prev": round(prev, 6), "d": round(d, 6), "change": "持平" if flat else "慢了" if d > 0 else "快了"}
 
 
+def pass_stats(vals, fair):
+    """达标率：没超过体验标准（≤ 及格线）的轮次占几成；big 是超过标准 1.5 倍的轮数。"""
+    ok = sum(1 for v in vals if v <= fair)
+    return {"pass_n": ok, "pass_rate": round(ok / len(vals), 4), "big_n": sum(1 for v in vals if v > fair * TAIL_BIG)}
+
+
 def experience(line_name, st, exp):
     """exp：这条线的体验标准（每条线一条，没设定的不判）。标准里给了"好"的档（good）才分三档：差 / 可以 / 好；
-    只有及格线的照旧两档（10-19 用户定：不自己编"好"的数）。"""
+    只有及格线的照旧两档（10-19 用户定：不自己编"好"的数）。差 = 达标率 < 50%（10-20 用户定，和必须改同一条）。"""
     if not exp or exp.get("line") != line_name or exp.get("fair") is None:
         return None
-    if st["med"] > exp["fair"]:
+    if st.get("pass_rate", 1 if st["med"] <= exp["fair"] else 0) < PASS_BAD:
         return "差"
     return "好" if exp.get("good") is not None and st["med"] <= exp["good"] else "可以"
 
@@ -165,6 +173,8 @@ def judge(scenario, rounds, prev=None):
         # 有"到第一声"那条时，"到全部放完"那条主要看回答说了多少字：不判快慢
         by_answer = bool(first) and l is lines_def[-1] and l is not first
         es = experience_of(scenario, l["name"])
+        if es and es.get("line") == l["name"] and es.get("fair") is not None and not by_answer:
+            st = {**st, **pass_stats(ends, es["fair"])}
         e = experience(l["name"], st, es)
         vs = None if by_answer or not pv else vs_prev(st["med"], (pv.get("lines") or {}).get(l["name"]), (pv.get("noise_lines") or {}).get(l["name"]))
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "count": len(ends),
@@ -206,9 +216,8 @@ def judge(scenario, rounds, prev=None):
 
     labels = []
     line_by = {l["name"]: l for l in out["lines"]}
-    def p90_over(l, k):  # 这条线"10 次里最慢"超过体验标准的 k 倍（收到的数少于 10 个时不判）
-        fair = (l.get("exp_std") or {}).get("fair")
-        return fair is not None and l["verdict"] != ANSWER and l["count"] >= 10 and l["p90"] > fair * k
+    def rate_txt(l):  # 「达标率 80%，10 次里 2 次超过标准 2.0 秒」
+        return f"达标率 {l['pass_rate'] * 100:.0f}%，{l['count']} 次里 {l['count'] - l['pass_n']} 次超过标准 {l['exp_std']['fair']} 秒"
 
     sevs = {}
     for l in out["lines"]:  # 每条线都列：没问题的收在"另有 N 条达标"里，条数才对得上
@@ -218,11 +227,11 @@ def judge(scenario, rounds, prev=None):
         if l["verdict"] == ANSWER:
             lv, why = "达标", ANSWER_TXT
         elif l["exp"] == "差":
-            lv, why, sev = "必须改", f"一般 {l['med']:.2f} 秒，超过标准 {fair} 秒", l["med"] / fair if fair else 1
-        elif p90_over(l, TAIL_BIG):
-            lv, why, sev = "必须改", f"10 次里最慢 {l['p90']:.2f} 秒，超过标准 {fair} 秒的 {TAIL_BIG} 倍", l["p90"] / fair
-        elif p90_over(l, 1):
-            lv, why, sev = "建议改", f"10 次里最慢 {l['p90']:.2f} 秒，超过标准 {fair} 秒", 10 + l["p90"] / fair   # 超标的排在"比上次慢"前面
+            lv, why, sev = "必须改", rate_txt(l), 2 - l["pass_rate"]
+        elif "pass_rate" in l and l["count"] >= 10 and l["big_n"] / l["count"] > 1 - PASS_OK:
+            lv, why, sev = "必须改", f"{l['count']} 次里 {l['big_n']} 次超过标准 {fair} 秒的 {TAIL_BIG} 倍", 1 + l["big_n"] / l["count"]
+        elif "pass_rate" in l and l["count"] >= 10 and l["pass_rate"] < PASS_OK:
+            lv, why, sev = "建议改", rate_txt(l), 10 + 1 - l["pass_rate"]   # 超标的排在"比上次慢"前面
         elif vs and vs["change"] == "慢了":
             lv, why, sev = "建议改", f"比上次慢了 {vs['d']:.2f} 秒", vs["d"]
         elif l["exp"] is None and not vs:

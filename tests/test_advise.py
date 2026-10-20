@@ -136,7 +136,7 @@ def real_like():
 
 
 def test_no_spiky_cards_any_more():
-    """"偶发特别慢"不再单独出标签、也不单独写卡片（10-20 用户定）：只看"10 次里最慢"这一个数。"""
+    """"偶发特别慢"不再单独出标签、也不单独写卡片（10-20 用户定）：偶尔慢由达标率 < 90% 管。"""
     d, j = real_like()
     assert not any(x["kind"] == "spiky" for x in j["labels"])
     keys = [p["key"] for p in adv.problems(j, d["scenario"])]
