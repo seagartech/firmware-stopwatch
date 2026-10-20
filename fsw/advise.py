@@ -42,7 +42,9 @@ def problems(j, scenario):
             rs = lambda k: "、".join(map(str, l.get(k) or []))
             slow = (f"；超过标准的是第 {rs('over_rounds')} 轮" if l.get("over_rounds") else "") + \
                    (f"，其中超过标准 1.5 倍的是第 {rs('big_rounds')} 轮" if l.get("big_rounds") else "")
-            out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}{slow}"})
+            vs = l.get("vs")  # 整条线和上次比（某一段的上次不成立时，这条线的对比还在）
+            was = f"；这条线上次一般 {vs['prev']:.2f} 秒，这次 {l['med']:.2f} 秒" if vs and vs["change"] != "持平" else ""
+            out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}{slow}{was}"})
         elif x["kind"] == "spiky":
             if x.get("with"):
                 continue
@@ -94,14 +96,19 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 
 ## 写法规矩（10-20 用户看过真报告后定，必须照做）
 - why 第一句先说慢在哪一边：设备自己、服务器或网络（上面标"设备外"的段）、还是两边都有。
-- 讲步骤用用户能感觉到的说法（说完话、听到声音、表情变了、灯亮了），设备内部的状态名、消息名要翻成人话，
-  比如不要写"切到说话状态""开口通知""首段声音"，写"设备收到要开始说话的通知""第一段声音到了"。
+- 给负责人看的文字只讲用户感觉得到的两头（说完话、听到第一声、表情变了、灯亮了）和慢在哪一边、慢了多少；
+  中间的"通知""指令""消息""状态"一律不提，换个说法也不行（"收到要开始说话的通知"也不行）。这些写进 dev。
+- 给负责人看的文字里秒数只留一位小数（1.2 秒），不到 0.1 秒写"不到 0.1 秒"；dev 里可以写细。
 - 只用上面给的数据和轮次。上面写了"第一次测"或没写"上次"的，不要和上次比；不要写"码表没告诉我"之类的话。
+- 问题里写了"这条线上次一般多少秒"的，why 里要写出"上次多少、这次多少"，让人看出这是这次新变慢的。
 - 方案的 name 写"谁去做什么"，不要把现象换个说法当方案（"查一下为什么多了 1 秒"不算方案名，要写查哪一步、要什么数据）。
 - 慢在设备外、设备看不到原因的：方案写交给谁、查哪一步、码表数据附上；effect 写"查清原因后才知道"，不要编秒数。
 - effect 写这一个方案单独做，一般用时能快多少；只对个别轮有用的写明"只影响第几轮，一般用时不变"；
   只改提示、等待时间不变的，effect 写"等待时间不变，用户不再以为设备卡住"之类，不写"约 0 秒"。
-- 每张卡片只给一个方案标 rec=1：能直接动手、效果最明确的那个；几个方案一起做的总效果写在最后一句建议里。
+- 每张卡片只给一个方案标 rec=1：能直接动手、效果最明确的那个。最后一句 rec 只说这一个方案：谁先做什么、做完看哪个数，
+  不要把别的方案也塞进来（不写"同时""三个一起做"）。
+- work 和 wn 说的是这个方案本身的工作量：方案是"查"的，name 就以"查"开头，wn 写查的工作量；wn 和 name 说的轮次、范围要一致。
+- dev.verify 用线的名字写（比如"「从说完到听到第一声」一般用时降到 1.0 秒以下"），不写计时点编号。
 说明文字里写段和计时点的中文名（比如"服务器想回答"），不要写 P2-P5 这样的编号；代码位置写文件名和行号。
 why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的：不能写文件名、行号、函数名、变量名；代码位置只写在 how 和 dev 里。
 
@@ -109,7 +116,7 @@ why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的�
 只输出一个 ```json 代码块：
 ```json
 {{"fixes": [{{"when": ["问题编号"], "seg": "主要涉及的段编号（seg 只写一段；讲了几段就写最主要的那段）", "why": "…", "impact": "…",
-  "opts": [{{"name": "…", "how": "…", "size": "…", "rk": "…", "effect": "约 … 秒（估算）", "cost": "…", "work": "小", "wn": "…", "who": "固件研发", "rec": 1}}],
+  "opts": [{{"name": "…", "how": "…", "size": "…", "rk": "…", "effect": "约 … 秒", "cost": "…", "work": "小", "wn": "…", "who": "固件研发", "rec": 1}}],
   "rec": "…", "dev": {{"data": "…", "cause": "…", "change": "…", "size": "…", "rk": "…", "verify": "…"}}}}],
  "fine": "…"}}
 ```
@@ -207,6 +214,7 @@ def check(data, j, scenario):
         for k in MANAGER_FIELDS:
             if "0.00 秒" in str(f.get(k) or ""):
                 bad.append(f"{where}写了「0.00 秒」这种没意义的数")
+        _tidy(f, opts)
         fixes.append(f)
     rounds = {p["key"]: p.get("rounds") or [] for p in probs}
     for i, f in enumerate(fixes, 1):
@@ -225,6 +233,26 @@ def check(data, j, scenario):
     if missing:
         bad.append("这些问题没写卡片：" + "；".join(missing))
     return fixes, bad
+
+
+def _sec(m):
+    """1.164 秒 → 1.2 秒；0.001 秒 → 不到 0.1 秒（前面的空格一起去掉，免得写成"多 不到"）。"""
+    v = float(m.group(2))
+    return "不到 0.1 秒" if v < 0.05 else f"{m.group(1)}{v:.1f} 秒"
+
+
+def _sec_sub(text):
+    return re.sub(r"(?<![\d.])(\s?)(\d+\.\d{2,})\s*秒", _sec, text)
+
+
+def _tidy(f, opts):
+    """给负责人看的文字：秒数留一位小数；效果栏表头已写"估算"，去掉 AI 自己加的"（估算）"。技术细节不动。"""
+    for d, ks in ((f, MANAGER_FIELDS), *((o, MANAGER_OPT_FIELDS) for o in opts if isinstance(o, dict))):
+        for k in ks:
+            if isinstance(d.get(k), str):
+                d[k] = _sec_sub(d[k])
+                if k == "effect":
+                    d[k] = d[k].replace("（估算）", "").replace("(估算)", "").strip()
 
 
 MANAGER_FIELDS = ("why", "impact", "rec")
@@ -250,7 +278,7 @@ def _rounds_said(text):
 
 
 # 写法要求改了就加一，旧的建议不再沿用
-PROMPT_VER = 2
+PROMPT_VER = 3
 
 
 def signature(j, scenario):

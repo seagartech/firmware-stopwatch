@@ -209,3 +209,12 @@ def test_old_advice_is_not_reused_after_prompt_changes(tmp_path, monkeypatch):
     assert adv.saved_for(save, j, d["scenario"])
     monkeypatch.setattr(adv, "PROMPT_VER", adv.PROMPT_VER + 1)
     assert adv.saved_for(save, j, d["scenario"]) is None
+
+
+def test_manager_text_keeps_one_decimal_and_no_estimate_suffix():
+    f = {"why": "一般 1.164 秒，比平时多 0.001 秒", "impact": "x", "rec": "约 2.526秒", "dev": {"data": "1.164 秒"}}
+    opts = [{"name": "a", "effect": "约 0.35 秒（估算）"}, {"name": "b", "effect": "查清原因后才知道（估算）"}]
+    adv._tidy(f, opts)
+    assert f["why"] == "一般 1.2 秒，比平时多不到 0.1 秒" and f["rec"] == "约 2.5 秒"
+    assert opts[0]["effect"] == "约 0.3 秒" or opts[0]["effect"] == "约 0.4 秒"
+    assert opts[1]["effect"] == "查清原因后才知道" and f["dev"]["data"] == "1.164 秒"  # 技术细节不动

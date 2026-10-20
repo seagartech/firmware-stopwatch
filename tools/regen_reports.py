@@ -28,10 +28,16 @@ def one(run, out_dir):
         if r.name < run and (r / "raw.log").exists() and (r / "run.json").exists():
             shutil.copytree(r, p / "runs" / r.name)
     lines = (target / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
-    p1 = [i for i, l in enumerate(lines) if l.startswith("FSW,P1,")]
-    if len(p1) > 1 and not any(l.startswith("FSW,RESET") for l in lines[:p1[1]]):  # 试一次带过来的第 1 轮缺结束标记：补上
-        t = int(lines[p1[1]].split(",")[2]) - 1000
-        lines = [f"FSW,RESET,{int(lines[p1[0]].split(',')[2]) - 1000},0"] + lines[:p1[1]] + [f"FSW,RESET,{t},0"] + lines[p1[1]:]
+    pts = [(i, l.split(",")[1]) for i, l in enumerate(lines) if l.startswith("FSW,P")]
+    seen, cut = set(), None
+    for i, name in pts:  # 第 2 轮从第一个重复出现的计时点开始（P1 不一定最先打印，不能按第二个 P1 切）
+        if name in seen:
+            cut = i
+            break
+        seen.add(name)
+    if pts and cut and not any(l.startswith("FSW,RESET") for l in lines[:cut]):  # 试一次带过来的第 1 轮缺结束标记：补上
+        t = int(lines[cut].split(",")[2]) - 1000
+        lines = [f"FSW,RESET,{int(lines[pts[0][0]].split(',')[2]) - 1000},0"] + lines[:cut] + [f"FSW,RESET,{t},0"] + lines[cut:]
     meta = json.loads((target / "run.json").read_text(encoding="utf-8"))
 
     class Dev:
