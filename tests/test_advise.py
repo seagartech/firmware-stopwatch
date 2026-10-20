@@ -70,6 +70,7 @@ def test_recorded_door_reply_passes_the_check(tmp_path):
     (lambda f: f[0].update(seg="nope"), "没有这一段"),
     (lambda f: f[0]["opts"][0].pop("who"), "找谁"),
     (lambda f: f[0].pop("dev"), "技术细节"),
+    (lambda f: f[0].update(why="和上次相差 0.00 秒"), "0.00 秒"),
 ])
 def test_bad_reply_is_not_used(tmp_path, break_it, words):
     d, j = judged("door")
@@ -189,3 +190,22 @@ def test_main_line_skips_the_answer_length_line_like_the_report():
          "labels": [{"kind": "line", "line": "开口", "level": "必须改", "why": "达标率 0%", "k": "line:开口"}]}
     p = adv.problems(j, {"segments": {}})
     assert [(x["key"], x["seg"]) for x in p] == [("main", "a")]   # 大头取这条线自己的段，不是"放完"那条的
+
+
+def test_only_one_option_stays_recommended(tmp_path):
+    d, j = judged("door")
+    fixes = copy.deepcopy(d["page"]["fixes"])
+    for o in fixes[0]["opts"]:
+        o["rec"] = 1
+    text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
+    r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
+    assert r["ok"] and [bool(o.get("rec")) for o in r["fixes"][0]["opts"]].count(True) == 1
+
+
+def test_old_advice_is_not_reused_after_prompt_changes(tmp_path, monkeypatch):
+    d, j = judged("door")
+    save = tmp_path / "advice"
+    adv.advise(FakeLLM(recorded(d)), tmp_path, j, d["scenario"], steps=d["F"]["steps"], save_to=save)
+    assert adv.saved_for(save, j, d["scenario"])
+    monkeypatch.setattr(adv, "PROMPT_VER", adv.PROMPT_VER + 1)
+    assert adv.saved_for(save, j, d["scenario"]) is None

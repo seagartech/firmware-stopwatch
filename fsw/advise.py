@@ -39,7 +39,10 @@ def problems(j, scenario):
             l = next(l for l in j["lines"] if l["name"] == x["line"])  # 大头的一段：这条线自己里中位数最大的
             segs = [g for g in j["segments"] if g["k"] in l["segments"]]
             seg = max(segs, key=lambda g: g["med"])["k"] if segs else None
-            out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}"})
+            rs = lambda k: "、".join(map(str, l.get(k) or []))
+            slow = (f"；超过标准的是第 {rs('over_rounds')} 轮" if l.get("over_rounds") else "") + \
+                   (f"，其中超过标准 1.5 倍的是第 {rs('big_rounds')} 轮" if l.get("big_rounds") else "")
+            out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}{slow}"})
         elif x["kind"] == "spiky":
             if x.get("with"):
                 continue
@@ -88,6 +91,17 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - dev：给研发看的技术细节：data（相关数据）、cause（原因）、change（改法）、size（改动大小）、rk（风险）、verify（改完怎么用码表验证）。
 - 另外写一句 fine："不用改的"是哪些（设备自己哪几段正常）。
 中文、大白话。拿不准的写"推断"，不要编。why 写 2～4 句。
+
+## 写法规矩（10-20 用户看过真报告后定，必须照做）
+- why 第一句先说慢在哪一边：设备自己、服务器或网络（上面标"设备外"的段）、还是两边都有。
+- 讲步骤用用户能感觉到的说法（说完话、听到声音、表情变了、灯亮了），设备内部的状态名、消息名要翻成人话，
+  比如不要写"切到说话状态""开口通知""首段声音"，写"设备收到要开始说话的通知""第一段声音到了"。
+- 只用上面给的数据和轮次。上面写了"第一次测"或没写"上次"的，不要和上次比；不要写"码表没告诉我"之类的话。
+- 方案的 name 写"谁去做什么"，不要把现象换个说法当方案（"查一下为什么多了 1 秒"不算方案名，要写查哪一步、要什么数据）。
+- 慢在设备外、设备看不到原因的：方案写交给谁、查哪一步、码表数据附上；effect 写"查清原因后才知道"，不要编秒数。
+- effect 写这一个方案单独做，一般用时能快多少；只对个别轮有用的写明"只影响第几轮，一般用时不变"；
+  只改提示、等待时间不变的，effect 写"等待时间不变，用户不再以为设备卡住"之类，不写"约 0 秒"。
+- 每张卡片只给一个方案标 rec=1：能直接动手、效果最明确的那个；几个方案一起做的总效果写在最后一句建议里。
 说明文字里写段和计时点的中文名（比如"服务器想回答"），不要写 P2-P5 这样的编号；代码位置写文件名和行号。
 why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的：不能写文件名、行号、函数名、变量名；代码位置只写在 how 和 dev 里。
 
@@ -187,6 +201,12 @@ def check(data, j, scenario):
             bad.append(f"{where}的技术细节（数据、原因、改法、大小、风险、怎么验证）没写全")
         if opts and not any(o.get("rec") for o in opts if isinstance(o, dict)):
             opts[0]["rec"] = 1  # 一个都没标建议：把第一个当建议（默认勾上）
+        recs = [o for o in opts if isinstance(o, dict) and o.get("rec")]
+        for o in recs[1:]:   # 每张卡片只勾一个（10-20）：标了几个只留第一个
+            o.pop("rec", None)
+        for k in MANAGER_FIELDS:
+            if "0.00 秒" in str(f.get(k) or ""):
+                bad.append(f"{where}写了「0.00 秒」这种没意义的数")
         fixes.append(f)
     rounds = {p["key"]: p.get("rounds") or [] for p in probs}
     for i, f in enumerate(fixes, 1):
@@ -229,10 +249,14 @@ def _rounds_said(text):
     return out
 
 
+# 写法要求改了就加一，旧的建议不再沿用
+PROMPT_VER = 2
+
+
 def signature(j, scenario):
     """要写卡片的问题：哪几个（哪条线、哪一段、哪种问题）、什么级别。和上次写建议时一样，就沿用上次的，不再调用大模型。
     不看具体是哪几轮、几秒：改完再测时这些每次都不一样，问题本身没变（10-17 用户定）。"""
-    return json.dumps([[p["key"], p.get("seg"), p["level"]] for p in problems(j, scenario)], ensure_ascii=False)
+    return json.dumps([PROMPT_VER] + [[p["key"], p.get("seg"), p["level"]] for p in problems(j, scenario)], ensure_ascii=False)
 
 
 def saved_for(save_to, j, scenario):
