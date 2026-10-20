@@ -1,5 +1,6 @@
-"""一次的计时图：按中位数画（总长 = 这条线的中位数，各段按各自中位数的比例分）；色块、终点圆点鼠标移上去即时显示数字，
-图例下写明颜色规则和怎么画的（2026-10-19 用户问"色块鼠标移入没有说明"、"标题 1.4 秒、图上 1.51 秒对不上"）。
+"""一次的计时图：按中位数画（总长 = 这条线的中位数，各段按各自中位数的比例分）；色块、终点圆点鼠标移上去即时显示数字
+（2026-10-19 用户问"色块鼠标移入没有说明"、"标题 1.4 秒、图上 1.51 秒对不上"）。
+归成阶段（2026-10-20 用户定）：占这条线不到 5% 的段并进后面那个大段，排在最后的并进前一个大段；图下每块一行，最长的那块标出来。
 
 用 node 跑 app.js 里的 timeline()，两组数据：门禁样子的和语音样子的，提示里只能有段名、线名和数字。
 """
@@ -31,14 +32,14 @@ def grab(name):
 
 
 def svg(D):
-    names = ["sorted", "num", "med", "f", "fms", "htmlEsc", "passPct", "passTxt", "niceT", "step", "segMed", "lineParts", "segTip", "timeline"]
+    names = ["sorted", "num", "med", "f", "fms", "htmlEsc", "passPct", "passTxt", "niceT", "step", "segMed", "lineParts", "segTip", "stages", "timeline"]
     code = "\n".join(grab(n) for n in names) + f"\nconsole.log(JSON.stringify(timeline({json.dumps(D)})));"
     return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
 
 
 def door():
     segs = {"a": {"name": "读卡号", "v": [0.04, 0.08]}, "b": {"name": "校验<权限>", "v": [0.001, 0.001]},
-            "c": {"name": "查名单", "v": [0.002, 0.002]}, "d": {"name": "亮灯响一声", "v": [0.3, 0.5]}}
+            "c": {"name": "查名单", "v": [0.002, 0.002]}, "d": {"name": "亮灯<响一声>", "v": [0.3, 0.5]}}
     meds = {"a": 0.06, "b": 0.001, "c": 0.002, "d": 0.4}
     return {"n": 2, "S": {"start": "刷卡", "segs": segs}, "use": {"a": 1, "b": 1, "c": 1, "d": 1},
             "allSegs": [{"k": k, "med": meds[k]} for k in segs],
@@ -61,16 +62,32 @@ def test_every_block_and_end_dot_has_instant_tip_with_medians():
     out = svg(door())
     assert "<title>" not in out  # 不再靠浏览器自带的慢提示
     tips = re.findall(r'data-tip="([^"]*)"', out)
-    assert len(tips) == 4  # 读卡号、合并块、亮灯响一声、终点圆点
+    assert len(tips) == 3  # 读卡号、亮灯响一声（并进了两段极短的）、终点圆点
     seg = next(t for t in tips if "读卡号" in t)
     assert "2 轮中位数 0.060 秒" in seg and "占「反应线」13%" in seg and "最快～最慢 0.040～0.080 秒" in seg  # 不到 0.1 秒写三位
     assert "本轮" not in out and "起止时刻" not in out                       # 不再画某一轮
-    merged = next(t for t in tips if "合并显示" in t)
-    assert "2 段合并显示" in merged and "查名单" in merged
-    assert "&amp;lt;权限&amp;gt;" in merged  # 段名转义两次：属性里一次、提示框 innerHTML 一次
     dot = tips[-1]
     assert "反应线" in dot and "2 轮中位数 0.50 秒" in dot and "最差 0.58 秒" in dot
     assert "亮灯 0.50 秒" in out                                             # 终点写的是中位数，和标题的"一般"一样
+
+
+def test_tiny_segments_fold_into_the_next_big_stage_and_list_shows_each_stage():
+    out = svg(door())
+    items = re.findall(r"<li[^>]*>(.*?)</li>", out)
+    assert len(items) == 2                                                   # 读卡号；亮灯响一声（含校验、查名单）
+    assert "①" in items[0] and "读卡号" in items[0] and "13%" in items[0] and "含" not in items[0]
+    assert "②" in items[1] and "亮灯&lt;响一声&gt;" in items[1] and "含 2 个极短段" in items[1] and "87%" in items[1]
+    assert "校验" not in out.split("<ol")[1] and "查名单" not in out.split("<ol")[1]   # 并进去的段名不在这里列
+    assert '<li class="top">' in out and out.count('class="top"') == 1     # 最长的那块标出来
+    assert "鼠标移上去" not in out and "…" not in out                       # 不靠悬停、段名不截断
+
+
+def test_trailing_tiny_segment_folds_into_the_previous_stage():
+    code = "\n".join(grab(n) for n in ["stages"]) + """
+const p=[{k:'a',d:0.6,share:0.33},{k:'b',d:0.001,share:0.001},{k:'c',d:1.2,share:0.66},{k:'d',d:0.007,share:0.004}];
+console.log(JSON.stringify(stages(p).map(s=>[s.parts.map(x=>x.k).join(''),+s.d.toFixed(3)])));"""
+    out = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
+    assert out == [["a", 0.6], ["cbd", 1.208]]
 
 
 def test_line_length_is_its_median_and_shared_segment_split_by_ratio():
@@ -84,15 +101,13 @@ def test_line_length_is_its_median_and_shared_segment_split_by_ratio():
     assert "最差 " in tips[-1] and "10 次里最慢" not in tips[-1]   # 自造的"10 次里最慢"换掉了（10-20）
 
 
-def test_legend_states_how_it_is_drawn_and_color_rule_without_scene_words():
+def test_note_under_chart_is_one_short_line_without_scene_words():
     out = svg(door())
-    assert "颜色规则：每条线一种颜色；到达终点的最后一段为深色，之前各段为浅色" in out
-    assert "总长是这条线的中位数（2 轮）；各段按各自中位数的比例分" in out
-    assert "相邻的极短段合并为一块" in out
-    assert "共用的段为灰色" not in out  # 没有共用段时不写这条
+    assert "按 2 轮中位数画；不到 5% 的段并进相邻的段，各段明细见「分段用时」。" in out
+    assert "颜色规则" not in out and "图例" not in out                     # 原来的一大段说明删了
     for w in ("说话", "语音", "开口", "表情", "服务器"):
         assert w not in out
-    assert "共用的段为灰色" in svg(voice())
+    assert "（共用）" in svg(voice()) and "（共用）" not in out
 
 
 def test_headline_writes_the_same_median_as_the_chart_end():
