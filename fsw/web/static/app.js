@@ -224,18 +224,14 @@ function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;if
   return `建议：${o.name}${eff}。`}  // 出错 / 建议改 / 必须改每条一句的"建议"
 function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
   // 每条一句（10-20 用户定）：标签（右对齐一列）、线名 用时：问题。建议：做什么，预计效果。　详情 → 问题 N　依据 → 数据
+  // 标签规则（10-20 用户定）：一句来源 + 每个标签一行，和上面列表同一套标签、同样右对齐
   const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${lvTag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+x.src[1])}</span></li>`};
   return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
-  <details class="lvwhy"><summary>数字从哪来、标签规则</summary><ul class="notes"><li>这里的数字都是码表按这次 ${D.n} 轮数据直接算出来的，不经过 AI。</li><li>"为什么、怎么改"的文字是 AI 读代码写的。</li><li>要做哪些方案：在下方每个问题的方案表里勾选，结果汇总在 ${jump('my-pick','你的决定')}。</li></ul>
-  <ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
-  <li>越靠上越重要：出错、必须改、建议改、未判；同一级里超标越多、出错轮次越多越靠前。</li>
-  <li><b class="lvtag lv-must">出错</b>功能出错（比如回答开头被吞），不是快慢；只写出错的轮次。</li>
-  <li><b class="lvtag lv-must">必须改</b>让人明显等太久：这条线的中位数超过体验标准，或"10 次里最慢"超过标准的 1.5 倍。</li>
-  <li><b class="lvtag lv-should">建议改</b>"10 次里最慢"超过标准但没到 1.5 倍，或比上次慢了。</li>
-  <li><b class="lvtag lv-none">未判</b>没有体验标准，也没有上次可比（第一次测），这次只记用时。</li>
-  <li>"10 次里最慢"：10 轮从快到慢排的第 9 个（20 轮里是第 18 个），意思是每 10 次有 1 次会这么慢或更慢；不足 10 轮不判。</li>
-  <li>和上次比：两次都测满 10 轮才比；本次中位数比上次高出（或低出）0.1 秒以上、并且 10% 以上，才算慢了（快了），否则算持平。</li>
-  <li>没问题的线不列在这里；放回答的几段不判快慢，只在技术细节里写。</li></ul></details>`}
+  <details class="lvwhy"><summary>标签规则</summary><p class="note" style="margin:8px 0">数字和标签由码表按规则算，"为什么、怎么改"由 AI 读代码写。</p><ul class="decide rules">
+  <li><span class="tagcol">${lvTag(4)}</span><span>功能出错，不看快慢。</span></li>
+  <li><span class="tagcol">${lvTag(0)}</span><span>中位数超过体验标准，或 <span class="tip" tabindex="0">10 次里最慢<i class="tipbox">10 轮从快到慢排的第 9 个（20 轮里是第 18 个），意思是每 10 次有 1 次会这么慢或更慢；不足 10 轮不判。</i></span>超过标准 1.5 倍。</span></li>
+  <li><span class="tagcol">${lvTag(1)}</span><span><span class="tip" tabindex="0">10 次里最慢<i class="tipbox">10 轮从快到慢排的第 9 个（20 轮里是第 18 个），意思是每 10 次有 1 次会这么慢或更慢；不足 10 轮不判。</i></span>超过标准，或比上次慢 0.1 秒且 10% 以上。</span></li>
+  <li><span class="tagcol">${lvTag(2)}</span><span>没有体验标准，也没有上次可比。</span></li></ul></details>`}
 // 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
 // 起点按计时点自己的名字叫（比如"设备听出你停了"），不叫"你说完"：它是设备自己察觉的时刻，比人真正做完晚（决策 135）
 function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
