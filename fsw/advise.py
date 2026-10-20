@@ -107,7 +107,12 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
   只改提示、等待时间不变的，effect 写"等待时间不变，用户不再以为设备卡住"之类，不写"约 0 秒"。
 - 每张卡片只给一个方案标 rec=1：能直接动手、效果最明确的那个。最后一句 rec 只说这一个方案：谁先做什么、做完看哪个数，
   不要把别的方案也塞进来（不写"同时""三个一起做"）。rec 里说的目标和 dev.verify 的目标要是同一个数。
-- work 和 wn 说的是这个方案本身的工作量：方案是"查"的，name 就以"查"开头，wn 写查的工作量；wn 和 name 说的轮次、范围要一致。
+- work 按这三条判（和报告里给负责人的说明是同一套）：小＝改一处；中＝改几处，或要另一方配合；大＝新做一块，或要长期维护。
+  wn 先写按哪一条判的，再写为什么，比如"小：只改等回答时换表情这一处"。wn 和 name 说的轮次、范围要一致。
+  wn 不写天数、小时（码表不知道团队的人手和熟练度）。
+- 方案名开头先写谁，再写做什么，比如"服务器方查…""固件研发加…"，不要先写查什么再在后半句写谁。
+- 方案是查原因的（"谁＋查…"）：原因没查清，改起来多大没人知道，work 写"不确定"，wn 写"先查：…"（查什么、要谁配合）。
+- 加计时点把一段拆开的方案不算查原因：按改一处判工作量，effect 写"能把这 X 秒拆成哪几截，看清慢在哪一截"。
 - dev.verify 用线的名字写（比如"「从说完到听到第一声」一般用时降到 1.0 秒以下"），不写计时点编号。
 说明文字里写段和计时点的中文名（比如"服务器想回答"），不要写 P2-P5 这样的编号；代码位置写文件名和行号。
 why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的：不能写文件名、行号、函数名、变量名；代码位置只写在 how 和 dev 里。
@@ -194,6 +199,9 @@ def check(data, j, scenario):
             for k, name in OPT_FIELDS.items():
                 if not str((o or {}).get(k) or "").strip():
                     bad.append(f"{where}方案 {oi} 没写{name}")
+            if isinstance(o, dict) and re.match(r"^.{0,6}?查", str(o.get("name") or "")) and o.get("work") in ("大", "中", "小"):
+                o["work"] = "不确定"  # 查原因的方案：查清前改多大没人知道（10-20）
+                o["wn"] = "先查：" + re.sub(r"^(大|中|小)[：:]\s*", "", str(o.get("wn") or ""))
             if (o or {}).get("work") and o["work"] not in WORK:
                 bad.append(f"{where}方案 {oi} 的工作量只能写大、中、小、不确定")
         for k in MANAGER_FIELDS:
@@ -287,7 +295,7 @@ def _rounds_said(text):
 
 
 # 写法要求改了就加一，旧的建议不再沿用
-PROMPT_VER = 4
+PROMPT_VER = 6
 
 
 def signature(j, scenario):

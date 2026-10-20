@@ -219,3 +219,22 @@ def test_manager_text_keeps_one_decimal_and_no_estimate_suffix():
     assert opts[0]["effect"] == "约 0.3 秒" or opts[0]["effect"] == "约 0.4 秒"
     assert opts[1]["effect"] == "查清原因后才知道" and f["dev"]["data"] == "1.16 秒"  # 技术细节留两位
     assert opts[0]["how"] == "一般 1.16 秒"
+
+
+def test_find_cause_option_is_uncertain(tmp_path):
+    d, j = judged("door")
+    fixes = copy.deepcopy(d["page"]["fixes"])
+    fixes[0]["opts"][0].update(name="服务器方查合成声音那一步", work="中", wn="中：要服务器方配合")
+    text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
+    r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
+    o = r["fixes"][0]["opts"][0]
+    assert r["ok"] and o["work"] == "不确定" and o["wn"] == "先查：要服务器方配合"
+
+
+def test_adding_a_timing_point_is_not_a_find_cause_option(tmp_path):
+    d, j = judged("door")
+    fixes = copy.deepcopy(d["page"]["fixes"])
+    fixes[0]["opts"][0].update(name="固件研发加一个计时点，把这段拆成两截", work="小", wn="小：只改一处")
+    text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
+    r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
+    assert r["ok"] and r["fixes"][0]["opts"][0]["work"] == "小"
