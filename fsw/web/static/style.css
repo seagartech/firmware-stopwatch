@@ -50,7 +50,6 @@ h2{font-size:17px;margin:0 0 10px;font-weight:700}
 .c-est{color:var(--est);background:color-mix(in srgb,var(--est) 14%,transparent)}
 .tlst{list-style:none;padding:0;margin:8px 0 0;font-size:14px}
 .tlst li{display:grid;grid-template-columns:1.6em minmax(0,1fr) 5.5em 3.5em 6em 7.5em;gap:0 8px;padding:3px 6px;border-radius:6px;align-items:baseline}
-.tlst li.top{background:color-mix(in srgb,var(--warn) 14%,transparent);font-weight:700}
 .tlst .r{text-align:right;white-space:nowrap}
 .tlst .ow{color:var(--muted);font-size:13px;font-weight:400}
 @media (max-width:640px){.tlst li{grid-template-columns:1.6em minmax(0,1fr) 5em 3em}.tlst .ow{grid-column:2/-1}}
