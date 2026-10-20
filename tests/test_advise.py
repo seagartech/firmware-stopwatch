@@ -179,3 +179,13 @@ def test_card_covering_two_segments_is_accepted_and_keeps_the_first():
 def test_prompt_says_one_segment_per_card():
     from fsw import advise as adv
     assert "seg 只写一段" in adv.PROMPT
+
+
+def test_main_line_skips_the_answer_length_line_like_the_report():
+    """报告不画"看回答长短"的线，剩下的最后一条是主线（编号 main）；写建议认同一条，卡片才挂得上（10-20 修：之前卡片全空）。"""
+    j = {"lines": [{"name": "开口", "verdict": "已记录", "segments": ["a"]},
+                   {"name": "放完", "verdict": "看回答长短", "segments": ["a", "b"]}],
+         "segments": [{"k": "a", "med": 1.0}, {"k": "b", "med": 3.0}],
+         "labels": [{"kind": "line", "line": "开口", "level": "必须改", "why": "达标率 0%", "k": "line:开口"}]}
+    p = adv.problems(j, {"segments": {}})
+    assert [(x["key"], x["seg"]) for x in p] == [("main", "a")]   # 大头取这条线自己的段，不是"放完"那条的
