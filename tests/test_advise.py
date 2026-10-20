@@ -44,8 +44,8 @@ def judged(name):
 def test_problems_come_from_the_labels_not_from_ai():
     d, j = judged("voice")
     probs = adv.problems(j, d["scenario"])
-    assert [p["key"] for p in probs] == ["main", "problem:sw", "reversed", "spiky:dec"]
-    assert probs[0]["seg"] == "think" and probs[3]["seg"] == "dec"
+    assert [p["key"] for p in probs] == ["problem:sw", "reversed", "main"]   # 出错排前（轮次多的在前），再是必须改 / 建议改；偶发特别慢不再单独出（10-20）
+    assert probs[2]["seg"] == "think"
 
 
 def test_prompt_has_data_and_code_places_and_asks_for_json():
@@ -106,7 +106,7 @@ def test_model_failure_is_plain(tmp_path):
 
 def test_nothing_to_fix_needs_no_model(tmp_path):
     d, j = judged("door")
-    j = {**j, "labels": [x for x in j["labels"] if x["level"] == "可以不改"]}
+    j = {**j, "labels": [x for x in j["labels"] if x["level"] == "达标"]}
     m = FakeLLM("不该被调用")
     r = adv.advise(m, tmp_path, j, d["scenario"], save_to=tmp_path / "a")
     assert r["ok"] and r["fixes"] == [] and not m.prompts
@@ -135,22 +135,12 @@ def real_like():
     return d, J.judge(d["scenario"], rounds)
 
 
-def test_spiky_in_the_same_rounds_as_a_problem_is_merged_into_it():
+def test_no_spiky_cards_any_more():
+    """"偶发特别慢"不再单独出标签、也不单独写卡片（10-20 用户定）：只看"10 次里最慢"这一个数。"""
     d, j = real_like()
-    sp = {x["segment"]: x for x in j["labels"] if x["kind"] == "spiky"}
-    assert sp["play"]["with"] == "problem:sw"          # 只在吞字那一轮慢：同一个原因
-    assert "with" not in sp.get("dec", {"x": 1}) or sp["dec"].get("with") is None
-    probs = adv.problems(j, d["scenario"])
-    keys = [p["key"] for p in probs]
-    assert "spiky:play" not in keys and "problem:sw" in keys   # 合并进吞字那条，不单独写卡片
-    sw = next(p for p in probs if p["key"] == "problem:sw")
-    assert d["scenario"]["segments"]["play"]["name"] in sw["what"] and "同一个" in sw["what"]
-
-
-def test_each_spiky_segment_has_its_own_key():
-    d, j = real_like()
+    assert not any(x["kind"] == "spiky" for x in j["labels"])
     keys = [p["key"] for p in adv.problems(j, d["scenario"])]
-    assert "spiky" not in keys and any(k.startswith("spiky:") for k in keys)
+    assert not any(k.startswith("spiky") for k in keys) and "problem:sw" in keys
 
 
 def test_card_must_name_the_rounds_of_every_problem_it_claims(tmp_path):

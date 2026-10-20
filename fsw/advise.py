@@ -30,7 +30,7 @@ def problems(j, scenario):
     names = {g["k"]: g for g in j["segments"]}
     out = []
     for x in j["labels"]:
-        if x["level"] in ("可以不改", "未判"):  # 未判：没判快慢，没有问题可写
+        if x["level"] in ("达标", "未判"):  # 未判：没判快慢，没有问题可写
             continue
         if x["kind"] == "line":
             key = "main" if x["line"] == main else f"line:{x['line']}"

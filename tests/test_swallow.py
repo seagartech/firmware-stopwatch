@@ -76,7 +76,7 @@ def app(tmp_path):
 def test_swallowed_rounds_found_when_the_state_is_recorded(app):
     r = app(real_log_with_values(), VALUES).get("/api/report").json()
     sw = next(x for x in r["labels"] if x["k"] == "problem:sw")
-    assert sw["rounds"] == [4, 11, 17] and sw["level"] == "必须改" and sw["name"] == "回答开头被吞"
+    assert sw["rounds"] == [4, 11, 17] and sw["level"] == "出错" and sw["name"] == "回答开头被吞"
     assert [x["n"] for x in r["rounds"] if "sw" in x["probs"]] == [4, 11, 17]
     keys = [p["key"] for p in adv.problems(r, r["scenario"])]
     assert "problem:sw" in keys  # 为什么、怎么改：这个问题也要写卡片

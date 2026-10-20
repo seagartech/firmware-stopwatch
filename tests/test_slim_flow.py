@@ -323,7 +323,7 @@ def test_playing_the_answer_is_not_judged_by_range_and_every_line_is_listed():
     assert last["verdict"] == jdg.ANSWER and last["combo"] == jdg.ANSWER_TXT
     labels = {x["line"]: x for x in out["labels"] if x["kind"] == "line"}
     assert set(labels) == {"到喇叭出第一声", "到喇叭最后一声"}  # 没问题的线也列（收在"另有 N 条不用改"里）
-    assert labels["到喇叭最后一声"]["level"] == "可以不改" and labels["到喇叭最后一声"]["why"] == jdg.ANSWER_TXT
+    assert labels["到喇叭最后一声"]["level"] == "达标" and labels["到喇叭最后一声"]["why"] == jdg.ANSWER_TXT
 
 
 def test_steady_segment_while_playing_is_still_judged():
@@ -506,14 +506,14 @@ def test_start_reported_many_times_uses_the_one_right_before_the_next_step():
 
 
 def test_round_with_an_absurdly_long_segment_counts_and_is_named():
-    # 一段长得离谱的轮照样算进结论，在"偶发特别慢"里点名是哪一轮（真慢还是记错交给人看，码表不替人删）
+    # 一段长得离谱的轮照样算进结论，分段里点名是哪一轮（偶发特别慢）（真慢还是记错交给人看，码表不替人删）
     sc = {"segments": {"a": {"name": "上传"}, "b": {"name": "等声音"}, "c": {"name": "放回答"}},
           "lines": [{"name": "到开口", "segments": ["a", "b"], "first": True}, {"name": "到放完", "segments": ["a", "b", "c"]}]}
     rounds = [{"n": i + 1, "segs": {"a": 0.4, "b": 0.8, "c": 5.0 + i}, "ends": [1.2, 6.2 + i]} for i in range(10)]
     rounds[0]["segs"]["a"], rounds[0]["ends"] = 40.0, [40.8, 45.8]
     out = jdg.judge(sc, rounds)
     assert out["n"] == 10
-    assert [x["rounds"] for x in out["labels"] if x["kind"] == "spiky" and x["segment"] == "a"] == [[1]]
+    assert next(g for g in out["segments"] if g["k"] == "a")["spiky_rounds"] == [1]
 
 
 def test_last_point_reported_just_after_the_round_end_marker_still_counts():
