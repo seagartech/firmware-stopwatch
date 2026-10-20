@@ -304,3 +304,13 @@ def test_best_fix_uses_the_first_felt_line_even_when_a_side_line_is_faster():
                    {"name": "到放完", "segments": ["a", "b", "c"]}], "problems": []}
     rs = [{"n": i + 1, "segs": {"f": 0.5, "a": 1.0, "b": 0.02, "c": 2.0}, "ends": [0.5, 1.02, 3.02], "probs": []} for i in range(10)]
     assert J.judge(s, rs)["best_fix"]["line"] == "到第一声"
+
+
+def test_biggest_is_on_the_main_line_not_the_answer_length_line():
+    """主线和报告一样不算"看回答长短"的线：大头那一段要在主线自己里找（10-20 修）。"""
+    s = {"segments": {"a": {"name": "想", "from": "P1", "to": "P2"}, "b": {"name": "放", "from": "P2", "to": "P3"}},
+         "lines": [{"name": "开口", "segments": ["a"], "first": True}, {"name": "放完", "segments": ["a", "b"]}],
+         "experience": {"line": "开口", "fair": 2.0}, "problems": []}
+    rs = [{"n": i + 1, "segs": {"a": 1.0, "b": 2.0 + i * 0.3}, "ends": [1.0, 3.0 + i * 0.3], "probs": []} for i in range(10)]
+    j = J.judge(s, rs)
+    assert j["lines"][1]["verdict"] == J.ANSWER and j["biggest"] == "a"

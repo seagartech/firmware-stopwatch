@@ -21,7 +21,9 @@ DEV_FIELDS = ("data", "cause", "change", "size", "rk", "verify")
 
 def problems(j, scenario):
     """要写卡片的问题：任务 16 判成"必须改""建议改"的，按标签的先后。key 和网页"要你拍板"里的一样。"""
-    main = j["lines"][-1]["name"] if j["lines"] else None
+    # 主线和报告一样：先去掉看回答长短的线（报告不画、不判），剩下的最后一条（10-20 修：两边认的主线不同，卡片挂不上）
+    keep = [l for l in j["lines"] if l.get("verdict") != "看回答长短"] or j["lines"]
+    main = keep[-1]["name"] if keep else None
     spiky = next((x["segment"] for x in j["labels"] if x["kind"] == "spiky" and not x.get("with")), None)
     merged = {}  # 同一个根因合并进来的"偶发特别慢"：问题 → [(段, 那几轮)]
     for x in j["labels"]:
@@ -34,11 +36,9 @@ def problems(j, scenario):
             continue
         if x["kind"] == "line":
             key = "main" if x["line"] == main else f"line:{x['line']}"
-            seg = j.get("biggest") if key == "main" else None
-            if key != "main":
-                l = next(l for l in j["lines"] if l["name"] == x["line"])
-                segs = [g for g in j["segments"] if g["k"] in l["segments"]]
-                seg = max(segs, key=lambda g: g["med"])["k"] if segs else None
+            l = next(l for l in j["lines"] if l["name"] == x["line"])  # 大头的一段：这条线自己里中位数最大的
+            segs = [g for g in j["segments"] if g["k"] in l["segments"]]
+            seg = max(segs, key=lambda g: g["med"])["k"] if segs else None
             out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}"})
         elif x["kind"] == "spiky":
             if x.get("with"):

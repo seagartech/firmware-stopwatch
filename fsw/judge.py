@@ -196,7 +196,9 @@ def judge(scenario, rounds, prev=None):
         out["lead"] = {"first": a["name"], "second": b["name"], **stats(diffs)}
 
     # 要测的那条线（最后一条）里最大头的一段
-    main = out["lines"][-1] if out["lines"] else None
+    # 和报告、写建议同一条主线：看回答长短的线不算（10-20 修）
+    keep = [x for x in out["lines"] if x["verdict"] != ANSWER] or out["lines"]
+    main = keep[-1] if keep else None
     if main:
         mine = [k for k in main["segments"] if k in seg_st]
         out["biggest"] = max(mine, key=lambda k: seg_st[k]["med"]) if mine else None
