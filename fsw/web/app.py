@@ -105,7 +105,7 @@ class EspDevice:
         try:
             return EspIdf.read_for(ser, seconds, on_line, stop=stop)
         finally:
-            ser.close()
+            EspIdf.close_port(ser)
 
     def stream(self, port, on_line, stop):
         """多轮实测：一直读调试口，一行交一行，直到 stop()；拔线时串口会报错，交给上面处理。"""
@@ -121,7 +121,7 @@ class EspDevice:
                     line, buf = buf.split(b"\n", 1)
                     on_line(line.rstrip(b"\r").decode("utf-8", "replace"))
         finally:
-            ser.close()
+            EspIdf.close_port(ser)
 
 
 class CollectBody(BaseModel):
@@ -777,6 +777,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     def _run_from(start):
         _stop_collect()
+        stray = EspIdf.release_ports()  # 先把码表自己还占着的调试口关掉：烧录和试一次要用
+        if stray:
+            print(f"[fsw] 烧录 / 试一次前关掉了 {stray} 个还开着的调试口", flush=True)
         job, a = fsw["job"], fsw["args"]
         _, orig_fw, fsw_fw = _fsw_dirs(a)
         job.update(status="running", err=None, cancel=False, gen=job.get("gen", 0) + 1)  # 第几趟：上一趟还没停的"试一次"见到就停，让出调试口
