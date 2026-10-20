@@ -117,9 +117,10 @@ def build_prompt(j, scenario, steps=None, what=""):
     for g in j["segments"]:
         sd = scenario["segments"][g["k"]]
         seg_lines.append(f"- {g['k']}：{g['name']}（{sd['from']}→{sd['to']}，{g['owner']}{'，设备外' if g['outside'] else ''}）"
-                         f"一般 {g['med']:.3f}，10 次最慢 {g['p90']:.3f}，最慢 {g['max']:.3f}；{_fmt_vs(g)}"
+                         f"一般 {g['med']:.3f}，最慢 {g['max']:.3f}；{_fmt_vs(g)}"
                          f"{'（偶发特别慢）' if g['spiky'] else ''}")
-    line_txt = "\n".join(f"- 线「{l['name']}」：一般 {l['med']:.2f} 秒，10 次最慢 {l['p90']:.2f}，最慢 {l['max']:.2f}；{_fmt_vs(l)}"
+    line_txt = "\n".join(f"- 线「{l['name']}」：一般 {l['med']:.2f} 秒，最慢 {l['max']:.2f}"
+                         f"{'，达标率 %d%%（%d 轮里 %d 轮没超过体验标准）' % (round(l['pass_rate'] * 100), l['count'], l['pass_n']) if l.get('pass_rate') is not None else ''}；{_fmt_vs(l)}"
                          f"{'；体验标准判' + l['exp'] if l['exp'] else ''}" for l in j["lines"])
     pts = "\n".join(f"- {s['p']} {s['n']}：{s.get('path') or s.get('f')} 第 {s['l']} 行" for s in steps or []) or "（没有）"
     probs = "\n".join(f"- 编号 {p['key']}（{p['level']}）：{p['what']}" + (f"；主要是段 {p['seg']}" if p.get("seg") else "")
