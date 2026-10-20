@@ -669,6 +669,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.post("/api/fsw/insert")
     def fsw_insert(body: FswInsertBody):
+        _stop_collect()
         proj = Path(body.project_dir)
         fp, cached = _plan_cache(body)
         prep, use_prep, redo = fsw.get("prep"), False, None
@@ -763,7 +764,19 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return job
 
+    def _stop_collect(wait=2.0):
+        """还在跑的多轮实测先停下、让出调试口，再插点、编译、烧录（10-20 真测：测量没停就又开了一次，
+        两边同时用调试口，烧录失败、设备停在等烧录）。已收的轮照常留着；最多等 wait 秒让读调试口的线程退出。"""
+        old = col["job"]
+        if not old or old.get("status") not in ("running", "waiting_device", "paused"):
+            return
+        old["_stop"] = True
+        t = time.time()
+        while old.get("status") in ("running", "waiting_device", "paused") and time.time() - t < wait:
+            time.sleep(0.02)
+
     def _run_from(start):
+        _stop_collect()
         job, a = fsw["job"], fsw["args"]
         _, orig_fw, fsw_fw = _fsw_dirs(a)
         job.update(status="running", err=None, cancel=False, gen=job.get("gen", 0) + 1)  # 第几趟：上一趟还没停的"试一次"见到就停，让出调试口

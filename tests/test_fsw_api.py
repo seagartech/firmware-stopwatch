@@ -527,3 +527,47 @@ def test_carried_round_turns_green_as_soon_as_measuring_starts(setup):
         time.sleep(0.05)
         j = c.get("/api/collect").json()
     assert j["status"] == "done" and [x["ok"] for x in j["rounds"]] == [True, True, True]
+
+
+class StreamingDevice(FakeDevice):
+    """多轮实测读调试口时一直开着（直到让它停）；烧录时记下调试口是不是还被读着。"""
+
+    def __init__(self):
+        super().__init__()
+        self.reading, self.busy_at_flash = False, None
+
+    def stream(self, port, on_line, stop):
+        self.reading = True
+        try:
+            while not stop():
+                time.sleep(0.01)
+        finally:
+            self.reading = False
+
+    def flash(self, fw, port, on_progress):
+        self.busy_at_flash = self.reading
+        return super().flash(fw, port, on_progress)
+
+
+def test_running_measurement_is_stopped_before_insert_and_flash(setup):
+    """10-20 真测：多轮实测还开着调试口，又点了"改完了，再测一次"，烧录和它抢同一个口失败、设备停在等烧录。
+    开始插点 / 编译烧录前，先停掉还在跑的多轮实测、让出调试口；已收的轮照常留着。"""
+    dev = StreamingDevice()
+    c, r, *_ = setup(device=dev)
+    c.post("/api/collect/start", json={"demo": "door", "source": "device", "rounds": 10})
+    t = time.time()
+    while not dev.reading and time.time() - t < 5:
+        time.sleep(0.02)
+    assert dev.reading and c.get("/api/collect").json()["status"] in ("running", "waiting_device")
+    start_insert(c, r)
+    assert c.get("/api/collect").json()["status"] == "stopped" and not dev.reading   # 先停、调试口放开
+    wait(c, lambda j: j["status"] in ("inserted", "failed"))
+    run_to_try(c)
+    assert dev.busy_at_flash is False                                               # 烧录时没人在读调试口
+
+
+def test_insert_without_measurement_behaves_as_before(setup):
+    c, r, *_ = setup()
+    assert c.get("/api/collect").json()["status"] == "idle"
+    start_insert(c, r)
+    assert wait(c, lambda j: j["status"] in ("inserted", "failed"))["status"] == "inserted"
