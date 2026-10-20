@@ -103,3 +103,17 @@ def test_headline_writes_the_same_median_as_the_chart_end():
     out = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
     assert out.startswith("刷卡 0.07 秒先亮灯") and "0.91 秒后开门" in out
     assert "med,1)" not in JS                                                # 线的中位数没有哪里还只写一位
+
+
+def test_report_names_category_start_gap_and_best_fix_without_scene_words_in_code():
+    assert "function bestFix(" in JS and "const startGap=" in JS
+    assert "最值得优化的一段" in JS and "这个标准只有及格线" in JS
+
+
+
+def test_best_fix_percentages_use_one_decimal():
+    """「最值得优化的一段」两个百分比写法一样：都留一位小数（0.7%、1.0%）。"""
+    D = {"J": {"best_fix": {"name": "解码", "med": 0.01, "line": "线", "share": 0.7, "device_share": 1.0}}, "lines": [{"name": "线", "end": "出声"}]}
+    code = "\n".join(grab(n) for n in ["f", "fms", "htmlEsc", "bestFix"]) + f"\nconsole.log(JSON.stringify(bestFix({json.dumps(D, ensure_ascii=False)})));"
+    out = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
+    assert "占「出声」的 0.7%" in out and "合计占 1.0%" in out

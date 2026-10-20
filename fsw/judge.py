@@ -52,18 +52,34 @@ def vs_prev(now, prev, noise=None):
 
 
 def experience(line_name, st, exp):
-    """exp：这条线的体验标准（每条线一条，没设定的不判）。"""
+    """exp：这条线的体验标准（每条线一条，没设定的不判）。标准里给了"好"的档（good）才分三档：差 / 可以 / 好；
+    只有及格线的照旧两档（10-19 用户定：不自己编"好"的数）。"""
     if not exp or exp.get("line") != line_name or exp.get("fair") is None:
         return None
-    return "差" if st["med"] > exp["fair"] else "可以"
+    if st["med"] > exp["fair"]:
+        return "差"
+    return "好" if exp.get("good") is not None and st["med"] <= exp["good"] else "可以"
 
 
-def combo(exp, vs=None, big=None):
+def exp_txt(e, es, med):
+    """体验标准那半句：好 / 可以（离好还差多少）/ 达到及格线（这个标准没给"好"的档）。"""
+    if e == "好":
+        return f"体验好（{es.get('short') or '体验标准'}：≤{es['good']} 秒算好）"
+    if e == "可以" and es.get("good") is not None:
+        return f"体验可以，离好（{es['good']} 秒）还差 {med - es['good']:.2f} 秒"
+    if e == "可以":
+        return f"达到及格线（{es.get('short') or '体验标准'}，≤{es['fair']} 秒），这个标准没给\"好\"的档"
+    return None
+
+
+def combo(exp, vs=None, big=None, es=None, med=None):
     """每条线一句话：体验标准 + 和上次比。"""
     if exp == "差" and big:
         head = f"体验差：慢在「{big[0]}」（{big[1]:.2f} 秒，占 {big[2]}%）"
+    elif exp in ("好", "可以") and es and med is not None:
+        head = exp_txt(exp, es, med)
     else:
-        head = {"差": "体验差", "可以": "体验可以"}.get(exp)
+        head = {"差": "体验差", "可以": "体验可以", "好": "体验好"}.get(exp)
     tail = None if not vs else "和上次比持平" if vs["change"] == "持平" else f"比上次{vs['change']} {abs(vs['d']):.2f} 秒"
     if not head and not tail:
         return "没有体验标准、也没有上次可比：只记下用时，先不判快慢"
@@ -150,8 +166,8 @@ def judge(scenario, rounds, prev=None):
         vs = None if by_answer or not pv else vs_prev(st["med"], (pv.get("lines") or {}).get(l["name"]), (pv.get("noise_lines") or {}).get(l["name"]))
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "count": len(ends),
                              "verdict": ANSWER if by_answer else vs["change"] if vs else RECORDED, "exp": e, "vs": vs,
-                             "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category")} if es else None,
-                             "combo": ANSWER_TXT if by_answer and e is None else combo(e, vs, _big(l, seg_st, segs_def, st)),
+                             "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category", "start_gap")} if es else None,
+                             "combo": ANSWER_TXT if by_answer and e is None else combo(e, vs, _big(l, seg_st, segs_def, st), es, st["med"]),
                              "segments": l["segments"]})
 
     # 第一次反应：每轮几条线里最早到的那一下
@@ -171,6 +187,19 @@ def judge(scenario, rounds, prev=None):
     if main:
         mine = [k for k in main["segments"] if k in seg_st]
         out["biggest"] = max(mine, key=lambda k: seg_st[k]["med"]) if mine else None
+    # 最值得优化的一段（10-19 用户定，固定点名）：第一下感觉到结果的那条线上，设备自己（代码上能改）的段里中位数最大的；
+    # 设备外的（服务器、网络）、看回答长短的、推算的不算。只写占这条线多少，不分等级
+    want = next((l for l in lines_def if l.get("first")), lines_def[-1] if lines_def else {})  # 体验标准挂的那条线
+    tgt = next((x for x in out["lines"] if x["name"] == want.get("name")), main)
+    if tgt:
+        byk = {g["k"]: g for g in out["segments"]}
+        cand = [k for k in tgt["segments"] if k in byk and not byk[k]["outside"] and byk[k]["verdict"] not in (ANSWER, "推算")]
+        if cand:
+            k = max(cand, key=lambda k: byk[k]["med"])
+            out["best_fix"] = {"k": k, "name": byk[k]["name"], "med": byk[k]["med"], "line": tgt["name"],
+                               "share": round(byk[k]["med"] / tgt["med"] * 100, 1) if tgt["med"] else None,
+                               # 设备上能改的段合计占多少：最大那段占得少时，看得出是整条线本来就主要花在设备外
+                               "device_share": round(sum(max(0, byk[x]["med"]) for x in cand) / tgt["med"] * 100, 1) if tgt["med"] else None}
 
     labels = []
     line_by = {l["name"]: l for l in out["lines"]}
@@ -192,7 +221,7 @@ def judge(scenario, rounds, prev=None):
             lv, why = "未判", "没有体验标准，也没有上次可比，这次只记用时"
         else:
             lv = "可以不改"
-            why = "，".join(x for x in ("在体验标准内" if l["exp"] == "可以" else None,
+            why = "；".join(x for x in (exp_txt(l["exp"], l["exp_std"] or {}, l["med"]) if l["exp"] else None,
                                          None if not vs else "和上次比持平" if vs["change"] == "持平" else f"比上次快了 {-vs['d']:.2f} 秒") if x)
         labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
     for p in scenario.get("problems") or []:

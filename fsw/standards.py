@@ -66,7 +66,7 @@ def reference(category=None):
     ref = hit or lib.get("fallback")
     if not ref:
         return None
-    return {**{k: v for k, v in ref.items() if k in ("fair", "good", "source", "short")}, "category": ref.get("key")}
+    return {**{k: v for k, v in ref.items() if k in ("fair", "good", "source", "short", "start_gap")}, "category": ref.get("key")}
 
 
 def _at(s):
