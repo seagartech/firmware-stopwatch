@@ -106,7 +106,7 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - effect 写这一个方案单独做，一般用时能快多少；只对个别轮有用的写明"只影响第几轮，一般用时不变"；
   只改提示、等待时间不变的，effect 写"等待时间不变，用户不再以为设备卡住"之类，不写"约 0 秒"。
 - 每张卡片只给一个方案标 rec=1：能直接动手、效果最明确的那个。最后一句 rec 只说这一个方案：谁先做什么、做完看哪个数，
-  不要把别的方案也塞进来（不写"同时""三个一起做"）。
+  不要把别的方案也塞进来（不写"同时""三个一起做"）。rec 里说的目标和 dev.verify 的目标要是同一个数。
 - work 和 wn 说的是这个方案本身的工作量：方案是"查"的，name 就以"查"开头，wn 写查的工作量；wn 和 name 说的轮次、范围要一致。
 - dev.verify 用线的名字写（比如"「从说完到听到第一声」一般用时降到 1.0 秒以下"），不写计时点编号。
 说明文字里写段和计时点的中文名（比如"服务器想回答"），不要写 P2-P5 这样的编号；代码位置写文件名和行号。
@@ -245,6 +245,11 @@ def _sec_sub(text):
     return re.sub(r"(?<![\d.])(\s?)(\d+\.\d{2,})\s*秒", _sec, text)
 
 
+def _sec2_sub(text):
+    """研发看的（怎么做、技术细节）：秒数留两位，和报告标题一致。"""
+    return re.sub(r"(?<![\d.])(\d+\.\d{3,})\s*秒", lambda m: f"{float(m.group(1)):.2f} 秒", text)
+
+
 def _tidy(f, opts):
     """给负责人看的文字：秒数留一位小数；效果栏表头已写"估算"，去掉 AI 自己加的"（估算）"。技术细节不动。"""
     for d, ks in ((f, MANAGER_FIELDS), *((o, MANAGER_OPT_FIELDS) for o in opts if isinstance(o, dict))):
@@ -253,6 +258,10 @@ def _tidy(f, opts):
                 d[k] = _sec_sub(d[k])
                 if k == "effect":
                     d[k] = d[k].replace("（估算）", "").replace("(估算)", "").strip()
+    for d in (f.get("dev") if isinstance(f.get("dev"), dict) else {}, *(o for o in opts if isinstance(o, dict))):
+        for k in ("how", *DEV_FIELDS):
+            if isinstance(d.get(k), str):
+                d[k] = _sec2_sub(d[k])
 
 
 MANAGER_FIELDS = ("why", "impact", "rec")
@@ -278,7 +287,7 @@ def _rounds_said(text):
 
 
 # 写法要求改了就加一，旧的建议不再沿用
-PROMPT_VER = 3
+PROMPT_VER = 4
 
 
 def signature(j, scenario):
