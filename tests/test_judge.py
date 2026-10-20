@@ -93,9 +93,10 @@ def label(j):
 
 
 @pytest.mark.parametrize("a,b,fair,pv,level,why", [
-    (0.6, 1.0, 1.5, None, "必须改", "一般 1.60 秒，超过标准 1.5 秒"),                                       # 中位数 1.6 超过 1.5
-    ([0.3] * 20, [0.6] * 17 + [3.0] * 3, 1.5, None, "必须改", "10 次里最慢 3.30 秒，超过标准 1.5 秒的 1.5 倍"),  # 中位数 0.9，10 次里最慢 3.3 > 2.25
-    ([0.6] * 20, [0.6] * 17 + [1.6] * 3, 1.5, None, "建议改", "10 次里最慢 2.20 秒，超过标准 1.5 秒"),  # 中位数 1.2，10 次里最慢 2.2，在 1.5～2.25 之间
+    (0.6, 1.0, 1.5, None, "必须改", "达标率 0%，20 次里 20 次超过标准 1.5 秒"),                         # 每轮 1.6 都超过 1.5
+    ([0.3] * 20, [0.6] * 17 + [3.0] * 3, 1.5, None, "必须改", "20 次里 3 次超过标准 1.5 秒的 1.5 倍"),  # 3.3 > 2.25 的占 15% > 10%
+    ([0.6] * 20, [0.6] * 17 + [1.6] * 3, 1.5, None, "建议改", "达标率 85%，20 次里 3 次超过标准 1.5 秒"),  # 2.2 超标但没到 2.25：达标率 85% < 90%
+    ([0.3] * 20, [0.9] * 10 + [1.8] * 10, 1.5, None, "建议改", "达标率 50%，20 次里 10 次超过标准 1.5 秒"),  # 正好一半超标：中位数 1.65 超标，原来判必须改；达标率 50% 不 < 50%，现在判建议改（10-20 用户同意）
     (0.6, 1.0, 9.0, prev(1.4), "建议改", "比上次慢了 0.20 秒"),                            # 体验可以，比上次慢 0.2（大于 0.1 秒，也大于上次的 10%）
     (0.6, 1.0, 9.0, prev(1.59), "达标", '达到及格线（体验标准，≤9.0 秒），这个标准没给"好"的档；和上次比持平'),  # 慢 0.01：持平
     (0.6, 1.0, None, prev(1.8), "达标", "比上次快了 0.20 秒"),
@@ -133,10 +134,10 @@ def test_experience_bad_is_must_even_when_not_slower_than_last():
 
 
 def test_tail_should_or_must_by_how_far_over_the_standard():
-    """"10 次里最慢"（20 轮里第 18 慢）：超过标准算建议改，超过 1.5 倍算必须改；不再单独给"偶发特别慢"出标签。"""
+    """达标率 < 90% 算建议改，超过标准 1.5 倍的轮次 > 10% 算必须改；不再单独给"偶发特别慢"出标签。"""
     lv = lambda b, **kw: label(J.judge(sc(**kw), rounds(0.6, b)))["level"]
-    assert lv([1.0] * 17 + [1.9] * 3, fair=2.0) == "建议改"   # 一般 1.6，10 次里最慢 2.5：在 2.0～3.0 之间
-    assert lv([1.0] * 17 + [5.0] * 3, fair=2.0) == "必须改"   # 10 次里最慢 5.6：超过 3.0
+    assert lv([1.0] * 17 + [1.9] * 3, fair=2.0) == "建议改"   # 3 轮 2.5 超标没到 3.0：达标率 85% < 90%
+    assert lv([1.0] * 17 + [5.0] * 3, fair=2.0) == "必须改"   # 3 轮 5.6 超过 3.0：占 15% > 10%
     assert lv([1.0] * 19 + [5.0], fair=2.0) == "达标"         # 只有 1 轮特别慢，不到每 10 次 1 次
     assert lv([1.0] * 17 + [5.0] * 3) == "未判"               # 没有体验标准，也没有上次可比
     assert not any(x["kind"] == "spiky" for x in J.judge(sc(fair=2.0), rounds(0.6, [1.0] * 17 + [5.0] * 3))["labels"])
@@ -190,17 +191,17 @@ def test_errors_first_and_heavier_first_within_a_level():
 
 
 def test_under_10_rounds_slowest_in_10_is_not_used():
-    """少于 10 轮："10 次里最慢"没意义，不拿它判"必须改"。"""
+    """少于 10 轮：只按达标率 < 50% 判，超过 1.5 倍的轮次占比不拿来判"必须改"。"""
     s = {"segments": {"a": {"name": "a", "from": "P1", "to": "P2"}},
          "lines": [{"name": "线", "segments": ["a"]}], "experience": {"line": "线", "fair": 2.0}, "problems": []}
     rounds = [{"n": i + 1, "segs": {"a": v}, "ends": [v], "probs": []} for i, v in enumerate([0.5, 0.6, 2.5])]
     j = J.judge(s, rounds)
     lab = next(x for x in j["labels"] if x["kind"] == "line")
-    assert lab["level"] != "必须改" or "10 次里最慢" not in lab["why"]
+    assert lab["level"] != "必须改"   # 3 轮里 1 轮 2.5 超标：达标率 67%，不 < 50%
 
 
 def test_line_with_fewer_than_10_values_does_not_use_10_slowest():
-    """10 轮里有 2 轮没走到这条线：只剩 8 个数，"10 次里最慢"就是最慢那一个，一轮异常不该判"必须改"。"""
+    """10 轮里有 2 轮没走到这条线：只剩 8 个数，不满 10 个，一轮异常不该判"必须改"。"""
     rs = rounds([0.6] * 10, [1.0] * 7 + [2.6] + [1.0] * 2, n=10)
     for r in rs[:2]:
         r["ends"] = [None]
@@ -253,7 +254,7 @@ def sc_std(fair, good=None, short="某标准"):
 @pytest.mark.parametrize("fair,good,want_exp,want_why", [
     (2.0, 0.8, "可以", "可以，离好（0.8 秒）还差 0.80 秒"),                      # 语音对话那样：有"好"的档
     (2.0, 2.0, "好", "体验好（某标准：≤2.0 秒算好）"),
-    (1.0, 0.1, "差", "一般 1.60 秒，超过标准 1.0 秒"),                                         # 尼尔森通用三档：1 秒以上算差
+    (1.0, 0.1, "差", "达标率 0%，20 次里 20 次超过标准 1.0 秒"),                                         # 尼尔森通用三档：1 秒以上算差
     (2.0, None, "可以", '达到及格线（某标准，≤2.0 秒），这个标准没给"好"的档'),  # 门禁那样：只有及格线
 ])
 def test_experience_tiers(fair, good, want_exp, want_why):
@@ -303,3 +304,13 @@ def test_best_fix_uses_the_first_felt_line_even_when_a_side_line_is_faster():
                    {"name": "到放完", "segments": ["a", "b", "c"]}], "problems": []}
     rs = [{"n": i + 1, "segs": {"f": 0.5, "a": 1.0, "b": 0.02, "c": 2.0}, "ends": [0.5, 1.02, 3.02], "probs": []} for i in range(10)]
     assert J.judge(s, rs)["best_fix"]["line"] == "到第一声"
+
+
+def test_biggest_is_on_the_main_line_not_the_answer_length_line():
+    """主线和报告一样不算"看回答长短"的线：大头那一段要在主线自己里找（10-20 修）。"""
+    s = {"segments": {"a": {"name": "想", "from": "P1", "to": "P2"}, "b": {"name": "放", "from": "P2", "to": "P3"}},
+         "lines": [{"name": "开口", "segments": ["a"], "first": True}, {"name": "放完", "segments": ["a", "b"]}],
+         "experience": {"line": "开口", "fair": 2.0}, "problems": []}
+    rs = [{"n": i + 1, "segs": {"a": 1.0, "b": 2.0 + i * 0.3}, "ends": [1.0, 3.0 + i * 0.3], "probs": []} for i in range(10)]
+    j = J.judge(s, rs)
+    assert j["lines"][1]["verdict"] == J.ANSWER and j["biggest"] == "a"

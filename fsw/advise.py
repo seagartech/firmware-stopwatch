@@ -21,7 +21,9 @@ DEV_FIELDS = ("data", "cause", "change", "size", "rk", "verify")
 
 def problems(j, scenario):
     """要写卡片的问题：任务 16 判成"必须改""建议改"的，按标签的先后。key 和网页"要你拍板"里的一样。"""
-    main = j["lines"][-1]["name"] if j["lines"] else None
+    # 主线和报告一样：先去掉看回答长短的线（报告不画、不判），剩下的最后一条（10-20 修：两边认的主线不同，卡片挂不上）
+    keep = [l for l in j["lines"] if l.get("verdict") != "看回答长短"] or j["lines"]
+    main = keep[-1]["name"] if keep else None
     spiky = next((x["segment"] for x in j["labels"] if x["kind"] == "spiky" and not x.get("with")), None)
     merged = {}  # 同一个根因合并进来的"偶发特别慢"：问题 → [(段, 那几轮)]
     for x in j["labels"]:
@@ -34,12 +36,15 @@ def problems(j, scenario):
             continue
         if x["kind"] == "line":
             key = "main" if x["line"] == main else f"line:{x['line']}"
-            seg = j.get("biggest") if key == "main" else None
-            if key != "main":
-                l = next(l for l in j["lines"] if l["name"] == x["line"])
-                segs = [g for g in j["segments"] if g["k"] in l["segments"]]
-                seg = max(segs, key=lambda g: g["med"])["k"] if segs else None
-            out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}"})
+            l = next(l for l in j["lines"] if l["name"] == x["line"])  # 大头的一段：这条线自己里中位数最大的
+            segs = [g for g in j["segments"] if g["k"] in l["segments"]]
+            seg = max(segs, key=lambda g: g["med"])["k"] if segs else None
+            rs = lambda k: "、".join(map(str, l.get(k) or []))
+            slow = (f"；超过标准的是第 {rs('over_rounds')} 轮" if l.get("over_rounds") else "") + \
+                   (f"，其中超过标准 1.5 倍的是第 {rs('big_rounds')} 轮" if l.get("big_rounds") else "")
+            vs = l.get("vs")  # 整条线和上次比（某一段的上次不成立时，这条线的对比还在）
+            was = f"；这条线上次一般 {vs['prev']:.2f} 秒，这次 {l['med']:.2f} 秒" if vs and vs["change"] != "持平" else ""
+            out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}{slow}{was}"})
         elif x["kind"] == "spiky":
             if x.get("with"):
                 continue
@@ -88,6 +93,32 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - dev：给研发看的技术细节：data（相关数据）、cause（原因）、change（改法）、size（改动大小）、rk（风险）、verify（改完怎么用码表验证）。
 - 另外写一句 fine："不用改的"是哪些（设备自己哪几段正常）。
 中文、大白话。拿不准的写"推断"，不要编。why 写 2～4 句。
+
+## 写法规矩（10-20 用户看过真报告后定，必须照做）
+- why 第一句先说慢在哪一边：设备自己、服务器或网络（上面标"设备外"的段）、还是两边都有。
+- 给负责人看的文字只讲用户感觉得到的两头（比如按下、刷卡、说完之后，看到灯亮、听到声音、门开了）和慢在哪一边、慢了多少；
+  中间的"通知""指令""消息""状态"一律不提，换个说法也不行（"收到要开始做某事的通知"也不行）。这些写进 dev。
+- 给负责人看的文字里秒数：1 秒以上留一位（1.2 秒），不到 1 秒留两位（0.35 秒）；dev 里可以写细。
+- 只用上面给的数据和轮次。上面写了"第一次测"或没写"上次"的，不要和上次比；不要写"码表没告诉我"之类的话。
+- 问题里写了"这条线上次一般多少秒"的，why 里要写出"上次多少、这次多少"，让人看出这是这次新变慢的。
+- 方案的 name 写"谁去做什么"，不要把现象换个说法当方案（"查一下为什么多了 1 秒"不算方案名，要写查哪一步、要什么数据）。
+- 慢在设备外、设备看不到原因的：方案写交给谁、查哪一步、码表数据附上；effect 写"查清原因后才知道"，不要编秒数。
+- effect 写这一个方案单独做，一般用时能快多少；只对个别轮有用的写明"只影响第几轮，一般用时不变"；
+  只改提示、等待时间不变的，effect 写"等待时间不变，用户不再以为设备卡住"之类，不写"约 0 秒"。
+- 每张卡片只给一个方案标 rec=1：能直接动手、效果最明确的那个。最后一句 rec 只说这一个方案：谁先做什么、做完看哪个数，
+  不要把别的方案也塞进来（不写"同时""三个一起做"）。rec 里说的目标和 dev.verify 的目标要是同一个数。
+- work 按这三条判（和报告里给负责人的说明是同一套）：小＝改一处；中＝改几处，或要另一方配合；大＝新做一块，或要长期维护。
+  wn 先写按哪一条判的，再写为什么，比如"小：只改刷卡成功后亮灯这一处"。wn 和 name 说的轮次、范围要一致。
+  wn 不写天数、小时（码表不知道团队的人手和熟练度）。
+- 方案名开头先写谁，再写做什么，比如"服务器方查…""固件研发加…"，不要先写查什么再在后半句写谁。
+- 方案是查原因的（"谁＋查…"）：原因没查清，改起来多大没人知道，work 写"不确定"，wn 写"先查：…"（查什么、要谁配合）。
+- 让别人拿哪几轮去查，看那一段自己的数据：每轮都差不多慢的段，拿全部轮次去查；只有个别轮特别慢的，才点名那几轮。
+  不要把整条线超标的轮次套到别的段上（那几轮可能是另一段慢）。
+- 同一件事（同一个人改同一处）出现在几张卡片里，name 要一字不差，码表按名字把待办合成一件。
+- 问题里写了"超过标准 1.5 倍"的那几轮，why 要说那几轮多出来的时间在哪一段（对照上面各段"偶发特别慢"的轮次）；对不上就写"推断"。
+- 要加计时点的方案，先看上面"计时点在代码里的位置"：新点要能把一段拆开，不能和已有的点在同一处或紧挨着。
+- 加计时点把一段拆开的方案不算查原因：按改一处判工作量，effect 写"能把这 X 秒拆成哪几截，看清慢在哪一截"。
+- dev.verify 用线的名字写（比如"「从刷卡到门开」一般用时降到 0.5 秒以下"），不写计时点编号。
 说明文字里写段和计时点的中文名（比如"服务器想回答"），不要写 P2-P5 这样的编号；代码位置写文件名和行号。
 why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的：不能写文件名、行号、函数名、变量名；代码位置只写在 how 和 dev 里。
 
@@ -95,7 +126,7 @@ why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的�
 只输出一个 ```json 代码块：
 ```json
 {{"fixes": [{{"when": ["问题编号"], "seg": "主要涉及的段编号（seg 只写一段；讲了几段就写最主要的那段）", "why": "…", "impact": "…",
-  "opts": [{{"name": "…", "how": "…", "size": "…", "rk": "…", "effect": "约 … 秒（估算）", "cost": "…", "work": "小", "wn": "…", "who": "固件研发", "rec": 1}}],
+  "opts": [{{"name": "…", "how": "…", "size": "…", "rk": "…", "effect": "约 … 秒", "cost": "…", "work": "小", "wn": "…", "who": "固件研发", "rec": 1}}],
   "rec": "…", "dev": {{"data": "…", "cause": "…", "change": "…", "size": "…", "rk": "…", "verify": "…"}}}}],
  "fine": "…"}}
 ```
@@ -117,9 +148,10 @@ def build_prompt(j, scenario, steps=None, what=""):
     for g in j["segments"]:
         sd = scenario["segments"][g["k"]]
         seg_lines.append(f"- {g['k']}：{g['name']}（{sd['from']}→{sd['to']}，{g['owner']}{'，设备外' if g['outside'] else ''}）"
-                         f"一般 {g['med']:.3f}，10 次最慢 {g['p90']:.3f}，最慢 {g['max']:.3f}；{_fmt_vs(g)}"
-                         f"{'（偶发特别慢）' if g['spiky'] else ''}")
-    line_txt = "\n".join(f"- 线「{l['name']}」：一般 {l['med']:.2f} 秒，10 次最慢 {l['p90']:.2f}，最慢 {l['max']:.2f}；{_fmt_vs(l)}"
+                         f"一般 {g['med']:.3f}，最慢 {g['max']:.3f}；{_fmt_vs(g)}"
+                         + (f"（偶发特别慢：第 {'、'.join(map(str, g.get('spiky_rounds') or []))} 轮）" if g['spiky'] else ""))
+    line_txt = "\n".join(f"- 线「{l['name']}」：一般 {l['med']:.2f} 秒，最慢 {l['max']:.2f}"
+                         f"{'，达标率 %d%%（%d 轮里 %d 轮没超过体验标准）' % (round(l['pass_rate'] * 100), l['count'], l['pass_n']) if l.get('pass_rate') is not None else ''}；{_fmt_vs(l)}"
                          f"{'；体验标准判' + l['exp'] if l['exp'] else ''}" for l in j["lines"])
     pts = "\n".join(f"- {s['p']} {s['n']}：{s.get('path') or s.get('f')} 第 {s['l']} 行" for s in steps or []) or "（没有）"
     probs = "\n".join(f"- 编号 {p['key']}（{p['level']}）：{p['what']}" + (f"；主要是段 {p['seg']}" if p.get("seg") else "")
@@ -186,6 +218,13 @@ def check(data, j, scenario):
             bad.append(f"{where}的技术细节（数据、原因、改法、大小、风险、怎么验证）没写全")
         if opts and not any(o.get("rec") for o in opts if isinstance(o, dict)):
             opts[0]["rec"] = 1  # 一个都没标建议：把第一个当建议（默认勾上）
+        recs = [o for o in opts if isinstance(o, dict) and o.get("rec")]
+        for o in recs[1:]:   # 每张卡片只勾一个（10-20）：标了几个只留第一个
+            o.pop("rec", None)
+        for k in MANAGER_FIELDS:
+            if "0.00 秒" in str(f.get(k) or ""):
+                bad.append(f"{where}写了「0.00 秒」这种没意义的数")
+        _tidy(f, opts)
         fixes.append(f)
     rounds = {p["key"]: p.get("rounds") or [] for p in probs}
     for i, f in enumerate(fixes, 1):
@@ -204,6 +243,38 @@ def check(data, j, scenario):
     if missing:
         bad.append("这些问题没写卡片：" + "；".join(missing))
     return fixes, bad
+
+
+def _sec(m):
+    """1.164 秒 → 1.2 秒；不到 1 秒的留两位（0.03 秒和 0.08 秒要分得出，刷卡、亮灯这类整条线就几十毫秒）；
+    比 0.01 秒还小的写"不到 0.01 秒"（前面的空格一起去掉，免得写成"多 不到"）。"""
+    v = float(m.group(2))
+    if v < 0.005:
+        return "不到 0.01 秒"
+    return f"{m.group(1)}{v:.1f} 秒" if v >= 1 else f"{m.group(1)}{v:.2f} 秒"
+
+
+def _sec_sub(text):
+    return re.sub(r"(?<![\d.])(\s?)(\d+\.\d{2,})\s*秒", _sec, text)
+
+
+def _sec2_sub(text):
+    """研发看的（怎么做、技术细节）：秒数留两位，和报告标题一致。"""
+    return re.sub(r"(?<![\d.])(\d+\.\d{3,})\s*秒", lambda m: f"{float(m.group(1)):.2f} 秒", text)
+
+
+def _tidy(f, opts):
+    """给负责人看的文字：秒数留一位小数；效果栏表头已写"估算"，去掉 AI 自己加的"（估算）"。技术细节不动。"""
+    for d, ks in ((f, MANAGER_FIELDS), *((o, MANAGER_OPT_FIELDS) for o in opts if isinstance(o, dict))):
+        for k in ks:
+            if isinstance(d.get(k), str):
+                d[k] = _sec_sub(d[k])
+                if k == "effect":
+                    d[k] = d[k].replace("（估算）", "").replace("(估算)", "").strip()
+    for d in (f.get("dev") if isinstance(f.get("dev"), dict) else {}, *(o for o in opts if isinstance(o, dict))):
+        for k in ("how", *DEV_FIELDS):
+            if isinstance(d.get(k), str):
+                d[k] = _sec2_sub(d[k])
 
 
 MANAGER_FIELDS = ("why", "impact", "rec")
@@ -228,10 +299,14 @@ def _rounds_said(text):
     return out
 
 
+# 写法要求改了就加一，旧的建议不再沿用
+PROMPT_VER = 11
+
+
 def signature(j, scenario):
     """要写卡片的问题：哪几个（哪条线、哪一段、哪种问题）、什么级别。和上次写建议时一样，就沿用上次的，不再调用大模型。
     不看具体是哪几轮、几秒：改完再测时这些每次都不一样，问题本身没变（10-17 用户定）。"""
-    return json.dumps([[p["key"], p.get("seg"), p["level"]] for p in problems(j, scenario)], ensure_ascii=False)
+    return json.dumps([PROMPT_VER] + [[p["key"], p.get("seg"), p["level"]] for p in problems(j, scenario)], ensure_ascii=False)
 
 
 def saved_for(save_to, j, scenario):

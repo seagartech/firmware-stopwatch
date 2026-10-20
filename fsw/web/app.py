@@ -1676,8 +1676,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         ok = [r for r in (job0 or {}).get("rounds", []) if r["ok"]]
         if not ok:
             raise HTTPException(409, "还没测完：先做多轮实测")
-        sc, ok, _ = jdg.merge_overruns(job0["_scenario"], ok)
-        j = jdg.judge(sc, ok)
+        # 和报告用同一套判断（10-20 修）：同样的体验标准、同样带上次的数，"比上次慢"的建议改才有卡片，
+        # 也不会因为少算了问题，误以为和上次一样而沿用旧建议
+        sc0, prev = job0["_scenario"], None
+        if job0.get("_page") is not None and job0.get("_project_dir"):
+            sc0 = job0["_scenario"] = _judge_scenario(job0)
+            if "_prev" not in job0:
+                job0["_prev"] = _prev_run(job0, sc0, ok)
+            prev = job0["_prev"]
+        sc, ok, _ = jdg.merge_overruns(sc0, ok)
+        j = jdg.judge(sc, ok, prev)
         if body.project_dir and (old := advs.saved_for(Path(body.project_dir) / "advice", j, sc)):
             adv["job"] = {**old, "status": "done", "seconds": 0, "called": False}  # 要改的问题和上次一样（比如只改了清单）：不再调用大模型
             return adv["job"]
