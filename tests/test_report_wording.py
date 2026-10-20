@@ -60,15 +60,12 @@ def subline_of(j):
     return run(["f", "roundList", "noExp", "withJudge", "subline"], f"subline(withJudge({json.dumps(D)},{json.dumps(j)}))")
 
 
-def test_subline_uses_merged_wording():
+def test_subline_keeps_only_the_judgment_sentence():
+    """10-20 用户定：标题下的副标题只留一句判断；出错的轮次、偶发慢各有自己的位置，不挤在这里。"""
     s = subline_of(J)
-    assert "偶尔特别慢" not in s  # 已经合并进吞字那条了
-    assert "第 2 轮回答开头被吞" in s
-
-
-def test_subline_still_mentions_unmerged_spiky():
+    assert "偶尔特别慢" not in s and "第 2 轮回答开头被吞" not in s and "平均比" not in s
     j = {"labels": [{"kind": "spiky", "k": "spiky:s4", "segment": "s4", "rounds": [16]}], "lines": []}
-    assert '"等服务器的第一段声音传过来"偶尔特别慢' in subline_of(j)
+    assert "偶尔特别慢" not in subline_of(j)
 
 
 def test_millisecond_segments_are_not_shown_as_zero():

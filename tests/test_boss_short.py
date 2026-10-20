@@ -1,7 +1,7 @@
 """负责人版写短（决策 98）：只改展示，内容一个字不删。
 
 默认展开：一句话结论、要你拍板（必须改在前、建议改在后，每条加一行"建议做哪个、预计省多少"）、你的决定。
-可以不改的只露一句"另有 n 条在合理范围里，不用改"；方案表、详细原因和影响、标签规则、发给对方的消息、结尾说明默认收起。
+达标的只露一句"另有 n 条在合理范围里，不用改"；方案表、详细原因和影响、标签规则、发给对方的消息、结尾说明默认收起。
 "要你拍板"挪到计时图前面（手机第一屏能看到）。导出的离线报告一样（用的是同一份页面，<details> 不用脚本也能点开）。
 """
 
@@ -41,7 +41,7 @@ def test_must_and_should_open_no_change_folded():
     ds = [{"k": "a", "lv": 1}, {"k": "b", "lv": 3}, {"k": "c", "lv": 0}, {"k": "d", "lv": 3}, {"k": "e", "lv": 2}]
     r = run(["bossSplit"], f"bossSplit({json.dumps(ds)})")
     assert [x["k"] for x in r["open"]] == ["c", "a", "e"]  # 必须改、建议改、未判（没判不等于没问题，不收起来）
-    assert [x["k"] for x in r["fold"]] == ["b", "d"]       # 可以不改的收起来
+    assert [x["k"] for x in r["fold"]] == ["b", "d"]       # 达标的收起来
 
 
 @node
@@ -62,7 +62,7 @@ def test_details_folded_by_default():
     assert "<b>为什么：</b>" in fa.split("<details", 1)[1] and "<b>对用户的影响：</b>" in fa.split("<details", 1)[1]
     assert "ESTNOTE" in fa.split("<details")[-1]  # 结尾说明收起
     dl = grab("decideList")
-    assert "另有 ${" in dl and "不用改" in dl and "标签规则" in dl.split("<details")[-1]
+    assert "另有 ${" in dl and "达标" in dl and "标签规则" in dl.split("<details")[-1]
     mp = grab("myPick")
     assert "<details" in mp and "todoText(" in mp.split("<details", 1)[1]  # 发给对方的消息收起
 

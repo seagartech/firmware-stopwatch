@@ -190,7 +190,7 @@ def test_report_judges_this_run_with_fixed_rules(make):
     assert r["n"] == 20 and not r["few"]
     speak = r["lines"][-1]
     assert speak["exp"] == "差" and speak["combo"].startswith("体验差：慢在「")
-    assert {x["k"]: x["level"] for x in r["labels"]}["problem:sw"] == "必须改"
+    assert {x["k"]: x["level"] for x in r["labels"]}["problem:sw"] == "出错"
     assert len(r["rounds"]) == 20 and r["scenario"]["lines"][0]["name"] == "表情线"
 
 

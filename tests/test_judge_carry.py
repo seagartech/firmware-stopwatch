@@ -71,7 +71,7 @@ def test_line_without_standard_or_last_time_says_not_judged():
     lab = next(x for x in J.judge(a, rounds(a))["labels"] if x["kind"] == "line")
     assert lab["level"] == "未判" and "只记用时" in lab["why"]
     a["experiences"] = [{"line": "开门线", "fair": 1.0, "source": "x"}]    # 有体验标准就照常判
-    assert next(x for x in J.judge(a, rounds(a))["labels"] if x["kind"] == "line")["level"] == "可以不改"
+    assert next(x for x in J.judge(a, rounds(a))["labels"] if x["kind"] == "line")["level"] == "达标"
 
 
 def test_range_list_is_gone_from_the_page_and_the_server():
