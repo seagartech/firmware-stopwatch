@@ -155,7 +155,7 @@ function timeline(D){
   else if(D.S.exp&&D.S.exp.fair<=T)g+=`<line x1="${sx(D.S.exp.fair)}" x2="${sx(D.S.exp.fair)}" y1="30" y2="${H-30}" stroke="var(--warn)" stroke-dasharray="3 4"/><text x="${sx(D.S.exp.fair)+4}" y="40" font-size="11.5" fill="var(--warn)">${D.S.exp.label}</text>`;
   g+=`<text x="${sx(0)}" y="22" text-anchor="middle" font-size="12" fill="var(--muted)">${D.S.start}</text>`;
   // 归成阶段（10-20 用户定）：占这条线不到 5% 的段算极短，不单独画；连着的极短段并进后面那个大段，排在最后的并进前一个大段。
-  // 色块里只写编号和用时，段名、谁负责、并进了几段写在图下面（不靠悬停）；不标哪块最长（10-20 用户定）
+  // 色块里只写编号和用时，段名、谁负责、并进了几段写在图下面；不标哪块最长、不要浮窗（10-20 用户定：图下说明全有，最快～最慢看「分段用时」）
   const rows=[],NO='①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
   D.lines.forEach((l,i)=>{const y=top+i*gap;let t0=0;
     g+=`<text x="${X0-14}" y="${y+h/2+5}" text-anchor="end" font-size="14" font-weight="700" fill="${l.col}">${l.name}</text>`;
@@ -164,10 +164,10 @@ function timeline(D){
     st.forEach((x,j)=>{const a=t0,b=t0+x.d;t0=b;const last=j===st.length-1,k=x.parts[0].k,shared=x.parts.some(p=>D.use[p.k]>1),no=NO[rows.length]||String(rows.length+1),w=sx(b)-sx(a);
       const c=last?l.col:shared?'var(--soft)':l.soft,fg=last?'#fff':'var(--fg)';
       rows.push({no,name:D.S.segs[k].name,d:x.d,share:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,shared});
-      g+=`<g class="hit" data-tip="${htmlEsc(segTip(D,i,k,x.parts[0].real,x.share))}"><rect x="${sx(a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
-      if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" class="num">${no} ${f(x.d)}</text>`;
+      g+=`<g><rect x="${sx(a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
+      if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(x.d)}</text>`;
       else if(w>16)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${no}</text>`;g+='</g>'});
-    g+=`<circle class="hit" data-tip="${htmlEsc(`<b>${htmlEsc(l.name)}</b><br>${htmlEsc(l.end)}：${D.n} 轮中位数 ${f(l.med)} 秒<br>最差 ${f(l.max)} 秒${passTxt(l)?'<br>'+passTxt(l):''}`)}" cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
+    g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
   const L0=D.lines[0],L1=D.lines[1];
   if(L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)){const a=L0.med,b=L1.med,y=top+gap-12;
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(b-a,2)} 秒</text>`;}
@@ -180,8 +180,6 @@ function stages(parts){const out=[];let pend=[];
   parts.forEach(p=>{if(p.share<0.05){pend.push(p);return}out.push({parts:[p,...pend],d:p.d,share:p.share});pend.forEach(q=>{out[out.length-1].d+=q.d;out[out.length-1].share+=q.share});pend=[]});
   if(pend.length){if(!out.length)out.push({parts:[],d:0,share:0});const o=out[out.length-1];pend.forEach(q=>{o.parts.push(q);o.d+=q.d;o.share+=q.share})}
   return out}
-// 计时图色块的悬停提示：只用段名、线名和数字，不带任何场景专用说法
-function segTip(D,i,k,real,share){const s=D.S.segs[k],l=D.lines[i],sh=D.use[k]>1,v=num(s.v);
  return `<b>${htmlEsc(s.name)}</b>${sh?'（多条线共用）':''}<br>${D.n} 轮中位数 ${fms(real)} 秒，占「${htmlEsc(l.name)}」${Math.round(share*100)}%${v.length?`<br>最快～最慢 ${fms(Math.min(...v))}～${fms(Math.max(...v))} 秒`:''}`}  // 不到 0.1 秒写三位小数，免得写成 0.00
 // "偶发特别慢"点名的那几轮（和拍板区说的"逐轮图里红底的几轮"对上，真测第 36 次）：轮号 → 哪一段
 function spikyRounds(D){const m=new Map(),J=D.J;

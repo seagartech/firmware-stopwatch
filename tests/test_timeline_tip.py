@@ -1,5 +1,5 @@
-"""一次的计时图：按中位数画（总长 = 这条线的中位数，各段按各自中位数的比例分）；色块、终点圆点鼠标移上去即时显示数字
-（2026-10-19 用户问"色块鼠标移入没有说明"、"标题 1.4 秒、图上 1.51 秒对不上"）。
+"""一次的计时图：按中位数画（总长 = 这条线的中位数，各段按各自中位数的比例分）（2026-10-19 用户："标题 1.4 秒、图上 1.51 秒对不上"）。
+不要浮窗（2026-10-20 用户定）：图下说明已有段名、用时、占比、谁负责，最快～最慢看「分段用时」表。
 归成阶段（2026-10-20 用户定）：占这条线不到 5% 的段并进后面那个大段，排在最后的并进前一个大段；图下每块一行，不标哪块最长。
 
 用 node 跑 app.js 里的 timeline()，两组数据：门禁样子的和语音样子的，提示里只能有段名、线名和数字。
@@ -32,7 +32,7 @@ def grab(name):
 
 
 def svg(D):
-    names = ["sorted", "num", "med", "f", "fms", "htmlEsc", "passPct", "passTxt", "niceT", "step", "segMed", "lineParts", "segTip", "stages", "timeline"]
+    names = ["sorted", "num", "med", "f", "fms", "htmlEsc", "passPct", "passTxt", "niceT", "step", "segMed", "lineParts", "stages", "timeline"]
     code = "\n".join(grab(n) for n in names) + f"\nconsole.log(JSON.stringify(timeline({json.dumps(D)})));"
     return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
 
@@ -58,17 +58,12 @@ def voice():
                       {"name": "线乙", "end": "出声", "col": "blue", "soft": "lb", "med": 1.45, "p90": 1.61, "max": 4.13, "segs": ["s", "t"]}]}
 
 
-def test_every_block_and_end_dot_has_instant_tip_with_medians():
+def test_no_hover_tips_end_writes_median():
     out = svg(door())
-    assert "<title>" not in out  # 不再靠浏览器自带的慢提示
-    tips = re.findall(r'data-tip="([^"]*)"', out)
-    assert len(tips) == 3  # 读卡号、亮灯响一声（并进了两段极短的）、终点圆点
-    seg = next(t for t in tips if "读卡号" in t)
-    assert "2 轮中位数 0.060 秒" in seg and "占「反应线」13%" in seg and "最快～最慢 0.040～0.080 秒" in seg  # 不到 0.1 秒写三位
+    assert "data-tip" not in out and "<title>" not in out and 'class="hit"' not in out   # 不靠浮窗
     assert "本轮" not in out and "起止时刻" not in out                       # 不再画某一轮
-    dot = tips[-1]
-    assert "反应线" in dot and "2 轮中位数 0.50 秒" in dot and "最差 0.58 秒" in dot
     assert "亮灯 0.50 秒" in out                                             # 终点写的是中位数，和标题的"一般"一样
+    assert 'class="num">①' not in out                                        # 圈号不用等宽字体（缺字，显示得特别小）
 
 
 def test_tiny_segments_fold_into_the_next_big_stage_and_list_shows_each_stage():
@@ -94,11 +89,10 @@ def test_line_length_is_its_median_and_shared_segment_split_by_ratio():
     out = svg(voice())
     assert "换表情 0.83 秒" in out and "出声 1.45 秒" in out
     assert "早 0.62 秒" in out                                               # 两条线中位数之差
-    tips = re.findall(r'data-tip="([^"]*)"', out)
-    shared = [t for t in tips if "听写" in t]
-    assert len(shared) == 2 and all("（多条线共用）" in t and "10 轮中位数 0.50 秒" in t for t in shared)
-    assert "占「线甲」56%" in shared[0] and "占「线乙」36%" in shared[1]        # 0.5/(0.5+0.4)、0.5/(0.5+0.9)
-    assert "最差 " in tips[-1] and "10 次里最慢" not in tips[-1]   # 自造的"10 次里最慢"换掉了（10-20）
+    items = re.findall(r"<li[^>]*>(.*?)</li>", out)
+    shared = [t for t in items if "听写" in t]
+    assert len(shared) == 2 and all("（共用）" in t for t in shared)
+    assert "56%" in shared[0] and "36%" in shared[1]                         # 0.5/(0.5+0.4)、0.5/(0.5+0.9)
 
 
 def test_note_under_chart_is_one_short_line_without_scene_words():
