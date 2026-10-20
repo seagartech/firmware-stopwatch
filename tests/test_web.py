@@ -349,7 +349,8 @@ def test_round_count_is_flexible_3_to_100():
     assert "can=k>=MIN_ROUNDS" in js and "const MIN_ROUNDS=3" in js
     rp = js.split("function reportPage(")[1].split("\nfunction ")[0]
     assert "适合跑流程，数字不作数" in rp
-    assert "D.n<10" in js.split("function tiers(")[1].split("\nfunction ")[0]  # 少于 10 轮不显示"10 次里最慢"
+    t = js.split("function tiers(")[1].split("\nfunction ")[0]
+    assert "达标率" in t and "pass_rate" in t and "p90" not in t  # 中间那档换成达标率（10-20 用户定）
 
 
 def test_acceptance_fixes_on_the_page():

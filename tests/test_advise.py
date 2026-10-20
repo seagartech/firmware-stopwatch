@@ -70,6 +70,7 @@ def test_recorded_door_reply_passes_the_check(tmp_path):
     (lambda f: f[0].update(seg="nope"), "没有这一段"),
     (lambda f: f[0]["opts"][0].pop("who"), "找谁"),
     (lambda f: f[0].pop("dev"), "技术细节"),
+    (lambda f: f[0].update(why="和上次相差 0.00 秒"), "0.00 秒"),
 ])
 def test_bad_reply_is_not_used(tmp_path, break_it, words):
     d, j = judged("door")
@@ -136,7 +137,7 @@ def real_like():
 
 
 def test_no_spiky_cards_any_more():
-    """"偶发特别慢"不再单独出标签、也不单独写卡片（10-20 用户定）：只看"10 次里最慢"这一个数。"""
+    """"偶发特别慢"不再单独出标签、也不单独写卡片（10-20 用户定）：偶尔慢由达标率 < 90% 管。"""
     d, j = real_like()
     assert not any(x["kind"] == "spiky" for x in j["labels"])
     keys = [p["key"] for p in adv.problems(j, d["scenario"])]
@@ -179,3 +180,57 @@ def test_card_covering_two_segments_is_accepted_and_keeps_the_first():
 def test_prompt_says_one_segment_per_card():
     from fsw import advise as adv
     assert "seg 只写一段" in adv.PROMPT
+
+
+def test_main_line_skips_the_answer_length_line_like_the_report():
+    """报告不画"看回答长短"的线，剩下的最后一条是主线（编号 main）；写建议认同一条，卡片才挂得上（10-20 修：之前卡片全空）。"""
+    j = {"lines": [{"name": "开口", "verdict": "已记录", "segments": ["a"]},
+                   {"name": "放完", "verdict": "看回答长短", "segments": ["a", "b"]}],
+         "segments": [{"k": "a", "med": 1.0}, {"k": "b", "med": 3.0}],
+         "labels": [{"kind": "line", "line": "开口", "level": "必须改", "why": "达标率 0%", "k": "line:开口"}]}
+    p = adv.problems(j, {"segments": {}})
+    assert [(x["key"], x["seg"]) for x in p] == [("main", "a")]   # 大头取这条线自己的段，不是"放完"那条的
+
+
+def test_only_one_option_stays_recommended(tmp_path):
+    d, j = judged("door")
+    fixes = copy.deepcopy(d["page"]["fixes"])
+    for o in fixes[0]["opts"]:
+        o["rec"] = 1
+    text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
+    r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
+    assert r["ok"] and [bool(o.get("rec")) for o in r["fixes"][0]["opts"]].count(True) == 1
+
+
+def test_old_advice_is_not_reused_after_prompt_changes(tmp_path, monkeypatch):
+    d, j = judged("door")
+    save = tmp_path / "advice"
+    adv.advise(FakeLLM(recorded(d)), tmp_path, j, d["scenario"], steps=d["F"]["steps"], save_to=save)
+    assert adv.saved_for(save, j, d["scenario"])
+    monkeypatch.setattr(adv, "PROMPT_VER", adv.PROMPT_VER + 1)
+    assert adv.saved_for(save, j, d["scenario"]) is None
+
+
+def test_manager_text_keeps_one_decimal_and_no_estimate_suffix():
+    f = {"why": "一般 1.164 秒，比平时多 0.001 秒", "impact": "x", "rec": "约 2.526秒", "dev": {"data": "1.164 秒"}}
+    opts = [{"name": "a", "effect": "约 0.35 秒（估算）", "how": "一般 1.164 秒"}, {"name": "b", "effect": "查清原因后才知道（估算）"}]
+    adv._tidy(f, opts)
+    assert f["why"] == "一般 1.2 秒，比平时多不到 0.01 秒" and f["rec"] == "约 2.5 秒"
+    assert opts[0]["effect"] == "约 0.35 秒"
+    assert opts[1]["effect"] == "查清原因后才知道" and f["dev"]["data"] == "1.16 秒"  # 技术细节留两位
+    assert opts[0]["how"] == "一般 1.16 秒"
+
+
+def test_adding_a_timing_point_is_not_a_find_cause_option(tmp_path):
+    d, j = judged("door")
+    fixes = copy.deepcopy(d["page"]["fixes"])
+    fixes[0]["opts"][0].update(name="固件研发加一个计时点，把这段拆成两截", work="小", wn="小：只改一处")
+    text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
+    r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
+    assert r["ok"] and r["fixes"][0]["opts"][0]["work"] == "小"
+
+
+def test_short_lines_keep_two_decimals():
+    f = {"why": "刷卡到亮灯一般 0.034 秒，最慢 0.082 秒", "impact": "x", "rec": "x"}
+    adv._tidy(f, [])
+    assert f["why"] == "刷卡到亮灯一般 0.03 秒，最慢 0.08 秒"

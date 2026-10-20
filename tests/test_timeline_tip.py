@@ -31,7 +31,7 @@ def grab(name):
 
 
 def svg(D):
-    names = ["sorted", "num", "med", "f", "fms", "htmlEsc", "niceT", "step", "segMed", "lineParts", "segTip", "timeline"]
+    names = ["sorted", "num", "med", "f", "fms", "htmlEsc", "passPct", "passTxt", "niceT", "step", "segMed", "lineParts", "segTip", "timeline"]
     code = "\n".join(grab(n) for n in names) + f"\nconsole.log(JSON.stringify(timeline({json.dumps(D)})));"
     return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout)
 
@@ -69,7 +69,7 @@ def test_every_block_and_end_dot_has_instant_tip_with_medians():
     assert "2 段合并显示" in merged and "查名单" in merged
     assert "&amp;lt;权限&amp;gt;" in merged  # 段名转义两次：属性里一次、提示框 innerHTML 一次
     dot = tips[-1]
-    assert "反应线" in dot and "2 轮中位数 0.50 秒" in dot and "最慢 0.58 秒" in dot
+    assert "反应线" in dot and "2 轮中位数 0.50 秒" in dot and "最差 0.58 秒" in dot
     assert "亮灯 0.50 秒" in out                                             # 终点写的是中位数，和标题的"一般"一样
 
 
@@ -81,7 +81,7 @@ def test_line_length_is_its_median_and_shared_segment_split_by_ratio():
     shared = [t for t in tips if "听写" in t]
     assert len(shared) == 2 and all("（多条线共用）" in t and "10 轮中位数 0.50 秒" in t for t in shared)
     assert "占「线甲」56%" in shared[0] and "占「线乙」36%" in shared[1]        # 0.5/(0.5+0.4)、0.5/(0.5+0.9)
-    assert "10 次里最慢 1.61 秒" in tips[-1]
+    assert "最差 " in tips[-1] and "10 次里最慢" not in tips[-1]   # 自造的"10 次里最慢"换掉了（10-20）
 
 
 def test_legend_states_how_it_is_drawn_and_color_rule_without_scene_words():

@@ -21,7 +21,8 @@ function build(S){
   const rounds=[...Array(n)].map((_,r)=>({n:r+1,ends:lines.map(l=>l.ends[r])}));
   let reversed=[];
   if(S.firstBeforeSecond&&lines.length>1)reversed=rounds.filter(r=>r.ends[0]>r.ends[1]);
-  const fair=S.exp&&S.exp.fair,mi=lines.length-1;  // 让人等太久的轮：这一轮超过体验标准（体验标准挂在要测的这条线上）
+  const fair=S.exp&&S.exp.fair,mi=lines.length-1;
+  if(fair){const e=lines[mi].ends.filter(x=>x!=null),k=e.filter(x=>x<=fair).length;Object.assign(lines[mi],{pass_n:k,count:e.length,pass_rate:k/e.length})}  // 达标率：没超过体验标准的轮次占几成  // 让人等太久的轮：这一轮超过体验标准（体验标准挂在要测的这条线上）
   const slowRounds=fair==null?[]:rounds.filter(r=>r.ends[mi]!=null&&r.ends[mi]>fair);
   const allSegs=Object.entries(S.segs).map(([k,s])=>({k,...s,med:med(s.v),max:mx(s.v)}));
   const biggest=[...allSegs].sort((a,b)=>b.med-a.med)[0];
@@ -75,8 +76,8 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
 const VCLS={'慢了':'c-warn','快了':'c-ok','持平':'c-ok','已记录':'c-gray','推算':'c-gray','看回答长短':'c-gray'};
 const VTXT={'慢了':'比上次慢了','快了':'比上次快了','持平':'和上次持平','已记录':'只记录用时'};
 function withJudge(D,J){const L=n=>J.lines.find(x=>x.name===n)||{};
-  // 一般、10 次里最慢、最差都用后台算好的，网页不再自己算一遍（两边规则不一样就会对不上：10-19 报告写 1.22、实际 1.34）
-  D.lines.forEach(l=>{const b=L(l.name);if(b.med!=null)Object.assign(l,{med:b.med,p90:b.p90,max:b.max})});
+  // 一般、最差、达标率都用后台算好的，网页不再自己算一遍（两边规则不一样就会对不上：10-19 报告写 1.22、实际 1.34）
+  D.lines.forEach(l=>{const b=L(l.name);if(b.med!=null)Object.assign(l,{med:b.med,p90:b.p90,max:b.max,count:b.count,pass_n:b.pass_n,pass_rate:b.pass_rate})});
   D.allSegs.forEach(g=>{const b=(J.segments||[]).find(x=>x.k===g.k);if(b&&b.med!=null)Object.assign(g,{med:b.med,max:b.max})});
   D.verdict=l=>{const v=L(l.name).verdict||'已记录';return [VTXT[v]||v,VCLS[v]||'c-gray']};
   const e=L(D.main.name).exp;D.exp=e?[e,e==='差'?'c-bad':'c-ok']:null;
@@ -104,7 +105,7 @@ const jump=(id,t)=>`<button class="lnk" data-jump="${id}">${t}</button>`;
 // 要你拍板的一条 → 讲它的那张卡片：按问题编号对；早先的卡片把几段"偶尔特别慢"都叫 spiky，再按段对
 const cardOf=(FX,d)=>FX.findIndex(F=>F.when.includes(d.k)||(d.seg&&F.when.includes('spiky')&&F.seg===d.seg));
 function decisionsJ(D){const J=D.J,out=[];
-  const src={line:['tiers','三档用时'],spiky:['rounds',`${D.n} 轮逐轮`],order:['rounds',`${D.n} 轮逐轮`],problem:['rounds',`${D.n} 轮逐轮`]};  // 「依据」链接：点一下跳到下面对应的数据
+  const src={line:['tiers','用时和达标率'],spiky:['rounds',`${D.n} 轮逐轮`],order:['rounds',`${D.n} 轮逐轮`],problem:['rounds',`${D.n} 轮逐轮`]};  // 「依据」链接：点一下跳到下面对应的数据
   for(const x of J.labels){const lv=LV.findIndex(v=>v[0]===x.level);if(x.level==='达标')continue;  // 达标的不列（10-20 用户定）：要你拍板只写要处理的
    if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=isMain?D.biggest:([...D.allSegs].filter(s=>l.segs.includes(s.k)).sort((p,q)=>q.med-p.med)[0]||D.biggest),share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
     out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:`${l.end} ${f(l.med)} 秒`,
@@ -129,7 +130,7 @@ function decisions(D){if(D.J)return decisionsJ(D);
     if(x.k==='main')lv=bad?0:D.exp?3:2;  // 3 = 可以不改，2 = 未判（没有体验标准）
     else if(x.k==='spiky')lv=D.S.exp&&D.lines.filter(l=>l.segs.includes(D.spiky.k)).some(l=>l===D.main&&l.p90>D.S.exp.fair)?0:1;
     else lv=D.reversed.length/D.n>.1?0:1;
-    const src=x.k==='main'?['tiers','「三档用时」里“一般”那一列；各段占多少见「一次的计时图」']:x.k==='spiky'?['rounds',`「${D.n} 轮逐轮」图里红底的几轮`]:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1].end}晚"的几轮`];
+    const src=x.k==='main'?['tiers','「用时和达标率」里“一般”那一列；各段占多少见「一次的计时图」']:x.k==='spiky'?['rounds',`「${D.n} 轮逐轮」图里红底的几轮`]:['rounds',`「${D.n} 轮逐轮」图里红底、标"${D.lines[0].end}比${D.lines[1].end}晚"的几轮`];
     return {...x,lv,src}});
   return L.sort((a,b)=>a.lv-b.lv);
 }
@@ -137,7 +138,7 @@ function decisions(D){if(D.J)return decisionsJ(D);
 // ===== 计时图：同一起点、多条横线（按数据画）=====
 function niceT(x){return Math.max(.5,Math.ceil(x*1.2/.5)*.5)}
 function step(T){return T<=1?.1:T<=2?.25:T<=4?.5:1}
-// 一次的计时图按中位数画（10-19 用户定"一套标准"）：每条线总长 = 这条线的中位数（和标题、三档用时里的"一般"同一个数）；
+// 一次的计时图按中位数画（10-19 用户定"一套标准"）：每条线总长 = 这条线的中位数（和标题、「用时和达标率」里的"一般"同一个数）；
 // 线里各段按各段中位数的比例分。不再挑某一轮画：挑出来的那轮和标题对不上（标题 1.45、图上 1.51）
 function segMed(D,k){return (D.allSegs.find(x=>x.k===k)||{med:med(D.S.segs[k].v)}).med}
 function lineParts(D,l){const m=l.segs.map(k=>Math.max(0,segMed(D,k)||0)),sum=m.reduce((t,x)=>t+x,0);
@@ -166,7 +167,7 @@ function timeline(D){
       g+=`<g class="hit" data-tip="${htmlEsc(segTip(D,i,k,real,share))}"><rect x="${sx(a)}" y="${y}" width="${Math.max(2,sx(b)-sx(a))}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
       if(sx(b)-sx(a)>90&&!last){const room=Math.floor((sx(b)-sx(a)-40)/12),nm=D.S.segs[k].name,t=nm.length>room?nm.slice(0,Math.max(2,room-1))+'…':nm;g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)">${t} ${f(real)}</text>`}
       else if(sx(b)-sx(a)>34&&!last)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--fg)" class="num">${f(real)}</text>`;g+='</g>'});flush();
-    g+=`<circle class="hit" data-tip="${htmlEsc(`<b>${htmlEsc(l.name)}</b><br>${htmlEsc(l.end)}：${D.n} 轮中位数 ${f(l.med)} 秒<br>${D.n>=10?`10 次里最慢 ${f(l.p90)}`:`最慢 ${f(l.max)}`} 秒`)}" cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
+    g+=`<circle class="hit" data-tip="${htmlEsc(`<b>${htmlEsc(l.name)}</b><br>${htmlEsc(l.end)}：${D.n} 轮中位数 ${f(l.med)} 秒<br>最差 ${f(l.max)} 秒${passTxt(l)?'<br>'+passTxt(l):''}`)}" cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
   const L0=D.lines[0],L1=D.lines[1];
   if(L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)){const a=L0.med,b=L1.med,y=top+gap-12;
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(b-a,2)} 秒</text>`;}
@@ -199,9 +200,12 @@ function roundsChart(D){
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${top+D.n*rh+6}" style="min-width:640px;width:100%" role="img" aria-label="逐轮计时">${g}</svg></div>
   <div class="legend">${D.lines.map((l,j)=>`<span><i class="sw" style="background:${l.col};width:10px;height:10px;${j===0?'border-radius:50%':''}"></i>${l.end}</span>`).join('')}<span>竖虚线是中位数</span>${bad.size?'<span style="color:var(--bad)">红底：有问题的轮</span>':''}</div>`;
 }
-function tiers(D){const few=D.n<10;  // 少于 10 轮："10 次里最慢"没意义，不显示
-  return `<div class="tiers num" ${few?'style="grid-template-columns:auto repeat(2,1fr)"':''}><span></span><span class="h">一般（中位数）</span>${few?'':'<span class="h">10 次里最慢</span>'}<span class="h">最差</span>
-  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span>${few?'':`<span>${f(l.p90)} 秒</span>`}<span>${f(l.max)} 秒</span>`).join('')}</div>`;
+// 达标率（10-20 用户定，换掉自造的"10 次里最慢"）：没超过体验标准的轮次占几成；没有体验标准的线写「—」
+const passPct=l=>l.pass_rate==null?null:`${Math.round(l.pass_rate*100)}%`;
+const passTxt=l=>l.pass_rate==null?'':`达标率 ${passPct(l)}（${l.pass_n}/${l.count}）`;
+function tiers(D){  // 一般 ｜ 最差 ｜ 达标率：两列秒数挨着，百分比单独放最右
+  return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">最差</span><span class="h">达标率</span>
+  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.max)} 秒</span><span>${l.pass_rate==null?'—':`${passPct(l)}（${l.pass_n}/${l.count}）`}</span>`).join('')}</div>`;
 }
 // 两把尺子（10-19 去掉合理范围清单）：体验标准问"用户等得了吗"（按设备类别从标准库挑，挂在第一下感觉到结果的那条线上）；
 // 第二次起再看"和上次比"快了、慢了还是持平。每条线一张卡片，结论那句用后台算好的（judge.combo）
@@ -224,18 +228,14 @@ function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;if
   return `建议：${o.name}${eff}。`}  // 出错 / 建议改 / 必须改每条一句的"建议"
 function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
   // 每条一句（10-20 用户定）：标签（右对齐一列）、线名 用时：问题。建议：做什么，预计效果。　详情 → 问题 N　依据 → 数据
+  // 标签规则（10-20 用户定）：一句来源 + 每个标签一行，和上面列表同一套标签、同样右对齐
   const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${lvTag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+x.src[1])}</span></li>`};
   return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
-  <details class="lvwhy"><summary>数字从哪来、标签规则</summary><ul class="notes"><li>这里的数字都是码表按这次 ${D.n} 轮数据直接算出来的，不经过 AI。</li><li>"为什么、怎么改"的文字是 AI 读代码写的。</li><li>要做哪些方案：在下方每个问题的方案表里勾选，结果汇总在 ${jump('my-pick','你的决定')}。</li></ul>
-  <ul class="notes"><li>标签按固定规则从数据算出，不由 AI 判断；只有一条时也照规则标。</li>
-  <li>越靠上越重要：出错、必须改、建议改、未判；同一级里超标越多、出错轮次越多越靠前。</li>
-  <li><b class="lvtag lv-must">出错</b>功能出错（比如回答开头被吞），不是快慢；只写出错的轮次。</li>
-  <li><b class="lvtag lv-must">必须改</b>让人明显等太久：这条线的中位数超过体验标准，或"10 次里最慢"超过标准的 1.5 倍。</li>
-  <li><b class="lvtag lv-should">建议改</b>"10 次里最慢"超过标准但没到 1.5 倍，或比上次慢了。</li>
-  <li><b class="lvtag lv-none">未判</b>没有体验标准，也没有上次可比（第一次测），这次只记用时。</li>
-  <li>"10 次里最慢"：10 轮从快到慢排的第 9 个（20 轮里是第 18 个），意思是每 10 次有 1 次会这么慢或更慢；不足 10 轮不判。</li>
-  <li>和上次比：两次都测满 10 轮才比；本次中位数比上次高出（或低出）0.1 秒以上、并且 10% 以上，才算慢了（快了），否则算持平。</li>
-  <li>没问题的线不列在这里；放回答的几段不判快慢，只在技术细节里写。</li></ul></details>`}
+  <details class="lvwhy"><summary>标签规则</summary><p class="note" style="margin:8px 0">数字和标签由码表按规则算，"为什么、怎么改"由 AI 读代码写。</p><ul class="decide rules">
+  <li><span class="tagcol">${lvTag(4)}</span><span>功能出错，不看快慢。</span></li>
+  <li><span class="tagcol">${lvTag(0)}</span><span>达标率 &lt; 50%，或超过标准 1.5 倍的轮次 &gt; 10%。</span></li>
+  <li><span class="tagcol">${lvTag(1)}</span><span>达标率 &lt; 90%，或比上次慢 0.1 秒且 10% 以上。</span></li>
+  <li><span class="tagcol">${lvTag(2)}</span><span>没有体验标准，也没有上次可比。</span></li></ul><p class="note" style="margin:4px 0 0">达标率：这几轮里没超过体验标准的占几成。测不满 10 轮时只按达标率 &lt; 50% 判。</p></details>`}
 // 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
 // 起点按计时点自己的名字叫（比如"设备听出你停了"），不叫"你说完"：它是设备自己察觉的时刻，比人真正做完晚（决策 135）
 function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
@@ -659,18 +659,21 @@ async function exportReport(folder){
 <div class="tabs seg" role="group" aria-label="报告版本"><button id="tb-b" aria-pressed="true" onclick="sw('b')">结论建议</button><button id="tb-d" aria-pressed="false" onclick="sw('d')">技术细节</button></div></div>
 <div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
 <p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。勾选的方案和待办是导出那一刻的样子；要改勾选，请在码表里打开这份报告。${log}</p></div>
-<div id="tip" hidden></div><script>${tipShow.toString()}document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
+<div id="tip" hidden></div><script>${tipShow.toString()}document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
   let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
   EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path}
 function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
-  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${F.title}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${o.fis.map(i=>FX[i].title).join('；')}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+// 勾了的方案；同一个人做同一件事出现在几张卡片里（10-20 真测：「思考中」表情两张卡片都有），待办只算一件，标上解决哪几个问题
+function pickedOpts(FX){const out=[],seen={};FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(!fixPick.has(fi+'-'+oi))return;const k=o.who+'|'+o.name;if(seen[k]){seen[k].fis.push(fi);return}out.push(seen[k]={...o,fi,fis:[fi]})}));return out}
+const pNos=o=>'问题 '+o.fis.map(i=>i+1).join('、');
 function myPick(D,FX){initPick(FX);
-  const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
+  const chosen=pickedOpts(FX);
   const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
-  const none=FX.map((F,fi)=>chosen.some(o=>o.fi===fi)?'':`问题 ${fi+1}`).filter(Boolean);
-  const body=chosen.length?`<details class="lvwhy"><summary>勾了哪几个、每个预计的效果</summary><ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul></details>
+  const none=FX.map((F,fi)=>chosen.some(o=>o.fis.includes(fi))?'':`问题 ${fi+1}`).filter(Boolean);
+  const body=chosen.length?`<details class="lvwhy"><summary>勾了哪几个、每个预计的效果</summary><ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>${pNos(o)}：${o.name}。预计${o.effect}。</li>`).join('')}</ul></details>
    <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
    ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
    ${none.length?`<p style="margin:6px 0;color:var(--bad)">${none.join('、')}一个方案都没选，等于先不处理。</p>`:''}
@@ -689,15 +692,15 @@ function fixA(D){const FX=activeFixes(D);initPick(FX);
 }
 function fixB(D){const FX=activeFixes(D);
   if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}
-  const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
+  const chosen=pickedOpts(FX);
   const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
   const rows=FX.map((F,fi)=>`<h3 id="fix-${fi}" style="margin:14px 0 4px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3><p class="note" style="margin:0 0 6px">${F.why}</p>${optTable(F,fi,true)}`).join('');
-  const sum=chosen.length?`<ul style="margin:6px 0">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul>
+  const sum=chosen.length?`<ul style="margin:6px 0">${chosen.map(o=>`<li>${pNos(o)}：${o.name}。预计${o.effect}。</li>`).join('')}</ul>
    <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
    ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
-   ${FX.some((F,fi)=>!chosen.some(o=>o.fi===fi))?`<p style="margin:6px 0;color:var(--bad)">还有问题一个方案都没选：${FX.map((F,fi)=>chosen.some(o=>o.fi===fi)?'':`问题 ${fi+1}`).filter(Boolean).join('、')}。不选也可以，等于先不处理。</p>`:''}
+   ${FX.some((F,fi)=>!chosen.some(o=>o.fis.includes(fi)))?`<p style="margin:6px 0;color:var(--bad)">还有问题一个方案都没选：${FX.map((F,fi)=>chosen.some(o=>o.fis.includes(fi))?'':`问题 ${fi+1}`).filter(Boolean).join('、')}。不选也可以，等于先不处理。</p>`:''}
    <div class="acts" style="margin-top:8px"><button class="btn pri" data-todo="1">${fixTodo?'收起待办':'生成待办，发给相关的人'}</button></div>
-   ${fixTodo?`<pre style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13.5px;margin:10px 0 0">${Object.entries(who).map(([w,a])=>`【${w}】\n${chosen.filter(o=>o.who===w).map(o=>`· ${o.name}（问题 ${o.fi+1}：${FX[o.fi].title}）\n  做完的标准：${FX[o.fi].dev.verify}`).join('\n')}`).join('\n\n')}\n\n做完后用码表按同样的条件再测一次，看前后对比。</pre><p class="note">样子里只演示文字；真产品可以复制，或存成文件。</p>`:''}`
+   ${fixTodo?`<pre style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13.5px;margin:10px 0 0">${Object.entries(who).map(([w,a])=>`【${w}】\n${chosen.filter(o=>o.who===w).map(o=>`· ${o.name}（${pNos(o)}：${FX[o.fi].title}）\n  做完的标准：${FX[o.fi].dev.verify}`).join('\n')}`).join('\n\n')}\n\n做完后用码表按同样的条件再测一次，看前后对比。</pre><p class="note">样子里只演示文字；真产品可以复制，或存成文件。</p>`:''}`
    :'<p class="note">还没勾任何方案。</p>';
   return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div><p class="note" style="margin:0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}`;
 }
@@ -726,7 +729,7 @@ function reportPage(D){
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
   <section class="grid3" id="sec-lines">${lineCards(D)}</section>
-  <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">三档用时<span class="tiernote">${D.n<10?`只测了 ${D.n} 轮，不算"10 次里最慢"`:`<i class="rdot"></i>"10 次里最慢"：每 10 次大约有 1 次会这么慢或更慢${D.n<20?'（这次只收了 '+D.n+' 轮，这一档只供参考）':''}`}</span></h2>${tiers(D)}</section>
+  <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">用时和达标率<span class="tiernote">达标率：没超过体验标准的轮次占几成${D.n<10?`；只测了 ${D.n} 轮，只供参考`:''}</span></h2>${tiers(D)}</section>
   <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
@@ -1159,7 +1162,7 @@ function colSetup(){const C=CX(),D=DX();return `${justFlashed?`<div class="okbar
  <dl class="cform">
   <dt>谁来${C.act}</dt><dd><p style="margin:0">${C.who}</p><p class="note" style="margin:4px 0 0">${C.why}</p></dd>
   <dt>测几轮</dt><dd><div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><div class="seg" role="group" aria-label="测几轮">${[10,20,30].map(n=>`<button data-coln="${n}" aria-pressed="${n===colN}">${n} 轮${n===20?'（推荐）':''}</button>`).join('')}</div><label class="note" style="display:inline-flex;align-items:center;gap:6px">自己填<input type="number" id="col-n" min="3" max="100" step="1" value="${[10,20,30].includes(colN)?'':colN}" placeholder="3～100" style="width:5.5em"> 轮</label></div>
-   <p class="note" style="margin:4px 0 0">20 轮够看出一般多快、最慢的几次、偶尔出的错。轮数越多越准，也越费时间（${C.per}，估算）。${colN<10?`<br><span style="color:var(--warn)">${colN} 轮只适合跑流程：报告会注明"数字不作数"，不显示"10 次里最慢"。</span>`:''}</p></dd>
+   <p class="note" style="margin:4px 0 0">20 轮够看出一般多快、最慢的几次、偶尔出的错。轮数越多越准，也越费时间（${C.per}，估算）。${colN<10?`<br><span style="color:var(--warn)">${colN} 轮只适合跑流程：报告会注明"数字不作数"，达标率只按 &lt; 50% 判。</span>`:''}</p></dd>
   <dt>${C.listName} ${colN} ${C.unit}</dt><dd><details><summary class="pill" style="display:inline-block;list-style:none;cursor:pointer">展开清单</summary><ol class="note" style="columns:2;margin:8px 0 0">${[...Array(colN)].map((_,i)=>`<li>${C.items[i%C.items.length]}</li>`).join('')}</ol></details>
    <p class="note" style="margin:4px 0 0">${C.itemsFrom||'固定清单'}。不用背，每轮页面上会大字提示。</p></dd>
   <dt>提示音</dt><dd>${beepBtn()}<p class="note" style="margin:4px 0 0">${beepNote()}</p></dd>
@@ -1214,21 +1217,22 @@ function collectPage(){
 function afterScene(k){const S=JSON.parse(JSON.stringify(SCENES[k]));for(const s in RUNS[k].afterSegs)S.segs[s].v=RUNS[k].afterSegs[s];return S}
 let cmpVar='c';
 const flat=(a,b)=>Math.abs(b-a)<Math.max(.03,a*.05);
+function pchip(a,b){if(a.pass_rate==null||b.pass_rate==null)return '';const d=Math.round((b.pass_rate-a.pass_rate)*100);return !d?'<span class="note">→ 持平</span>':d>0?`<span class="down">↑ 多了 ${d} 个百分点</span>`:`<span class="up">↓ 少了 ${-d} 个百分点</span>`}  // 达标率：高了是好事，颜色和用时反过来
 function dchip(a,b){if(flat(a,b))return '<span class="note">→ 持平</span>';const d=b-a;return d<0?`<span class="down">↓ 快了 ${f(-d)} 秒</span>`:`<span class="up">↑ 慢了 ${f(d)} 秒</span>`}
-const TIERS=[['一般','med'],['10 次最慢','p90'],['最差一次','max']];
+const TIERS=[['一般','med'],['最差一次','max']];
 function cmpData(){const B=build(SCENES[scene]),A=build(afterScene(scene));return {B,A,R:RUNS[scene]}}
 function cmpHead(){const {B,A}=cmpData();
- return A.lines.map((l,i)=>{const b=B.lines[i],m=flat(b.med,l.med),p=flat(b.p90,l.p90);
+ return A.lines.map((l,i)=>{const b=B.lines[i],m=flat(b.med,l.med);
   const s1=m?`一般持平（${f(b.med)} → ${f(l.med)} 秒）`:`一般${l.med<b.med?'快':'慢'}了 ${f(Math.abs(l.med-b.med))} 秒（${f(b.med)} → ${f(l.med)}）`;
-  const s2=p?'最慢那几次也差不多':`最慢那几次${l.p90<b.p90?'好了很多':'更慢了'}（${f(b.p90)} → ${f(l.p90)} 秒）`;
-  return `<b>${l.end}</b>：${s1}，${s2}。`}).join('<br>')}
+  const s2=l.pass_rate==null||b.pass_rate==null?'':l.pass_n===b.pass_n&&l.count===b.count?`，达标率持平（${passPct(l)}）`:`，达标率 ${passPct(b)} → ${passPct(l)}`;
+  return `<b>${l.end}</b>：${s1}${s2}。`}).join('<br>')}
 function fair(){const {R}=cmpData(),C=COLLECT[scene];
  return `<div class="status"><span><i class="dot" style="background:var(--ok)"></i>两次都按同样的 20 ${C.unit}${C.act}</span><span><i class="dot" style="background:var(--ok)"></i>计时点相同</span>${flow==='retest'&&rtCase==='tool'?'<span><i class="dot" style="background:var(--warn)"></i>编译工具不同（v6.1 → v6.2），变化不一定都来自你改的那一处</span>':''}<span><i class="dot" style="background:var(--warn)"></i>网络、服务器负载码表看不到，请自己保证差不多</span></div>`}
 function cmpPick(){const R=RUNS[scene];return `<section class="panel"><h1 style="font-size:22px">前后对比</h1>
  <div class="pickrow"><label>改前<select><option>${flow==='retest'?RT[scene].last+'　上一次（自动选的）':R.before}</option></select></label><span class="note">→</span><label>改后<select><option>${flow==='retest'?'今天　这次改完再测':R.after}</option></select></label></div>
  <p class="note" style="margin:6px 0">这次改了什么（${rtWhat?'改完再测时码表先写、你确认过的':'你填'}，报告里会带上）：<b>${rtWhat||R.what}</b></p>${fair()}</section>`}
 function cmpA(){const {B,A}=cmpData();
- const tier=`<table class="rtab"><thead><tr><th></th>${A.lines.map(l=>`<th colspan="3">${l.end}</th>`).join('')}</tr><tr><th></th>${A.lines.map(()=>'<th>改前</th><th>改后</th><th>变化</th>').join('')}</tr></thead><tbody>${TIERS.map(([t,k])=>`<tr><td>${t}</td>${A.lines.map((l,i)=>`<td class="num">${f(B.lines[i][k])}</td><td class="num">${f(l[k])}</td><td>${dchip(B.lines[i][k],l[k])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+ const tier=`<table class="rtab"><thead><tr><th></th>${A.lines.map(l=>`<th colspan="3">${l.end}</th>`).join('')}</tr><tr><th></th>${A.lines.map(()=>'<th>改前</th><th>改后</th><th>变化</th>').join('')}</tr></thead><tbody>${TIERS.map(([t,k])=>`<tr><td>${t}</td>${A.lines.map((l,i)=>`<td class="num">${f(B.lines[i][k])}</td><td class="num">${f(l[k])}</td><td>${dchip(B.lines[i][k],l[k])}</td>`).join('')}</tr>`).join('')}<tr><td>达标率</td>${A.lines.map((l,i)=>`<td class="num">${passPct(B.lines[i])||'—'}</td><td class="num">${passPct(l)||'—'}</td><td>${pchip(B.lines[i],l)}</td>`).join('')}</tr></tbody></table>`;
  const segs=`<table class="rtab" style="margin-top:14px"><thead><tr><th>分段（中位数）</th><th>谁负责</th><th>改前</th><th>改后</th><th>变化</th></tr></thead><tbody>${A.allSegs.map((s,i)=>`<tr><td>${s.name}</td><td class="note">${s.owner}</td><td class="num">${f(B.allSegs[i].med,3)}</td><td class="num">${f(s.med,3)}</td><td>${dchip(B.allSegs[i].med,s.med)}</td></tr>`).join('')}</tbody></table>`;
  return `<section class="panel"><h2>对照表</h2>${tier}${segs}<p class="note">变化小于 0.03 秒或 5% 算持平：同一台设备连测两次，本来就会有这么大的抖动。</p></section>`}
 function cmpB(){const {B,A}=cmpData();const T=niceT(Math.max(...B.lines.map(l=>l.med),...A.lines.map(l=>l.med)));
@@ -1251,13 +1255,13 @@ function cmpC(){const {B,A}=cmpData();const L=A.lines.length-1,lb=B.lines[L],la=
   g+=`<line x1="${sx(D.lines[L].med)}" x2="${sx(D.lines[L].med)}" y1="${y-14}" y2="${y+14}" stroke="var(--fg)" stroke-width="2"/>`});
  const card=([t,k])=>`<div class="tcard"><span class="note">${t}</span><b class="num">${f(la[k])} 秒</b><span>${dchip(lb[k],la[k])}</span></div>`;
  return `<section class="panel"><h2>结论</h2><p style="font-size:16px;line-height:1.7;margin:4px 0 12px">${cmpHead()}</p>
- <div class="tcards">${TIERS.map(card).join('')}</div><p class="note">上面三格是"${la.end}"那条线。</p>
+ <div class="tcards">${TIERS.map(card).join('')}${la.pass_rate==null?'':`<div class="tcard"><span class="note">达标率</span><b class="num">${passPct(la)}</b><span>${pchip(lb,la)}</span></div>`}</div><p class="note">上面几格是"${la.end}"那条线。</p>
  <h3 class="h3">20 轮"${la.end}"的用时，一个点一轮</h3><div class="scroll"><svg viewBox="0 0 ${W} 130" style="min-width:640px;width:100%" role="img" aria-label="改前改后每轮分布">${g}</svg></div>
  <p class="note">竖线是一般用时。点挤得越紧，说明越稳定。</p></section>`}
-const CMPVAR={a:{label:'A 对照表',idea:'A 对照表：三档用时和每一段，改前、改后、变化三列，箭头标快慢。最全，适合研发查是哪一段变了。'},
+const CMPVAR={a:{label:'A 对照表',idea:'A 对照表：用时、达标率和每一段，改前、改后、变化三列，箭头标快慢。最全，适合研发查是哪一段变了。'},
  b:{label:'B 叠图',idea:'B 叠图：报告里那张计时图，改前（浅）改后（深）叠在一起，段名旁带 ↓ ↑。一眼看出变化落在哪一段。'},
- c:{label:'C 结论先行',idea:'C 结论先行：先一句话说改完变快没有，再给三档大数字和箭头，最后是每轮分布（点挤得紧说明稳）。负责人只看上面就能拍板。'}};
-function comparePage(){return `<div class="stack">${flow==='retest'?`<section class="panel" style="border-color:var(--ok)"><b>改完再测完成。</b><span class="note">　下面是和上一次的对比；这次的完整报告也已生成。</span><div class="acts" style="margin:8px 0 0"><button class="btn" data-go="report">看这次的完整报告</button><button class="btn" data-go="home">回首页</button></div></section>`:''}${cmpPick()}${cmpC()}<details class="panel"><summary style="cursor:pointer"><b>对照表</b>　<span class="note">三档用时和每一段的改前、改后、变化</span></summary>${cmpA().replace(/^<section class="panel"><h2>对照表<\/h2>/,'').replace(/<\/section>$/,'')}</details></div>`}
+ c:{label:'C 结论先行',idea:'C 结论先行：先一句话说改完变快没有，再给几个大数字和箭头，最后是每轮分布（点挤得紧说明稳）。负责人只看上面就能拍板。'}};
+function comparePage(){return `<div class="stack">${flow==='retest'?`<section class="panel" style="border-color:var(--ok)"><b>改完再测完成。</b><span class="note">　下面是和上一次的对比；这次的完整报告也已生成。</span><div class="acts" style="margin:8px 0 0"><button class="btn" data-go="report">看这次的完整报告</button><button class="btn" data-go="home">回首页</button></div></section>`:''}${cmpPick()}${cmpC()}<details class="panel"><summary style="cursor:pointer"><b>对照表</b>　<span class="note">用时、达标率和每一段的改前、改后、变化</span></summary>${cmpA().replace(/^<section class="panel"><h2>对照表<\/h2>/,'').replace(/<\/section>$/,'')}</details></div>`}
 
 
 
@@ -1637,7 +1641,8 @@ if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   if(e.target.closest('[data-rtreal]')){retestFrom({path:(REAL.body&&REAL.body.path)||hSrc,what:hSay||(IDENT&&IDENT.page&&IDENT.page.mapWhat)||''});return}
   const hrt=e.target.closest('[data-hretest]');if(hrt){const h=HIST.find(x=>x.project_dir===hrt.dataset.hretest);if(h)retestFrom(h);return}
   const ho=e.target.closest('[data-hopen]');if(ho){api('/api/history/open',{path:ho.dataset.hopen}).then(j=>toast(j.ok?'✓ 已用浏览器打开这次的报告':'✕ '+(j.detail||'打不开')));return}
-  const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}
+  const jp=e.target.closest('[data-jump]');if(jp){const id=jp.dataset.jump;if(id.startsWith('fix-')&&repVar==='c'){const F=activeFixes(build(SCENES[scene]))[+id.slice(4)];if(F){segSel=F.seg;render()}}const el=document.getElementById(id);if(el){if(id.startsWith('fix-')){const dt=el.querySelector('details');if(dt)dt.open=true}  // 点「详情 → 问题 N」：卡片展开着给看（10-20 用户真测）
+   el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}return}
   const rpv=e.target.closest('[data-repvar]');if(rpv){repVar=rpv.dataset.repvar;render();return}
   if(e.target.closest('[data-fulllog]')){showFull=!showFull;render();return}
   const td=e.target.closest('[data-todo]');if(td){fixTodo=!fixTodo;render();return}
