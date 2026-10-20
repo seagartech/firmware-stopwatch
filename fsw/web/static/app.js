@@ -211,7 +211,7 @@ function lineCards(D){
     const vs=jl&&jl.vs,concl=jl?(jl.combo==='取决于回答长短，不判快慢'?'长短主要看这次回答说了多少字，不判快慢；快慢看前面那条「到第一声」。':jl.combo+'。'):ex?`体验${ex[0]}。`:`${noExp(D)}，只记录用时。`;
     const head=ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:`<span class="chip ${c}">${v}</span>`;
     return `<div class="panel card"><h3>${l.name} ${head}</h3><p class="num" style="color:var(--fg)">一般 ${f(l.med)} 秒</p>
-     ${ex&&es?`<p>体验标准${es.category?`（按「${htmlEsc(es.category)}」类设备）`:''}：超过 ${es.fair} 秒算差 → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>${es.source?`<p class="note" style="margin:2px 0 0">${srcHtml(es.source)}</p>`:''}`:jl&&!jl.exp?`<p class="note">体验标准：${expTarget(D)===l.name?htmlEsc(noExp(D)):'这条线不按体验标准判（体验标准只挂在第一下感觉到结果的那条线上）'}</p>`:''}
+     ${ex&&es?`<p>体验标准${es.category?`（按「${htmlEsc(es.category)}」类设备）`:''}：超过 ${es.fair} 秒算差${es.good!=null?`，${es.good} 秒以内算好`:'（这个标准只有及格线，没给"好"的档）'} → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>${es.source?`<p class="note" style="margin:2px 0 0">${srcHtml(es.source)}</p>`:''}`:jl&&!jl.exp?`<p class="note">体验标准：${expTarget(D)===l.name?htmlEsc(noExp(D)):'这条线不按体验标准判（体验标准只挂在第一下感觉到结果的那条线上）'}</p>`:''}
      ${jl&&jl.verdict!=='看回答长短'?`<p>和上次比：${vs?`${f(vs.prev)} → ${f(l.med)} 秒，<b class="${vs.change==='慢了'?'up':'down'}">${VTXT[vs.change]}</b>`:'第一次测，没有上次可比'}</p>`:''}
      <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
 }
@@ -232,7 +232,12 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
 // 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
 // 起点按计时点自己的名字叫（比如"设备听出你停了"），不叫"你说完"：它是设备自己察觉的时刻，比人真正做完晚（决策 135）
 function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
-function startLagLine(name,L){return `<p class="note" style="margin:4px 0 0">起点是「${htmlEsc(name)}」，是设备自己察觉的时刻。${L?`人实际停嘴还要再早约 ${(Math.round(L.secs*10)/10).toFixed(1)} 秒（${htmlEsc(L.when||'')} 用 ${htmlEsc(L.how||'录音')}核对过${L.rounds?`，${L.rounds} 轮`:''}），按人的感受，各条线的用时都要再加上这么多。`:'人实际做完的那一刻还要早一点，码表看不到，还没核对过。'}</p>`}
+// 最值得优化的一段（10-19 用户定，固定点名）：设备上能改的段里占用时最多的，只写占多少，不分等级（后台 judge 算的 best_fix）
+function bestFix(D){const b=D.J&&D.J.best_fix;if(!b)return '';const l=D.lines.find(x=>x.name===b.line);
+ return `<p style="margin:0 0 10px">最值得优化的一段：<b>「${htmlEsc(b.name)}」</b>，一般 ${fms(b.med)} 秒${b.share!=null?`，占「${htmlEsc(l?l.end:b.line)}」的 ${(+b.share).toFixed(1)}%`:''}<span class="note">（设备上能改的段里最大的；服务器、网络那几段不算）</span>${b.device_share!=null?`。设备上能改的段合计占 ${(+b.device_share).toFixed(1)}%，其余是服务器、网络、回答长短`:''}</p>`}
+// 起点比人真正做完晚多少：没核对过时，用标准库里这一类设备写的估计（写明是估计，不是标准）
+const startGap=J=>{const x=(J.lines||[]).find(l=>l.exp_std&&l.exp_std.start_gap);return x?{txt:x.exp_std.start_gap,cat:x.exp_std.category}:null};
+function startLagLine(name,L,gap){return `<p class="note" style="margin:4px 0 0">起点是「${htmlEsc(name)}」，是设备自己察觉的时刻。${!L&&gap?`人实际做完的那一刻还要早，${htmlEsc(gap.cat?`按「${gap.cat}」类设备`:'')}${htmlEsc(gap.txt)}，还没核对过；实际等的时间会比报告里长一点。`:L?`人实际停嘴还要再早约 ${(Math.round(L.secs*10)/10).toFixed(1)} 秒（${htmlEsc(L.when||'')} 用 ${htmlEsc(L.how||'录音')}核对过${L.rounds?`，${L.rounds} 轮`:''}），按人的感受，各条线的用时都要再加上这么多。`:'人实际做完的那一刻还要早一点，码表看不到，还没核对过。'}</p>`}
 // 「记最后一次」的中间点越过了下一步：前后两段合成了一段（见 judge.merge_overruns），写明合了哪两段、为什么
 const mergedLine=M=>(M||[]).map(m=>`<p class="note" style="margin:4px 0 0">「${htmlEsc(m.names[0])}」和「${htmlEsc(m.names[1])}」合成一段算：${htmlEsc(m.why)}。</p>`).join('');
 function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:'',Q.nostart?`${Q.nostart} 次没记到起点「${Q.startName||'起点'}」`:''].filter(Boolean);
@@ -244,7 +249,7 @@ function subline(D){
   const bits=[];
   if(D.lines.length>1)bits.push(`${D.lines[0].end}平均比${D.lines[1].end}早 ${f(D.lines[1].med-D.lines[0].med)} 秒`);
   const je=D.J&&D.J.lines?D.J.lines.filter(x=>x.exp):[];  // 体验标准挂在哪条线上就说哪条（比如只挂在"到喇叭出第一声"）
-  if(je.length)bits.push(je.map(x=>`${(D.lines.find(l=>l.name===x.name)||{end:x.name}).end}按体验标准算<span class="chip ${x.exp==='差'?'c-bad':'c-ok'}">${x.exp}</span>`).join('，'));
+  if(je.length)bits.push(je.map(x=>`${(D.lines.find(l=>l.name===x.name)||{end:x.name}).end}按${x.exp_std&&x.exp_std.category?`「${htmlEsc(x.exp_std.category)}」类设备的`:''}体验标准算<span class="chip ${x.exp==='差'?'c-bad':'c-ok'}">${x.exp}</span>`).join('，'));
   else if(D.exp)bits.push(`按体验标准算<span class="chip ${D.exp[1]}">${D.exp[0]}</span>`);else bits.push(noExp(D));
   if(D.reversed.length)bits.push(`${roundList(D.reversed)}${D.lines[0].end}反而晚了`);
   for(const x of D.probs||[])bits.push(`${roundList(x.rounds.map(n=>({n})))}${x.name}`);
@@ -696,8 +701,8 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag)+mergedLine(JREP.merged):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
-  <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
+  return `<div class="stack">${expDone()}${staleBar()}<div><h1>${headline(D)}</h1><p class="sub">${subline(D)}</p>${D.S.real&&JREP?qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged):''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
+  <section class="panel"><h2>要你拍板</h2>${bestFix(D)}${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
