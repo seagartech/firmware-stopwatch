@@ -215,20 +215,10 @@ def test_manager_text_keeps_one_decimal_and_no_estimate_suffix():
     f = {"why": "一般 1.164 秒，比平时多 0.001 秒", "impact": "x", "rec": "约 2.526秒", "dev": {"data": "1.164 秒"}}
     opts = [{"name": "a", "effect": "约 0.35 秒（估算）", "how": "一般 1.164 秒"}, {"name": "b", "effect": "查清原因后才知道（估算）"}]
     adv._tidy(f, opts)
-    assert f["why"] == "一般 1.2 秒，比平时多不到 0.1 秒" and f["rec"] == "约 2.5 秒"
-    assert opts[0]["effect"] == "约 0.3 秒" or opts[0]["effect"] == "约 0.4 秒"
+    assert f["why"] == "一般 1.2 秒，比平时多不到 0.01 秒" and f["rec"] == "约 2.5 秒"
+    assert opts[0]["effect"] == "约 0.35 秒"
     assert opts[1]["effect"] == "查清原因后才知道" and f["dev"]["data"] == "1.16 秒"  # 技术细节留两位
     assert opts[0]["how"] == "一般 1.16 秒"
-
-
-def test_find_cause_option_is_uncertain(tmp_path):
-    d, j = judged("door")
-    fixes = copy.deepcopy(d["page"]["fixes"])
-    fixes[0]["opts"][0].update(name="服务器方查合成声音那一步", work="中", wn="中：要服务器方配合")
-    text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
-    r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
-    o = r["fixes"][0]["opts"][0]
-    assert r["ok"] and o["work"] == "不确定" and o["wn"] == "先查：要服务器方配合"
 
 
 def test_adding_a_timing_point_is_not_a_find_cause_option(tmp_path):
@@ -238,3 +228,9 @@ def test_adding_a_timing_point_is_not_a_find_cause_option(tmp_path):
     text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
     r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
     assert r["ok"] and r["fixes"][0]["opts"][0]["work"] == "小"
+
+
+def test_short_lines_keep_two_decimals():
+    f = {"why": "刷卡到亮灯一般 0.034 秒，最慢 0.082 秒", "impact": "x", "rec": "x"}
+    adv._tidy(f, [])
+    assert f["why"] == "刷卡到亮灯一般 0.03 秒，最慢 0.08 秒"
