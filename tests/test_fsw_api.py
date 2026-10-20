@@ -571,3 +571,36 @@ def test_insert_without_measurement_behaves_as_before(setup):
     assert c.get("/api/collect").json()["status"] == "idle"
     start_insert(c, r)
     assert wait(c, lambda j: j["status"] in ("inserted", "failed"))["status"] == "inserted"
+
+
+class InterruptedInTry(FakeDevice):
+    """试一次时唤醒后说的第一句被打断：这一轮（带起点、收全）在试一次里就结束了（结束标记也读到了）。"""
+    def read(self, port, seconds, on_line, stop=None):
+        out = ["FSW,RESET,1,0", "FSW,P1,10,1", "FSW,P2,20,0", "FSW,P5,30,0", "FSW,RESET,40,0"]
+        for l in out:
+            on_line(l)
+        return out
+
+    def stream(self, port, on_line, stop):
+        for l in ["FSW,P1,310,1", "FSW,P2,350,0", "FSW,P5,360,0", "FSW,RESET,500,0",
+                  "FSW,P1,510,1", "FSW,P2,550,0", "FSW,P5,560,0", "FSW,RESET,700,0",
+                  "FSW,P1,710,1", "FSW,P2,750,0", "FSW,P5,760,0", "FSW,RESET,900,0"]:
+            if stop():
+                return
+            on_line(l)
+        while not stop():
+            time.sleep(0.01)
+
+
+def test_question_finished_inside_try_counts_as_round_1(setup):
+    # 10-20 用户：唤醒后第一句一打断，这一轮在试一次里就收完了，不算、得多说一句。现在交给多轮实测算第 1 轮
+    j = _collect_after_try(setup, InterruptedInTry(), 3)
+    assert j["status"] == "done" and [x["ok"] for x in j["rounds"]] == [True, True, True]
+    assert round(j["rounds"][0]["segs"]["P1-P2"] * 1e6) == 10                     # 第 1 轮就是试一次里那句（10 → 20）
+
+
+def test_round_finished_inside_try_too_long_ago_is_not_carried(setup, monkeypatch):
+    import fsw.web.app as web
+    monkeypatch.setattr(web, "CARRY_SECS", -1)                                     # 试通前太久收完的那一轮：不带
+    j = _collect_after_try(setup, InterruptedInTry(), 3)
+    assert j["status"] == "done" and round(j["rounds"][0]["segs"]["P1-P2"] * 1e6) == 40   # 第 1 轮是开测后的第一句
