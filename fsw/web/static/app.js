@@ -229,9 +229,9 @@ function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D
   return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
   <details class="lvwhy"><summary>标签规则</summary><p class="note" style="margin:8px 0">数字和标签由码表按规则算，"为什么、怎么改"由 AI 读代码写。</p><ul class="decide rules">
   <li><span class="tagcol">${lvTag(4)}</span><span>功能出错，不看快慢。</span></li>
-  <li><span class="tagcol">${lvTag(0)}</span><span>中位数超过体验标准，或 <span class="tip" tabindex="0">10 次里最慢<i class="tipbox">10 轮从快到慢排的第 9 个（20 轮里是第 18 个），意思是每 10 次有 1 次会这么慢或更慢；不足 10 轮不判。</i></span>超过标准 1.5 倍。</span></li>
-  <li><span class="tagcol">${lvTag(1)}</span><span><span class="tip" tabindex="0">10 次里最慢<i class="tipbox">10 轮从快到慢排的第 9 个（20 轮里是第 18 个），意思是每 10 次有 1 次会这么慢或更慢；不足 10 轮不判。</i></span>超过标准，或比上次慢 0.1 秒且 10% 以上。</span></li>
-  <li><span class="tagcol">${lvTag(2)}</span><span>没有体验标准，也没有上次可比。</span></li></ul></details>`}
+  <li><span class="tagcol">${lvTag(0)}</span><span>中位数超过体验标准，或 10 次里最慢超过标准 1.5 倍。</span></li>
+  <li><span class="tagcol">${lvTag(1)}</span><span>10 次里最慢超过标准，或比上次慢 0.1 秒且 10% 以上。</span></li>
+  <li><span class="tagcol">${lvTag(2)}</span><span>没有体验标准，也没有上次可比。</span></li></ul><p class="note" style="margin:4px 0 0">"10 次里最慢"：每 10 次里大约会碰到 1 次这么慢；测不满 10 次不看这一项。</p></details>`}
 // 数据检查（决策 122）：这份报告用了几轮、丢了几轮、为什么丢，让人自己判断准不准
 // 起点按计时点自己的名字叫（比如"设备听出你停了"），不叫"你说完"：它是设备自己察觉的时刻，比人真正做完晚（决策 135）
 function startLabel(P,sc){const p=sc&&sc.start&&sc.start.point,s=(P.steps||[]).find(x=>x.p===p);return s?s.n:(P.measure||'起点').split('→')[0].trim()}
