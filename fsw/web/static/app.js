@@ -180,7 +180,6 @@ function stages(parts){const out=[];let pend=[];
   parts.forEach(p=>{if(p.share<0.05){pend.push(p);return}out.push({parts:[p,...pend],d:p.d,share:p.share});pend.forEach(q=>{out[out.length-1].d+=q.d;out[out.length-1].share+=q.share});pend=[]});
   if(pend.length){if(!out.length)out.push({parts:[],d:0,share:0});const o=out[out.length-1];pend.forEach(q=>{o.parts.push(q);o.d+=q.d;o.share+=q.share})}
   return out}
- return `<b>${htmlEsc(s.name)}</b>${sh?'（多条线共用）':''}<br>${D.n} 轮中位数 ${fms(real)} 秒，占「${htmlEsc(l.name)}」${Math.round(share*100)}%${v.length?`<br>最快～最慢 ${fms(Math.min(...v))}～${fms(Math.max(...v))} 秒`:''}`}  // 不到 0.1 秒写三位小数，免得写成 0.00
 // "偶发特别慢"点名的那几轮（和拍板区说的"逐轮图里红底的几轮"对上，真测第 36 次）：轮号 → 哪一段
 function spikyRounds(D){const m=new Map(),J=D.J;
  if(J)J.labels.filter(x=>x.kind==='spiky'&&!x.with).forEach(x=>{const s=D.allSegs.find(y=>y.k===x.segment);(x.rounds||[]).forEach(n=>m.set(n,s?s.name:x.segment))});
