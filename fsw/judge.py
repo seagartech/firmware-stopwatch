@@ -49,7 +49,7 @@ FLAT_S, FLAT_PCT = 0.1, 0.1  # 和上次比：差值要同时大于 0.1 秒、�
 
 def vs_prev(now, prev, noise=None):
     """和上次比：{"prev": 上次中位数, "d": 这次 − 上次, "change": 慢了 / 快了 / 持平}；没有上次返回 None。"""
-    if prev is None or now is None:
+    if prev is None or now is None or prev < 0 or now < 0:  # 负数是计时点先后打乱了（10-20 真测：上次 -0.002 秒），这个数不成立，不比
         return None
     d = now - prev
     flat = abs(d) <= max(FLAT_S, abs(prev) * FLAT_PCT)  # noise 不再用，保留参数只为调用方不用改
@@ -175,6 +175,9 @@ def judge(scenario, rounds, prev=None):
         es = experience_of(scenario, l["name"])
         if es and es.get("line") == l["name"] and es.get("fair") is not None and not by_answer:
             st = {**st, **pass_stats(ends, es["fair"])}
+            fair = es["fair"]  # 超标的是第几轮：写建议时交给 AI，免得它写"码表没告诉我是第几轮"（10-20）
+            st["over_rounds"] = [r["n"] for r in rounds if r["ends"][i] is not None and r["ends"][i] > fair]
+            st["big_rounds"] = [r["n"] for r in rounds if r["ends"][i] is not None and r["ends"][i] > fair * TAIL_BIG]
         e = experience(l["name"], st, es)
         vs = None if by_answer or not pv else vs_prev(st["med"], (pv.get("lines") or {}).get(l["name"]), (pv.get("noise_lines") or {}).get(l["name"]))
         out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "count": len(ends),
