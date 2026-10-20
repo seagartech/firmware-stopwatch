@@ -432,12 +432,12 @@ class Collector:
             return shown[x]
         return [x for x in self.spec.need if ok(x)]
 
-    def close_carried(self):
+    def close_carried(self, ended=False):
         """试一次带过来的那一轮已经收全：马上交出（格子马上变绿），不等下一句开始才知道它结束了
         （10-19 用户："说完今天星期几格子不变色，说完恐龙一下子绿两个"）。这一轮的结束标记在换调试口时过去了，读不到，
         所以当它已经结束：后面的点算下一轮；它回答还没放完、晚到的"最后一声"照样算回它（只更新数，见 _prev_update），
         直到下一个结束标记。"""
-        if not (self.ready and not self.done and self.spec.last):
+        if not (self.ready and not self.done and (self.spec.last or ended)):  # ended：这一轮在试一次里已经结束（读到过结束标记）
             return []
         r = self._close()
         self.prev = {"cur": self.cur, "occ": self.occ, "reset_us": self.reset_us, "miss": set(), "until": float("inf"),

@@ -885,6 +885,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             def feed(line):
                 p = meas.parse_line(line)
                 if line.strip().startswith("FSW,RESET"):
+                    if rounds["cur"] & start_ids and full(rounds["cur"]):  # 带起点、收全了的一轮在试一次里就结束了（比如被打断）：记着，试通时交给多轮实测
+                        rounds["last_full"] = {"lines": list(rounds.get("tail") or []), "at": time.time()}
                     rounds["prev"] = (rounds["cur"], p[1] if p else None)
                     rounds["cur"] = set()
                     rounds["tail"] = []
@@ -968,7 +970,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "try", f"{TRY_SECONDS // 60} 分钟里没收到计时点。点「再试一次」，然后做一次要测的事。", why=why,
                              error=f"（{TRY_SECONDS} 秒内没有计时点输出）", offer_restore=job["try_fails"] >= 2)
             job.update(status="done", log=f"试通了：收到 {len(got)} / {len(want)} 个计时点")
-            fsw["carry"] = {"lines": list(rounds.get("tail") or []), "at": time.time()}  # 试通那一刻正在进行的这一轮
+            # 交给多轮实测、算第 1 轮的：试通那一刻正在进行的这一轮；它没有起点（比如只喊了唤醒词，或者上一轮刚结束）时，
+            # 用试一次里最近一个已经收完、带起点的那一轮（10-20 用户：唤醒后第一句被打断就在试一次里收完了、不算，得多说一句）
+            tail, lf, ended = list(rounds.get("tail") or []), rounds.get("last_full"), False
+            if not ins.count_marks(tail) & start_ids and lf and time.time() - lf["at"] <= CARRY_SECS:
+                tail, ended = lf["lines"], True
+            fsw["carry"] = {"lines": tail, "at": time.time(), "ended": ended}
             T().end("try")
             return True
 
@@ -1267,7 +1274,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 for l in carry["lines"]:
                     on_line(l)
                 with job["_lock"]:
-                    take(coll.close_carried())  # 带过来的这一轮已经收全：马上交出，格子马上变绿
+                    take(coll.close_carried(ended=bool(carry.get("ended"))))  # 带过来的这一轮已经收全：马上交出，格子马上变绿
             else:  # 这一轮没有起点（只喊了唤醒词，其余收齐就试通了）：不是要测的那件事，到下一个结束标记前的都不算，也不报"开头没收到"
                 coll.skip_round()
 
