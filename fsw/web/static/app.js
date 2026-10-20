@@ -665,12 +665,15 @@ async function exportReport(folder){
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
   EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path}
 function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
-  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${F.title}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${o.fis.map(i=>FX[i].title).join('；')}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+// 勾了的方案；同一个人做同一件事出现在几张卡片里（10-20 真测：「思考中」表情两张卡片都有），待办只算一件，标上解决哪几个问题
+function pickedOpts(FX){const out=[],seen={};FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(!fixPick.has(fi+'-'+oi))return;const k=o.who+'|'+o.name;if(seen[k]){seen[k].fis.push(fi);return}out.push(seen[k]={...o,fi,fis:[fi]})}));return out}
+const pNos=o=>'问题 '+o.fis.map(i=>i+1).join('、');
 function myPick(D,FX){initPick(FX);
-  const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
+  const chosen=pickedOpts(FX);
   const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
-  const none=FX.map((F,fi)=>chosen.some(o=>o.fi===fi)?'':`问题 ${fi+1}`).filter(Boolean);
-  const body=chosen.length?`<details class="lvwhy"><summary>勾了哪几个、每个预计的效果</summary><ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul></details>
+  const none=FX.map((F,fi)=>chosen.some(o=>o.fis.includes(fi))?'':`问题 ${fi+1}`).filter(Boolean);
+  const body=chosen.length?`<details class="lvwhy"><summary>勾了哪几个、每个预计的效果</summary><ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>${pNos(o)}：${o.name}。预计${o.effect}。</li>`).join('')}</ul></details>
    <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
    ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
    ${none.length?`<p style="margin:6px 0;color:var(--bad)">${none.join('、')}一个方案都没选，等于先不处理。</p>`:''}
@@ -689,15 +692,15 @@ function fixA(D){const FX=activeFixes(D);initPick(FX);
 }
 function fixB(D){const FX=activeFixes(D);
   if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}
-  const chosen=[];FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(fixPick.has(fi+'-'+oi))chosen.push({...o,fi})}));
+  const chosen=pickedOpts(FX);
   const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
   const rows=FX.map((F,fi)=>`<h3 id="fix-${fi}" style="margin:14px 0 4px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3><p class="note" style="margin:0 0 6px">${F.why}</p>${optTable(F,fi,true)}`).join('');
-  const sum=chosen.length?`<ul style="margin:6px 0">${chosen.map(o=>`<li>问题 ${o.fi+1}：${o.name}。预计${o.effect}。</li>`).join('')}</ul>
+  const sum=chosen.length?`<ul style="margin:6px 0">${chosen.map(o=>`<li>${pNos(o)}：${o.name}。预计${o.effect}。</li>`).join('')}</ul>
    <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
    ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
-   ${FX.some((F,fi)=>!chosen.some(o=>o.fi===fi))?`<p style="margin:6px 0;color:var(--bad)">还有问题一个方案都没选：${FX.map((F,fi)=>chosen.some(o=>o.fi===fi)?'':`问题 ${fi+1}`).filter(Boolean).join('、')}。不选也可以，等于先不处理。</p>`:''}
+   ${FX.some((F,fi)=>!chosen.some(o=>o.fis.includes(fi)))?`<p style="margin:6px 0;color:var(--bad)">还有问题一个方案都没选：${FX.map((F,fi)=>chosen.some(o=>o.fis.includes(fi))?'':`问题 ${fi+1}`).filter(Boolean).join('、')}。不选也可以，等于先不处理。</p>`:''}
    <div class="acts" style="margin-top:8px"><button class="btn pri" data-todo="1">${fixTodo?'收起待办':'生成待办，发给相关的人'}</button></div>
-   ${fixTodo?`<pre style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13.5px;margin:10px 0 0">${Object.entries(who).map(([w,a])=>`【${w}】\n${chosen.filter(o=>o.who===w).map(o=>`· ${o.name}（问题 ${o.fi+1}：${FX[o.fi].title}）\n  做完的标准：${FX[o.fi].dev.verify}`).join('\n')}`).join('\n\n')}\n\n做完后用码表按同样的条件再测一次，看前后对比。</pre><p class="note">样子里只演示文字；真产品可以复制，或存成文件。</p>`:''}`
+   ${fixTodo?`<pre style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13.5px;margin:10px 0 0">${Object.entries(who).map(([w,a])=>`【${w}】\n${chosen.filter(o=>o.who===w).map(o=>`· ${o.name}（${pNos(o)}：${FX[o.fi].title}）\n  做完的标准：${FX[o.fi].dev.verify}`).join('\n')}`).join('\n\n')}\n\n做完后用码表按同样的条件再测一次，看前后对比。</pre><p class="note">样子里只演示文字；真产品可以复制，或存成文件。</p>`:''}`
    :'<p class="note">还没勾任何方案。</p>';
   return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div><p class="note" style="margin:0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}`;
 }
