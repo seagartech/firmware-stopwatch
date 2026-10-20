@@ -1,6 +1,6 @@
 """一次的计时图：按中位数画（总长 = 这条线的中位数，各段按各自中位数的比例分）；色块、终点圆点鼠标移上去即时显示数字
 （2026-10-19 用户问"色块鼠标移入没有说明"、"标题 1.4 秒、图上 1.51 秒对不上"）。
-归成阶段（2026-10-20 用户定）：占这条线不到 5% 的段并进后面那个大段，排在最后的并进前一个大段；图下每块一行，最长的那块标出来。
+归成阶段（2026-10-20 用户定）：占这条线不到 5% 的段并进后面那个大段，排在最后的并进前一个大段；图下每块一行，不标哪块最长。
 
 用 node 跑 app.js 里的 timeline()，两组数据：门禁样子的和语音样子的，提示里只能有段名、线名和数字。
 """
@@ -78,7 +78,7 @@ def test_tiny_segments_fold_into_the_next_big_stage_and_list_shows_each_stage():
     assert "①" in items[0] and "读卡号" in items[0] and "13%" in items[0] and "含" not in items[0]
     assert "②" in items[1] and "亮灯&lt;响一声&gt;" in items[1] and "含 2 个极短段" in items[1] and "87%" in items[1]
     assert "校验" not in out.split("<ol")[1] and "查名单" not in out.split("<ol")[1]   # 并进去的段名不在这里列
-    assert '<li class="top">' in out and out.count('class="top"') == 1     # 最长的那块标出来
+    assert 'class="top"' not in out                                        # 不标哪块最长（10-20 用户定）
     assert "鼠标移上去" not in out and "…" not in out                       # 不靠悬停、段名不截断
 
 
