@@ -3,18 +3,21 @@
 两把尺子（10-19 用户定：去掉合理范围清单）：
 - 体验标准（用户等不等得了）：按设备类别从标准库挑，挂在"第一下感觉到结果"的那条线上，判整条线；
 - 和上次比（第二次起）：每段、每条线和上次比快了、慢了还是持平（两次都满 10 轮才比）。
-结论标签：
-- 必须改：体验标准判"差"（中位数超过），或 10 次里最慢超过体验标准；对错问题出现就算；偶发特别慢且 10 次里最慢超过体验标准
-- 建议改：比上次慢了（超出正常波动）；偶发特别慢、先后反了，但没到上一条
-- 未判：既没有体验标准、也没有上次可比，这次只记用时，明说，不算"可以不改"
-- 可以不改：体验标准内，且没比上次慢
+结论标签（10-20 用户定，决策 167）：
+- 必须改：中位数超过体验标准（判"差"）；或"10 次里最慢"（第 90% 那一轮）超过标准的 1.5 倍
+- 建议改："10 次里最慢"在标准和 1.5 倍之间；或比上次慢了（中位数高出 10% 与 0.1 秒中较大的那个以上）
+- 出错：对错问题（比如回答开头被吞），单独一块，只写出错的轮次，不分必须 / 建议
+- 未判：既没有体验标准、也没有上次可比，这次只记用时，明说
+- 达标：体验标准内，且没比上次慢；放回答的线不判快慢，也收在这里（页面上只写"另有 N 条达标 / 不判快慢"）
+"偶发特别慢"不再单独出标签：判断用户等多久只看"10 次里最慢"这一个数
 """
 
 import math
 
 from fsw.scenario import experience_of
 
-LEVELS = ["必须改", "建议改", "未判", "可以不改"]
+LEVELS = ["出错", "必须改", "建议改", "未判", "达标"]   # 越重要越靠前：出错（功能坏了）＞ 必须改 ＞ 建议改
+TAIL_BIG = 1.5   # "10 次里最慢"超过标准的几倍算必须改
 FEW = 20          # 少于 20 轮：结论只供参考
 SPIKE_RATIO, SPIKE_GAP = 2.5, 0.3   # 偶发特别慢：最慢一次超过一般的 2.5 倍，且多出 0.3 秒以上
 OFTEN = 0.1       # 每 10 次 1 次以上算"经常"
@@ -39,7 +42,7 @@ def stats(vals):
 ANSWER = "看回答长短"  # 放回答的几段、到全部放完那条：长短跟这次回答说了多少字有关，不判快慢
 ANSWER_TXT = "取决于回答长短，不判快慢"
 RECORDED = "已记录"  # 第一次测（没有上次可比）：段只记用时
-FLAT_S, FLAT_PCT = 0.03, 0.05  # 和上次比：变化不到 0.03 秒或 5%，或在两次各自的正常波动内，算持平（决策 156）
+FLAT_S, FLAT_PCT = 0.1, 0.1  # 和上次比：差值要同时大于 0.1 秒、大于上次的 10%，才算慢了 / 快了，否则持平（决策 167）
 
 
 def vs_prev(now, prev, noise=None):
@@ -47,7 +50,7 @@ def vs_prev(now, prev, noise=None):
     if prev is None or now is None:
         return None
     d = now - prev
-    flat = abs(d) <= max(noise or 0, FLAT_S, abs(prev) * FLAT_PCT)
+    flat = abs(d) <= max(FLAT_S, abs(prev) * FLAT_PCT)  # noise 不再用，保留参数只为调用方不用改
     return {"prev": round(prev, 6), "d": round(d, 6), "change": "持平" if flat else "慢了" if d > 0 else "快了"}
 
 
@@ -203,52 +206,41 @@ def judge(scenario, rounds, prev=None):
 
     labels = []
     line_by = {l["name"]: l for l in out["lines"]}
-    def tail(l):  # 这条线 10 次里最慢超过体验标准：每 10 次就有 1 次让人等太久（这条线收到的数少于 10 个时不拿它判）
+    def p90_over(l, k):  # 这条线"10 次里最慢"超过体验标准的 k 倍（收到的数少于 10 个时不判）
         fair = (l.get("exp_std") or {}).get("fair")
-        return fair is not None and l["verdict"] != ANSWER and l["count"] >= 10 and l["p90"] > fair
+        return fair is not None and l["verdict"] != ANSWER and l["count"] >= 10 and l["p90"] > fair * k
 
-    for l in out["lines"]:  # 每条线都列：没问题的收在"另有 N 条不用改"里，条数才对得上
+    sevs = {}
+    for l in out["lines"]:  # 每条线都列：没问题的收在"另有 N 条达标"里，条数才对得上
         vs = l["vs"]
+        fair = (l.get("exp_std") or {}).get("fair")
+        sev = 0   # 同一级里谁更重：超标越多越靠前
         if l["verdict"] == ANSWER:
-            lv, why = "可以不改", ANSWER_TXT
+            lv, why = "达标", ANSWER_TXT
         elif l["exp"] == "差":
-            lv, why = "必须改", "体验标准判差"
-        elif tail(l):
-            lv, why = "必须改", "10 次里最慢超过体验标准"
+            lv, why, sev = "必须改", f"一般 {l['med']:.2f} 秒，超过标准 {fair} 秒", l["med"] / fair if fair else 1
+        elif p90_over(l, TAIL_BIG):
+            lv, why, sev = "必须改", f"10 次里最慢 {l['p90']:.2f} 秒，超过标准 {fair} 秒的 {TAIL_BIG} 倍", l["p90"] / fair
+        elif p90_over(l, 1):
+            lv, why, sev = "建议改", f"10 次里最慢 {l['p90']:.2f} 秒，超过标准 {fair} 秒", 10 + l["p90"] / fair   # 超标的排在"比上次慢"前面
         elif vs and vs["change"] == "慢了":
-            lv, why = "建议改", f"比上次慢了 {vs['d']:.2f} 秒"
+            lv, why, sev = "建议改", f"比上次慢了 {vs['d']:.2f} 秒", vs["d"]
         elif l["exp"] is None and not vs:
             lv, why = "未判", "没有体验标准，也没有上次可比，这次只记用时"
         else:
-            lv = "可以不改"
+            lv = "达标"
             why = "；".join(x for x in (exp_txt(l["exp"], l["exp_std"] or {}, l["med"]) if l["exp"] else None,
                                          None if not vs else "和上次比持平" if vs["change"] == "持平" else f"比上次快了 {-vs['d']:.2f} 秒") if x)
         labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
-    for p in scenario.get("problems") or []:
+        sevs[f"line:{l['name']}"] = sev
+    for p in scenario.get("problems") or []:  # 对错问题：功能出错，不是快慢，单独一块，只写出错的轮次
         rs = [r["n"] for r in rounds if p["key"] in (r.get("probs") or [])]
         if not rs:
             continue
-        often = len(rs) / max(1, n) > OFTEN
-        lv = "必须改" if p.get("level") == "bad" or often else "建议改"
         labels.append({"k": f"problem:{p['key']}", "kind": "problem", "name": p.get("name", p["key"]), "rounds": rs,
                        "order": (p.get("rule") or {}).get("type") == "line_order",
-                       "level": lv, "why": "对错问题，出现就要改" if p.get("level") == "bad" else
-                       "超过每 10 次 1 次" if often else "偶尔出现"})
-    for g in out["segments"]:
-        if not g["spiky"]:
-            continue
-        hit = [l for l in out["lines"] if g["k"] in l["segments"] and tail(l)]
-        labels.append({"k": f"spiky:{g['k']}", "kind": "spiky", "segment": g["k"], "rounds": g["spiky_rounds"],
-                       "level": "必须改" if hit else "建议改",
-                       "why": "偶发特别慢，而且每 10 次就有 1 次让人等太久" if hit else "偶发特别慢"})
-    # 同一个根因：某段"偶发特别慢"只发生在某个对错问题出现的那几轮里（比如回答开头被吞那一轮，解码送喇叭也特别慢），
-    # 算同一个问题：挂到那个问题上，不单独列
-    for x in labels:
-        if x["kind"] != "spiky":
-            continue
-        host = next((p for p in labels if p["kind"] == "problem" and not p["order"] and set(x["rounds"]) <= set(p["rounds"])), None)
-        if host:
-            x["with"] = host["k"]
+                       "level": "出错", "why": f"{n} 轮里出现 {len(rs)} 轮"})
+        sevs[f"problem:{p['key']}"] = len(rs)   # 出错轮次越多越靠前
     order = {k: i for i, k in enumerate(LEVELS)}
-    out["labels"] = sorted(labels, key=lambda x: order[x["level"]])  # 同一级里：线、问题、偶发特别慢（和原型的顺序一样）
+    out["labels"] = sorted(labels, key=lambda x: (order[x["level"]], -sevs.get(x["k"], 0)))  # 先按重要性分级，同一级里越重越靠前
     return out

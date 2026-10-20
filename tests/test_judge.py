@@ -43,7 +43,7 @@ def test_dialogue_mock_log_matches_sample_report():
     assert j["biggest"] == "think"
     items = {x["k"]: x for x in j["labels"]}
     assert items["line:说完到开口"]["level"] == "必须改"
-    assert items["problem:sw"]["level"] == "必须改" and items["problem:sw"]["rounds"] == [4, 11, 17]
+    assert items["problem:sw"]["level"] == "出错" and items["problem:sw"]["rounds"] == [4, 11, 17]
     assert not j["few"]
 
 
@@ -60,8 +60,8 @@ def test_emotion_line_mock_log_matches_validation_09():
     assert speak["combo"].startswith("体验差")
     assert face["med"] == pytest.approx(1.17, abs=0.01) and face["verdict"] == "已记录" and face["exp"] is None
     items = {x["k"]: x for x in j["labels"]}
-    assert items["problem:rev"]["rounds"] == [6, 15] and items["problem:rev"]["level"] == "建议改"
-    assert items["spiky:dec"]["level"] == "建议改"         # 决策模型偶尔特别慢
+    assert items["problem:rev"]["rounds"] == [6, 15] and items["problem:rev"]["level"] == "出错"
+    assert "spiky:dec" not in items                          # 偶发特别慢不再单独出标签（10-20 用户定）
     assert items["line:说话线"]["level"] == "必须改"        # 体验差
     assert j["lead"]["med"] == pytest.approx(1.0, abs=0.01)  # 表情平均比说话早 1 秒
     assert [x["level"] for x in j["labels"]] == sorted((x["level"] for x in j["labels"]), key=J.LEVELS.index)
@@ -93,11 +93,12 @@ def label(j):
 
 
 @pytest.mark.parametrize("a,b,fair,pv,level,why", [
-    (0.6, 1.0, 1.5, None, "必须改", "体验标准判差"),                                       # 中位数 1.6 超过 1.5
-    ([0.6] * 20, [0.6] * 17 + [1.6] * 3, 1.5, None, "必须改", "10 次里最慢超过体验标准"),  # 中位数 1.2，10 次里最慢 2.2
-    (0.6, 1.0, 9.0, prev(1.4), "建议改", "比上次慢了 0.20 秒"),                            # 体验可以，比上次慢 0.2（超出 0.03 和 5%）
-    (0.6, 1.0, 9.0, prev(1.59), "可以不改", '达到及格线（体验标准，≤9.0 秒），这个标准没给"好"的档；和上次比持平'),  # 慢 0.01：持平
-    (0.6, 1.0, None, prev(1.8), "可以不改", "比上次快了 0.20 秒"),
+    (0.6, 1.0, 1.5, None, "必须改", "一般 1.60 秒，超过标准 1.5 秒"),                                       # 中位数 1.6 超过 1.5
+    ([0.3] * 20, [0.6] * 17 + [3.0] * 3, 1.5, None, "必须改", "10 次里最慢 3.30 秒，超过标准 1.5 秒的 1.5 倍"),  # 中位数 0.9，10 次里最慢 3.3 > 2.25
+    ([0.6] * 20, [0.6] * 17 + [1.6] * 3, 1.5, None, "建议改", "10 次里最慢 2.20 秒，超过标准 1.5 秒"),  # 中位数 1.2，10 次里最慢 2.2，在 1.5～2.25 之间
+    (0.6, 1.0, 9.0, prev(1.4), "建议改", "比上次慢了 0.20 秒"),                            # 体验可以，比上次慢 0.2（大于 0.1 秒，也大于上次的 10%）
+    (0.6, 1.0, 9.0, prev(1.59), "达标", '达到及格线（体验标准，≤9.0 秒），这个标准没给"好"的档；和上次比持平'),  # 慢 0.01：持平
+    (0.6, 1.0, None, prev(1.8), "达标", "比上次快了 0.20 秒"),
     (0.6, 1.0, None, None, "未判", "没有体验标准，也没有上次可比，这次只记用时"),           # 第一次测，也没有体验标准
 ])
 def test_line_labels(a, b, fair, pv, level, why):
@@ -105,9 +106,14 @@ def test_line_labels(a, b, fair, pv, level, why):
     assert (label(j)["level"], label(j)["why"]) == (level, why)
 
 
-def test_slower_but_inside_normal_noise_is_flat():
-    j = J.judge(sc(), rounds(0.6, 1.0), prev(1.4, noise=0.3))   # 慢 0.2，但两次各自的正常波动有 0.3
-    assert j["lines"][0]["vs"]["change"] == "持平" and label(j)["level"] == "可以不改"
+def test_compare_with_last_needs_both_over_0_1s_and_10_percent():
+    flat = lambda now, last: J.judge(sc(), rounds(now - 1.0, 1.0), prev(last))["lines"][0]["vs"]["change"]
+    assert flat(1.6, 1.4) == "慢了"      # 差 0.2：大于 0.1 秒，也大于 1.4 的 10%
+    assert flat(1.08, 1.0) == "持平"     # 差 0.08：不到 0.1 秒
+    assert flat(5.3, 5.0) == "持平"      # 差 0.3：大于 0.1 秒，但不到 5.0 的 10%
+    assert flat(0.8, 1.0) == "快了"
+    # 以前的"两次各自的正常波动"不再用：波动再大，差够了就算慢了
+    assert J.judge(sc(), rounds(0.6, 1.0), prev(1.4, noise=0.3))["lines"][0]["vs"]["change"] == "慢了"
 
 
 def test_compare_with_last_only_when_both_have_10_rounds():
@@ -126,12 +132,14 @@ def test_experience_bad_is_must_even_when_not_slower_than_last():
     assert label(j)["level"] == "必须改"
 
 
-def test_spiky_segment_should_or_must():
-    b = [1.0] * 19 + [5.0]                                   # 偶尔一次特别慢，10 次里最慢没超体验标准
-    assert next(x for x in J.judge(sc(fair=2.0), rounds(0.6, b))["labels"] if x["k"] == "spiky:b")["level"] == "建议改"
-    b2 = [1.0] * 17 + [5.0] * 3                              # 偶发但每 10 次就有 1 次以上让整条线超过体验标准
-    assert next(x for x in J.judge(sc(fair=2.0), rounds(0.6, b2))["labels"] if x["k"] == "spiky:b")["level"] == "必须改"
-    assert next(x for x in J.judge(sc(), rounds(0.6, b2))["labels"] if x["k"] == "spiky:b")["level"] == "建议改"  # 没有体验标准
+def test_tail_should_or_must_by_how_far_over_the_standard():
+    """"10 次里最慢"（20 轮里第 18 慢）：超过标准算建议改，超过 1.5 倍算必须改；不再单独给"偶发特别慢"出标签。"""
+    lv = lambda b, **kw: label(J.judge(sc(**kw), rounds(0.6, b)))["level"]
+    assert lv([1.0] * 17 + [1.9] * 3, fair=2.0) == "建议改"   # 一般 1.6，10 次里最慢 2.5：在 2.0～3.0 之间
+    assert lv([1.0] * 17 + [5.0] * 3, fair=2.0) == "必须改"   # 10 次里最慢 5.6：超过 3.0
+    assert lv([1.0] * 19 + [5.0], fair=2.0) == "达标"         # 只有 1 轮特别慢，不到每 10 次 1 次
+    assert lv([1.0] * 17 + [5.0] * 3) == "未判"               # 没有体验标准，也没有上次可比
+    assert not any(x["kind"] == "spiky" for x in J.judge(sc(fair=2.0), rounds(0.6, [1.0] * 17 + [5.0] * 3))["labels"])
 
 
 def test_problem_levels():
@@ -139,10 +147,10 @@ def test_problem_levels():
     bad = {"key": "sw", "name": "开头被吞", "level": "bad", "rule": {"type": "value_not", "point": "P2", "value": 6}}
     j = J.judge(sc(problems=[warn, bad]), rounds(0.6, 1.0, probs={3: ["rev", "sw"], 9: ["rev"]}))
     items = {x["k"]: x for x in j["labels"]}
-    assert items["problem:rev"]["level"] == "建议改"          # 20 轮里 2 次，不到每 10 次 1 次以上
-    assert items["problem:sw"]["level"] == "必须改"           # 对错问题，出现就必须改
+    assert items["problem:rev"]["level"] == "出错"            # 对错问题单独一块，不分必须改 / 建议改
+    assert items["problem:sw"]["level"] == "出错"
     j2 = J.judge(sc(problems=[warn]), rounds(0.6, 1.0, probs={k: ["rev"] for k in (1, 5, 9)}))
-    assert next(x for x in j2["labels"] if x["k"] == "problem:rev")["level"] == "必须改"  # 3/20 超过每 10 次 1 次
+    assert next(x for x in j2["labels"] if x["k"] == "problem:rev")["rounds"] == [1, 5, 9]
 
 
 def test_segment_verdicts_and_estimated():
@@ -170,7 +178,15 @@ def test_fewer_than_20_rounds_is_reference_only():
 def test_labels_sorted_must_first():
     warn = {"key": "rev", "name": "先后反了", "level": "warn", "rule": {"type": "line_order", "first": "主线", "second": "主线"}}
     j = J.judge(sc(fair=1.5, problems=[warn]), rounds(0.6, 2.6, probs={3: ["rev"]}))
-    assert [x["level"] for x in j["labels"]] == ["必须改", "建议改"]
+    assert [x["level"] for x in j["labels"]] == ["出错", "必须改"]   # 出错（功能坏了）排在必须改前面
+
+
+def test_errors_first_and_heavier_first_within_a_level():
+    """出错（功能坏了）排在必须改前面；同一级里出错轮次多的在前。"""
+    a = {"key": "a", "name": "甲", "level": "bad", "rule": {"type": "value_not", "point": "P2", "value": 6}}
+    b = {"key": "b", "name": "乙", "level": "bad", "rule": {"type": "value_not", "point": "P2", "value": 6}}
+    j = J.judge(sc(fair=1.5, problems=[a, b]), rounds(0.6, 2.6, probs={1: ["a"], 2: ["b"], 3: ["b"]}))
+    assert [x["k"] for x in j["labels"]] == ["problem:b", "problem:a", "line:主线"]
 
 
 def test_under_10_rounds_slowest_in_10_is_not_used():
@@ -237,14 +253,14 @@ def sc_std(fair, good=None, short="某标准"):
 @pytest.mark.parametrize("fair,good,want_exp,want_why", [
     (2.0, 0.8, "可以", "可以，离好（0.8 秒）还差 0.80 秒"),                      # 语音对话那样：有"好"的档
     (2.0, 2.0, "好", "体验好（某标准：≤2.0 秒算好）"),
-    (1.0, 0.1, "差", "体验标准判差"),                                         # 尼尔森通用三档：1 秒以上算差
+    (1.0, 0.1, "差", "一般 1.60 秒，超过标准 1.0 秒"),                                         # 尼尔森通用三档：1 秒以上算差
     (2.0, None, "可以", '达到及格线（某标准，≤2.0 秒），这个标准没给"好"的档'),  # 门禁那样：只有及格线
 ])
 def test_experience_tiers(fair, good, want_exp, want_why):
     j = J.judge(sc_std(fair, good), rounds(0.6, 1.0))
     assert j["lines"][0]["exp"] == want_exp
     assert label(j)["why"].replace("体验可以，离好", "可以，离好") == want_why
-    assert label(j)["level"] == ("必须改" if want_exp == "差" else "可以不改")   # 好 / 可以都不影响必须改、建议改
+    assert label(j)["level"] == ("必须改" if want_exp == "差" else "达标")   # 好 / 可以都不影响必须改、建议改
 
 
 def test_good_tier_does_not_change_slower_than_last_time():
