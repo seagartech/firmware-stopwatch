@@ -392,7 +392,30 @@ class EspIdf:
                 on_line(text)
         return out
 
+    _OPEN = {}   # 码表自己现在开着的调试口：{串口对象: 谁开的}（10-20 真测：码表进程自己占着口没放，试测一直"打不开"，要重启才好）
+
     @staticmethod
     def open_port(port, baud=115200):
+        import threading
         import serial
-        return serial.Serial(port, baud, timeout=0.2)
+        ser = serial.Serial(port, baud, timeout=0.2)
+        EspIdf._OPEN[ser] = threading.current_thread().name
+        return ser
+
+    @staticmethod
+    def close_port(ser):
+        EspIdf._OPEN.pop(ser, None)
+        try:
+            ser.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def release_ports():
+        """把码表自己还开着的调试口全部关掉（烧录、试一次、开测之前用）；返回关了几个。
+        读口的线程再读会报错，各自的处理会让它们退出或重连。"""
+        n = 0
+        for ser in list(EspIdf._OPEN):
+            EspIdf.close_port(ser)
+            n += 1
+        return n
