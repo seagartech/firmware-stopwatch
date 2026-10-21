@@ -285,13 +285,15 @@ function codeRows(C,cols){if(!C)return '';const pad=Math.min(...C.ctx.filter(([,
  return `<tr class="coderow" hidden><td colspan="${cols}"><pre class="codectx">${C.ctx.map(([n,t])=>`<span class="${n===C.l?'hit':''}"><i>${n}</i>${htmlEsc(t.slice(pad))}</span>`).join('\n')}</pre></td></tr>`}
 function codeTog(e){const b=e.target.closest&&e.target.closest('[data-code]');if(!b)return false;const r=b.closest('tr').nextElementSibling;if(r&&r.classList.contains('coderow')){r.hidden=!r.hidden;b.textContent=r.hidden?'展开代码':'收起代码'}return true}
 function prevCell(PV,now,p,nz){if(!PV)return '';return `<td class="r wrap">${p==null?'—<br><span class="note">上次没测到</span>':p<0?'—<br><span class="note">上次先后反了</span>':`${fms(p)}<br>${cmpTxt(now,p,nz)}`}</td>`}
+// 路径、函数名太长时只在 / 和 :: 后面换行，文件名:行号、函数名本身不拆开（10-21：拆成 application.cc:67 / 1 没法看）
+const brk=t=>htmlEsc(t).replace(/(\/|::)/g,'$1<wbr>');
 const OKNOTE='<span class="note">正常</span>';
 function segVerdict(D,s){const j=D.J&&D.J.segments.find(x=>x.k===s.k);
  if(j?j.spiky:s.max>s.med*2.5&&s.max-s.med>.3)return '<span class="chip c-warn">偶发特别慢</span>';
  if(j&&j.verdict==='慢了')return '<span class="chip c-warn">比上次慢</span>';return OKNOTE}
 function dev(D){const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,CODE=(JREP&&JREP.code)||{},cols=PV?7:6;
   const segRow=s=>{const to=String(s.code||'').split('→')[1],C=D.S.real?CODE[to]:null;
-   const loc=C?`<span class="code">${htmlEsc(C.path)}:${C.l}</span>${C.func?`<br><span class="note code">${htmlEsc(C.func)}</span>`:''}<br><button class="pill codebtn" data-code="1">展开代码</button>`:`<span class="code">${T.loc[s.k]||''}</span>`;
+   const loc=C?`<span class="code">${brk(C.path)}:${C.l}</span>${C.func?`<br><span class="note code">${brk(C.func)}</span>`:''}<br><button class="pill codebtn" data-code="1">展开代码</button>`:`<span class="code">${T.loc[s.k]||''}</span>`;
    return `<tr><td ${SANS}>${s.name}</td><td>${loc}</td><td class="own" ${SANS}>${s.owner}</td><td class="r">${fms(s.med)}</td><td class="r">${fms(s.max)}</td>${prevCell(PV,s.med,PV&&PV.segs[s.k],PV&&(PV.noise||{})[s.k])}<td ${SANS}>${segVerdict(D,s)}</td></tr>${codeRows(C,cols)}`};
   const groups=D.lines.map(l=>{const [v]=D.verdict(l),jl=D.J&&D.J.lines.find(x=>x.name===l.name),ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):l===D.main?D.exp:null;
    const jd=(v==='比上次慢了'?'<span class="chip c-warn">比上次慢</span> ':'')+(ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:'')||OKNOTE;
@@ -307,7 +309,7 @@ function dev(D){const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,C
   const ks=[...new Set(bad.map(r=>(why(r)||{}).k))],one=bad.length>1&&ks.length===1&&ks[0]?D.allSegs.find(s=>s.k===ks[0]):null;
   const outside=s=>{const j=D.J&&D.J.segments.find(x=>x.k===s.k);return j&&j.outside};
   return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>技术细节</h1>${vsTag()}</div><p class="sub">给研发：每段在代码哪里、慢在哪、怎么改。单位秒。${realFlash()?'':'这里只演示样子。'}</p></div>
-  <section class="panel scroll"><h2>分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段</th><th>代码位置</th><th class="own">谁负责</th><th class="r">一般（中位数）</th><th class="r">最差</th>${PV?`<th class="r">上次<br><span class="note">${htmlEsc(PV.measured_at||'')}</span></th>`:''}<th>判断</th></tr></thead><tbody>${groups}</tbody></table>
+  <section class="panel scroll"><h2>分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段</th><th class="loc">代码位置</th><th class="own">谁负责</th><th class="r">一般<br>（中位数）</th><th class="r">最差</th>${PV?`<th class="r">上次<br><span class="note">${htmlEsc(String(PV.measured_at||'').replace(/^\d{4}-/,''))}</span></th>`:''}<th>判断</th></tr></thead><tbody>${groups}</tbody></table>
   <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>
   ${bad.length?`<section class="panel scroll"><h2>有问题的轮</h2><table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}<th>慢在哪段</th></tr></thead><tbody>${bad.map(r=>{const c=why(r);return `<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${e==null?'—':f(e)}</td>`).join('')}<td ${SANS}>${c?`${htmlEsc(c.name)}：${f(c.v)} 秒（一般 ${f(c.med)}）`:'<span class="note">没有哪一段特别慢，各段都慢一点</span>'}</td></tr>`}).join('')}</tbody></table>${one?`<p class="note" style="margin:8px 0 0">这几轮都慢在「${htmlEsc(one.name)}」${outside(one)?'，这段在设备外':''}。</p>`:''}</section>`:''}${fixDev(D)}
   <section class="panel"><h2>原始日志</h2><p style="margin:0 0 6px"><span class="code">${T.log}</span></p><p class="note" style="margin:0 0 8px">设备调试口原样输出，没有删改；码表插的计时点行以 FSW 开头。报告里的数都从它算。</p><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
