@@ -187,7 +187,9 @@ function spikyRounds(D){const m=new Map(),J=D.J;
  return m}
 function roundsChart(D){
   const T=niceT(Math.max(...D.rounds.flatMap(r=>r.ends))/1.2);const W=900,X0=70,X1=820,sx=t=>X0+(X1-X0)*t/T,rh=20,top=34,st=step(T);
-  const spk=spikyRounds(D),prob=new Map();(D.J?D.J.labels:[]).filter(x=>x.kind==='problem'&&!x.order).forEach(x=>(x.rounds||[]).forEach(n=>prob.set(n,x.name)));
+  const spk=spikyRounds(D),prob=new Map(),add=(n,t)=>prob.set(n,prob.has(n)?prob.get(n)+'；'+t:t),J=D.J?D.J.labels:[];
+  J.filter(x=>x.kind==='problem'&&!x.order).forEach(x=>(x.rounds||[]).forEach(n=>add(n,x.name)));
+  J.filter(x=>x.kind==='line'&&x.rounds).forEach(x=>{const l=D.lines.find(y=>y.name===x.line);x.rounds.forEach(n=>add(n,`${l?l.end:x.line}超过标准 ${x.tail} 倍`))});  // 必须改点名的"超过标准 1.5 倍"那几轮
   const bad=new Set([...D.reversed.map(r=>r.n),...spk.keys(),...prob.keys()]);  // 红底只给「要你拍板」点名的轮；超标看红虚线
   let g='';
   for(let t=0;t<=T+1e-9;t+=st){g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="${top-8}" y2="${top+D.n*rh}" stroke="var(--soft)"/><text x="${sx(t)}" y="${top-14}" text-anchor="middle" font-size="12" fill="var(--muted)" class="num">${+t.toFixed(2)}</text>`}
@@ -213,10 +215,10 @@ function tiers(D){  // 依据合成一张表（10-21 样子）：一般 ｜ 最�
   const std=l=>{const j=jl(l),es=j&&j.exp_std;return es&&es.fair!=null?`超过 ${es.fair} 秒算差${es.good!=null?`，${es.good} 秒内算好`:''}`:'—'};
   const vs=l=>{const j=jl(l),v=j&&j.vs;return v?`${f(v.prev)} → ${f(l.med)} 秒，<b class="${v.change==='慢了'?'up':'down'}">${v.change}</b>`:'第一次测'};
   return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">最差</span><span class="h">达标率</span><span class="h">体验标准</span><span class="h">和上次比</span>
-  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.max)} 秒</span><span>${l.pass_rate==null?'—':`${passPct(l)}（${l.pass_n}/${l.count}）`}</span><span style="font-family:var(--sans)">${std(l)}</span><span style="font-family:var(--sans)">${vs(l)}</span>`).join('')}</div>`;
+  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.max)} 秒</span><span${l.pass_rate==null?' style="font-family:var(--sans)"':''}>${l.pass_rate==null?'—':`${passPct(l)}（${l.pass_n}/${l.count}）`}</span><span style="font-family:var(--sans)">${std(l)}</span><span style="font-family:var(--sans)">${vs(l)}</span>`).join('')}</div>`;
 }
 function stdNote(D){  // 表下一行：达标率怎么算 + 标准出处（每条标准只写一次）
-  const seen=new Set(),src=[];(D.J?D.J.lines:[]).forEach(j=>{const es=j.exp_std;if(es&&es.source&&!seen.has(es.source)){seen.add(es.source);src.push(srcHtml(es.source)+(es.good==null?'（只有及格线）':''))}});
+  const seen=new Set(),src=[];(D.J?D.J.lines:[]).forEach(j=>{const es=j.exp_std;if(es&&es.source&&!seen.has(es.source)){seen.add(es.source);src.push(srcHtml(es.source).replace(/。$/,'')+(es.good==null?'（只有及格线）':''))}});
   return `<p class="note" style="margin:8px 0 0">达标率：没超过体验标准的轮次占几成${D.n<10?`；只测了 ${D.n} 轮，只供参考`:''}。${src.length?`体验标准出处：${src.join('；')}。`:'这个场景没有对得上的体验标准。'}</p>`;
 }
 // 负责人版写短（决策 98）：越重要越靠前：出错、必须改、建议改、未判，都展开；达标的收起来（10-20 用户定）。内容不删，只是默认收起
