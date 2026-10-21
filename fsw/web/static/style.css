@@ -201,6 +201,7 @@ details:not(.panel):not(.mapbox)>summary:hover{border-color:var(--fg)}
 ul.notes{margin:6px 0 0;padding-left:1.2em;font-size:13px;color:var(--muted)}ul.notes li{margin-bottom:3px}
 table.num td.r,table.num th.r{white-space:nowrap}
 .todo1{border:1px solid var(--line);border-radius:8px;margin-top:10px;overflow:hidden}.todoh{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:var(--soft)}
+.pill.copy{display:inline-flex;align-items:center;gap:5px}.pill.copy.done{color:var(--ok);border-color:var(--ok)}
 .todo1 pre{white-space:pre-wrap;margin:0;padding:12px;font-size:13.5px;font-family:var(--sans);background:var(--bg)}
 .optdev{border-left:3px solid var(--line);padding:4px 0 4px 10px;margin-top:8px}.optdev.on{border-left-color:var(--ok)}
 

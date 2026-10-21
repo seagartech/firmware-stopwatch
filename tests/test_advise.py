@@ -234,3 +234,17 @@ def test_short_lines_keep_two_decimals():
     f = {"why": "刷卡到亮灯一般 0.034 秒，最慢 0.082 秒", "impact": "x", "rec": "x"}
     adv._tidy(f, [])
     assert f["why"] == "刷卡到亮灯一般 0.03 秒，最慢 0.08 秒"
+
+
+def test_ask_and_done_go_to_outside_people_so_no_code_or_internal_words():
+    # 10-21 用户定：消息可能发给别家公司的对接人，ask / done 不带源码位置、不用码表的内部说法
+    d, j = judged("door")
+    data = {"fixes": json.loads(json.dumps(d["page"]["fixes"])), "fine": d["page"]["fine"]}
+    data["fixes"][0]["done"] = "用码表再测 20 轮，达标率 100%"
+    data["fixes"][0]["opts"][0]["ask"] = "请看 net_auth.c 第 88 行之后服务器的处理"
+    _, bad = adv.check(data, j, d["scenario"])
+    assert any("怎么算解决会发给对方" in b and "码表" in b for b in bad)
+    assert any("方案 1 的请求会发给对方" in b for b in bad)
+    data["fixes"][0]["opts"][0]["who"] = "固件研发"   # 10-21 Mac 真测：找固件研发的请求写 application.cc 被卡住，自己人可以写代码位置
+    _, bad = adv.check(data, j, d["scenario"])
+    assert not any("方案 1 的请求会发给对方" in b for b in bad)
