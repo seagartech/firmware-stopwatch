@@ -89,7 +89,7 @@ def test_normal_first_round_runs_through(make):
 def test_home_page_has_no_what_input_and_starts_with_one_button():
     js = (Path(__file__).resolve().parent.parent / "fsw/web/static/app.js").read_text(encoding="utf-8")
     assert 'id="h-what"' not in js and 'data-autostart="1"' in js
-    assert "let colVar='b',colN=AUTO_ROUNDS" in js and "const AUTO_ROUNDS=10" in js
+    assert "const colN=AUTO_ROUNDS" in js and "const AUTO_ROUNDS=10" in js
 
 
 def _page_with_touch_start():
