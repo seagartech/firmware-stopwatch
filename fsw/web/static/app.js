@@ -723,7 +723,7 @@ function fixC(D){const FX=activeFixes(D);
    ${F?`<p style="margin:0 0 6px"><b>为什么是问题：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p>`:'<p style="margin:0"><b>不用改。</b>这段没有偶发特别慢的轮，也没比上次慢。</p>'}</div>`;
 }
 function fixDev(D){const FX=activeFixes(D);initPick(FX);
-  return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来；"已选"跟着结论建议里的勾选走，改了勾选这里会跟着变。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
+  return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来，标了"建议"的是推荐做的。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
    <table><tbody><tr><th style="width:7em">数据</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table>
    ${F.opts.map((o,oi)=>{const on=fixPick.has(fi+'-'+oi);return `<div class="optdev ${on?'on':''}"><b>${o.name}</b>${on?' <span class="chip c-ok">建议</span>':''}<ul class="notes"><li>改法：${o.how}</li><li>改动大小：${o.size}</li><li>风险：${o.rk}</li></ul></div>`}).join('')}</div>`).join('')}
    <p class="note" style="margin:0">改法是 AI 读代码后给的思路，没有实现、没有测过；代码位置按这次识别结果。码表不会自动改代码。</p></section>`;
