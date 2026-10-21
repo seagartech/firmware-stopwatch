@@ -56,6 +56,8 @@ function lenByContent(J){const sc=J.scenario,hide=new Set((J.lines||[]).filter(x
  const used=new Set(keep.flatMap(l=>l.segments)),gone=new Set(sc.lines.filter(l=>hide.has(l.name)).flatMap(l=>l.segments).filter(k=>!used.has(k)));
  const main=keep[keep.length-1];
  return {...sc,lines:keep,segments:Object.fromEntries(Object.entries(sc.segments).filter(([k])=>!gone.has(k))),cutEnd:main.end||main.name}}
+// 报告顶上一行带上芯片（10-21：测量条件那块删了，芯片挪到这里）：项目名（芯片，板子）
+const withChip=n=>{const c=REAL&&REAL.chip;if(!c||String(n).includes(c))return n;return /（[^）]*）$/.test(n)?n.replace(/（([^）]*)）$/,`（${c}，$1）`):`${n}（${c}）`};
 function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.status==='done';
  const val=k=>J.rounds.map(r=>r.segs[k]);
  if(!real){const S={...S0,segs:Object.fromEntries(Object.entries(S0.segs).map(([k,g])=>[k,{...g,v:J.rounds.map(r=>r.segs[k]??g.v[0])}])),J};return S}
@@ -67,9 +69,9 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
   return {name:l.name,end,phrase:(side&&!l.first?'先':'后')+end,segs:l.segments,ends0:li<0?null:J.rounds.map(r=>(r.ends||[])[li]??null)}});
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
- return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
+ return {crumb:`${htmlEsc(withChip(pName))} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
   firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],
-  tech:{cond:[['项目',`${htmlEsc(REAL.name)}，${CHIP()}`],['判快慢依据',`${sc.experience?`体验标准：超过 ${sc.experience.fair} 秒算差（${htmlEsc(sc.experience.short||'参考值')}）`:'没有对得上的体验标准'}；${J.prev&&J.prev.segs?`和上次（${htmlEsc(J.prev.measured_at)}，${J.prev.n} 轮）比`:'第一次测，没有上次可比'}`]],pts:sc.points?Object.keys(sc.points).length:(IDENT.page.steps||[]).length,
+  tech:{
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
 // 段、线的判定（10-19 去掉合理范围清单）：第一次只记录用时，第二次起和上次比
@@ -276,37 +278,39 @@ function expTip(x,l){const e=x.exp_std||{},m=x.med!=null?x.med:l.med;if(e.fair==
  if(x.exp==='好')return `${fair}，已达到${good}，也达到了`;
  return `${fair}，已达到（这个标准没给"好"的档）`}
 
-// 这次测试本身用了多久（决策 99）：码表自己记的每段用时，按四笔账分类，对照用时标准判"好 / 能忍 / 超了"。只在技术细节里
-let TIMING=null,timingAt=0;
-function timingLoad(){if(Date.now()-timingAt<3000)return;timingAt=Date.now();fetch('/api/timing').then(r=>r.ok?r.json():null).then(j=>{if(j){const ch=JSON.stringify(j)!==JSON.stringify(TIMING);TIMING=j;if(ch&&page==='report'&&mode==='dev')render()}}).catch(()=>{})}
-const mmssT=x=>x==null?'没记下':x<60?`${x.toFixed(1)} 秒`:`${Math.floor(x/60)} 分 ${Math.round(x%60)} 秒`;
-const VTAG={'好':'c-ok','能忍':'c-warn','超了':'c-bad'};
-function timingBox(t){if(!t)return '';const B=t.books,N=t.names,c=t.counts,stdT=s=>s?`好 ≤${mmssT(s[0])}${s[1]!=null?`，能忍 ≤${mmssT(s[1])}`:''}`:'—';
- const chip=v=>v?`<span class="chip ${VTAG[v]}">${v}</span>`:'';
- const rows=t.stages.map(s=>`<tr><td style="font-family:var(--sans)">${s.name}</td><td class="r">${mmssT(s.secs)}${s.per_round!=null?`<br><span class="note">每轮 ${s.per_round} 秒</span>`:''}</td><td style="font-family:var(--sans)">${{tool:N.tool,human:N.human,collect:'人配合 + 被测设备'}[s.book]}</td><td style="font-family:var(--sans)">${s.key==='collect'?'每轮 ':''}${stdT(s.std)}</td><td style="font-family:var(--sans)">${chip(s.verdict)}${s.note?` <span class="note">${s.note}</span>`:''}</td></tr>`).join('');
- return `<section class="panel scroll"><h2>这次测试本身用了多久</h2><p class="note" style="margin:-4px 0 8px">码表自己记的每段开始、结束时间；按${t.first?'第一次测':'再测（能用上次结果）'}的标准判。等人的时间不算进各段。</p>
-  <table class="num"><thead><tr><th>四笔账</th><th class="r">合计</th><th>标准</th><th>判断</th></tr></thead><tbody>
-  <tr><td style="font-family:var(--sans)"><b>${N.tool}</b></td><td class="r">${mmssT(B.tool)}</td><td style="font-family:var(--sans)">${stdT(t.std_total.tool)}</td><td>${chip(t.verdict.tool)}</td></tr>
-  <tr><td style="font-family:var(--sans)">${N.device}</td><td class="r">${mmssT(B.device)}</td><td style="font-family:var(--sans)">不考码表（设备反应、放完回答）</td><td></td></tr>
-  <tr><td style="font-family:var(--sans)">${N.human}</td><td class="r">${mmssT(B.human)}</td><td style="font-family:var(--sans)">${stdT(t.std_total.human)}</td><td>${chip(t.verdict.human)}</td></tr>
-  <tr><td style="font-family:var(--sans)">${N.wait}</td><td class="r">${mmssT(B.wait)}</td><td style="font-family:var(--sans)">不算</td><td></td></tr></tbody></table>
-  <p style="margin:8px 0">说了 ${c.said} 句（试一次 + 多轮实测）· 补测 ${c.redo} 轮 · 弹提示 ${c.false_hints} 次 · 点了 ${c.clicks} 次 · 调用大模型 ${c.llm_calls} 次</p>
-  <details class="lvwhy"><summary>每段用时</summary><table class="num"><thead><tr><th>段</th><th class="r">用时</th><th>记在</th><th>标准</th><th>判断</th></tr></thead><tbody>${rows}</tbody></table>
-  ${t.waits.length?`<ul class="notes">${t.waits.map(w=>`<li>等人：${w.why} ${mmssT(w.secs)}</li>`).join('')}</ul>`:''}</details></section>`}
-const wbr=t=>String(t).replace('～','～<wbr>');  // 分段用时表：放不下时在"～"后面换行，数字不拆开
-function dev(D){const T=D.S.tech;if(D.S.real)timingLoad();const PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null;  // 改完再测：和上次比
-  const pvCell=(now,p,nz)=>PV?`<td class="r wrap">${p==null?'—':`${fms(p)}<br>${cmpTxt(now,p,nz)}`}</td>`:'';
-  const segRows=D.allSegs.map(s=>{const over=s.max>s.med*2.5&&s.max-s.med>.3;return `<tr><td style="font-family:var(--sans)">${s.name}（${s.code}）</td><td><span class="code">${T.loc[s.k]}</span></td><td class="own" style="font-family:var(--sans)">${s.owner}</td><td class="r">${fms(s.med)}</td>${pvCell(s.med,PV&&PV.segs[s.k],PV&&(PV.noise||{})[s.k])}<td class="r wrap">${wbr(rangeTxt(s.v,s.v.map((x,i)=>(D.rounds[i]||{}).n||i+1)))}</td><td style="font-family:var(--sans)">${D.J?(()=>{const [v,c]=segJudge(D,s),j=D.J.segments.find(x=>x.k===s.k);return `<span class="chip ${c}">${v}</span>${j&&j.outside?' <span class="chip c-gray">设备外</span>':''}`})():over?'<span class="chip c-warn">偶发特别慢</span>':'<span class="chip c-ok">正常</span>'}</td></tr>`}).join('');
-  const lineRows=D.lines.map(l=>{const [v,c]=D.verdict(l);return `<tr><td style="font-family:var(--sans)"><b class="tipname" title="${htmlEsc(l.segs.map(k=>D.S.segs[k].name).join(' → '))}">${l.name}合计</b></td><td></td><td></td><td class="r">${f(l.med)}</td>${pvCell(l.med,PV&&PV.lines[l.name],PV&&(PV.noise_lines||{})[l.name])}<td class="r wrap">${wbr(rangeTxt(l.ends,l.ends.map((x,i)=>(D.rounds[i]||{}).n||i+1)))}</td><td style="font-family:var(--sans)"><span class="chip ${c}">${v}</span>${(()=>{const jl=D.J&&D.J.lines.find(x=>x.name===l.name),ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):l===D.main?D.exp:null;return ex?` <span class="chip ${ex[1]}">体验${ex[0]}</span>`:''})()}</td></tr>`}).join('');  // 每条线按自己的体验标准
+// 技术细节（10-21 用户定）：不写计时点编号（P1→P2 谁也看不懂），按线分组；代码位置写"路径:行号 + 函数名"，点"展开代码"在这段下面整行显示前后各 3 行；
+// 判断只标有问题的；不再有测量条件、计时点开销推算、码表自己用了多久（决策 99 改了）
+const SANS='style="font-family:var(--sans)"';
+function codeRows(C,cols){if(!C)return '';const pad=Math.min(...C.ctx.filter(([,t])=>t.trim()).map(([,t])=>t.length-t.trimStart().length));
+ return `<tr class="coderow" hidden><td colspan="${cols}"><pre class="codectx">${C.ctx.map(([n,t])=>`<span class="${n===C.l?'hit':''}"><i>${n}</i>${htmlEsc(t.slice(pad))}</span>`).join('\n')}</pre></td></tr>`}
+function codeTog(e){const b=e.target.closest&&e.target.closest('[data-code]');if(!b)return false;const r=b.closest('tr').nextElementSibling;if(r&&r.classList.contains('coderow')){r.hidden=!r.hidden;b.textContent=r.hidden?'展开代码':'收起代码'}return true}
+function prevCell(PV,now,p,nz){if(!PV)return '';return `<td class="r wrap">${p==null?'—<br><span class="note">上次没测到</span>':p<0?'—<br><span class="note">上次先后反了</span>':`${fms(p)}<br>${cmpTxt(now,p,nz)}`}</td>`}
+const OKNOTE='<span class="note">正常</span>';
+function segVerdict(D,s){const j=D.J&&D.J.segments.find(x=>x.k===s.k);
+ if(j?j.spiky:s.max>s.med*2.5&&s.max-s.med>.3)return '<span class="chip c-warn">偶发特别慢</span>';
+ if(j&&j.verdict==='慢了')return '<span class="chip c-warn">比上次慢</span>';return OKNOTE}
+function dev(D){const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,CODE=(JREP&&JREP.code)||{},cols=PV?7:6;
+  const segRow=s=>{const to=String(s.code||'').split('→')[1],C=D.S.real?CODE[to]:null;
+   const loc=C?`<span class="code">${htmlEsc(C.path)}:${C.l}</span>${C.func?`<br><span class="note code">${htmlEsc(C.func)}</span>`:''}<br><button class="pill codebtn" data-code="1">展开代码</button>`:`<span class="code">${T.loc[s.k]||''}</span>`;
+   return `<tr><td ${SANS}>${s.name}</td><td>${loc}</td><td class="own" ${SANS}>${s.owner}</td><td class="r">${fms(s.med)}</td><td class="r">${fms(s.max)}</td>${prevCell(PV,s.med,PV&&PV.segs[s.k],PV&&(PV.noise||{})[s.k])}<td ${SANS}>${segVerdict(D,s)}</td></tr>${codeRows(C,cols)}`};
+  const groups=D.lines.map(l=>{const [v]=D.verdict(l),jl=D.J&&D.J.lines.find(x=>x.name===l.name),ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):l===D.main?D.exp:null;
+   const jd=(v==='比上次慢了'?'<span class="chip c-warn">比上次慢</span> ':'')+(ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:'')||OKNOTE;
+   const segs=l.segs.map(k=>D.allSegs.find(s=>s.k===k)).filter(Boolean),worst=l.max!=null?l.max:Math.max(...l.ends.filter(x=>x!=null));
+   return `<tr class="grp"><td colspan="${cols}" ${SANS}><b>${l.end}</b> <span class="note">从「${htmlEsc(D.S.startShort)}」到「${l.end}」，共 ${segs.length} 段</span></td></tr>${segs.map(segRow).join('')}
+   <tr><td ${SANS}><b>${l.end} 合计</b></td><td></td><td></td><td class="r"><b>${f(l.med)}</b></td><td class="r"><b>${f(worst)}</b></td>${prevCell(PV,l.med,PV&&PV.lines[l.name],PV&&(PV.noise_lines||{})[l.name])}<td ${SANS}>${jd}</td></tr>`}).join('');
+  const shortest=Math.min(...D.allSegs.map(s=>s.med).filter(x=>x>0));
+  const ovNote=D.S.real&&isFinite(shortest)?`计时点本身的开销不超过 ${fms(shortest)} 秒（这次最短的一段只测出这么多）${shortest<.01?'，可以忽略':''}。<br>`:'';
   const bad=[...new Set([...D.reversed,...D.slowRounds])].sort((a,b)=>a.n-b.n);
-  const ovLo=(T.pts*.002).toFixed(3),ovHi=(T.pts*.003).toFixed(3);
-  return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>技术细节</h1>${vsTag()}</div><p class="sub">在代码哪里、具体怎么改、怎么验证。单位秒。<br>${realFlash()?'段名和代码位置来自找关键步骤的结果。判快慢只看体验标准和"和上次比"（两次都满 10 轮才比）。':'段名和代码位置来自 AI 识别结果；这里只演示样子。'}</p></div>
-  <section class="panel"><h2>测量条件</h2><dl class="kv" style="grid-template-columns:6em 1fr">${T.cond.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('')}
-   <dt>计时点开销</dt><dd>每个计时点往调试口打印一行，约 0.002～0.003 秒（按调试口速度推算，未实测）。<br>一轮最多经过 ${T.pts} 个计时点，设备那几段的数字最多偏大约 ${ovLo}～${ovHi} 秒；服务器、网络那几段不受影响。<br>想确认开销，可以在"插计时点和烧录"页切回原版，各收一次比较。</dd></dl></section>
-  <section class="panel scroll"><h2 style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段（计时点）</th><th>代码位置${T.locNote||''}</th><th class="own">谁负责</th><th class="r">中位数</th>${PV?'<th class="r">上次</th>':''}<th class="r">最小～最大</th><th>判断</th></tr></thead><tbody>${segRows}${lineRows}</tbody></table></section>
-  <section class="panel scroll"><h2>有问题的轮</h2>${bad.length?`<table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}</tr></thead><tbody>${bad.map(r=>`<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${f(e)}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<p class="note">没有。</p>'}</section>${fixDev(D)}
-  ${D.S.real?timingBox(TIMING||(JREP&&JREP.timing)):''}
-  <section class="panel"><h2>原始日志</h2><p style="margin:0 0 8px"><span class="code">${T.log}</span></p><ul class="notes" style="margin:0 0 8px"><li>设备调试口输出的原样记录，没有删改：固件原有的日志和码表插的计时点行（FSW 开头）都在里面。</li><li>报告里所有数字都从这份文件算出来。</li></ul><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
+  // 慢在哪段按超标的那条线算（没超标的按主线）：后台 judge 每条线一份 round_cause
+  const why=r=>{const JL=(D.J&&D.J.lines)||[],ln=D.lines.find((l,i)=>{const fa=((JL.find(x=>x.name===l.name)||{}).exp_std||{}).fair;return fa!=null&&r.ends[i]!=null&&r.ends[i]>fa})||D.main,
+   c=((JL.find(x=>x.name===ln.name)||{}).round_cause||[]).find(x=>x.n===r.n);return c&&c.more>=.1?c:null};
+  const ks=[...new Set(bad.map(r=>(why(r)||{}).k))],one=bad.length>1&&ks.length===1&&ks[0]?D.allSegs.find(s=>s.k===ks[0]):null;
+  const outside=s=>{const j=D.J&&D.J.segments.find(x=>x.k===s.k);return j&&j.outside};
+  return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>技术细节</h1>${vsTag()}</div><p class="sub">给研发：每段在代码哪里、慢在哪、怎么改。单位秒。${realFlash()?'':'这里只演示样子。'}</p></div>
+  <section class="panel scroll"><h2>分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段</th><th>代码位置</th><th class="own">谁负责</th><th class="r">一般（中位数）</th><th class="r">最差</th>${PV?`<th class="r">上次<br><span class="note">${htmlEsc(PV.measured_at||'')}</span></th>`:''}<th>判断</th></tr></thead><tbody>${groups}</tbody></table>
+  <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>
+  ${bad.length?`<section class="panel scroll"><h2>有问题的轮</h2><table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}<th>慢在哪段</th></tr></thead><tbody>${bad.map(r=>{const c=why(r);return `<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${e==null?'—':f(e)}</td>`).join('')}<td ${SANS}>${c?`${htmlEsc(c.name)}：${f(c.v)} 秒（一般 ${f(c.med)}）`:'<span class="note">没有哪一段特别慢，各段都慢一点</span>'}</td></tr>`}).join('')}</tbody></table>${one?`<p class="note" style="margin:8px 0 0">这几轮都慢在「${htmlEsc(one.name)}」${outside(one)?'，这段在设备外':''}。</p>`:''}</section>`:''}${fixDev(D)}
+  <section class="panel"><h2>原始日志</h2><p style="margin:0 0 6px"><span class="code">${T.log}</span></p><p class="note" style="margin:0 0 8px">设备调试口原样输出，没有删改；码表插的计时点行以 FSW 开头。报告里的数都从它算。</p><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
 
@@ -355,6 +359,7 @@ let toastT=null;function toast(m){const t=document.getElementById('toast');m=Str
  t.className='toast t-'+kind;t.innerHTML=`<span>${htmlEsc(kind==='bad'?m.replace(/^✕\s*/,''):m)}</span>${kind==='bad'?'<button class="tclose" aria-label="关掉这个提示">×</button>':''}`;t.hidden=false;clearTimeout(toastT);
  if(kind!=='bad')toastT=setTimeout(()=>{t.hidden=true},Math.min(8000,1800+m.length*80))}
 document.addEventListener('click',e=>{if(e.target.closest('#toast .tclose'))document.getElementById('toast').hidden=true});
+document.addEventListener('click',e=>{codeTog(e)});  // 技术细节"展开代码"
 // 首页"以前测过的"：真测过的记录（后台按结果文件夹里的原始日志重算）；演示数据只在演示入口（地址里写 ?demo=）出现
 let HIST=[];async function histLoad(){try{HIST=await (await fetch('/api/history')).json()}catch(e){}}
 const histRow=h=>`<div class="lrow"><button data-hopen="${htmlEsc(h.project_dir)}"><span><b>${htmlEsc(h.name)}</b>　<span class="note">${htmlEsc(String(h.what||'').startsWith('全程')?'全程':h.what)} · ${htmlEsc(h.last)}</span></span><span class="num">${htmlEsc(h.metric)} ${f(h.now)} 秒　${h.few?`<span class="note">只测了 ${h.rounds} 轮，跑流程，不比较</span>`:h.prev!=null?arrow(h.now,h.prev):'<span class="note">第一次测</span>'}</span></button>${h.path?`<button class="pill" data-hretest="${htmlEsc(h.project_dir)}">改完了，再测一次</button>`:''}</div>${h.fsw_on?`<div class="devrow"><span class="note"><i class="dot" style="background:var(--warn)"></i>设备上现在是计时版，交货、演示前请还原</span><button class="pill" data-hrestore="${htmlEsc(h.project_dir)}">还原成原版</button></div>`:''}`;
@@ -636,7 +641,7 @@ function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
   d.querySelectorAll('.stale,.expdone').forEach(x=>x.remove());
   d.querySelectorAll('section').forEach(x=>{const t=(x.querySelector('h2')||{}).textContent||'';if(t.startsWith('改完以后')||t.startsWith('设备上现在是'))x.remove()});
   d.querySelectorAll('input[type=checkbox],input[type=radio]').forEach(i=>{const s=document.createElement('span');s.textContent=i.checked?'☑':'☐';s.className='ck';i.replaceWith(s)});
-  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy;else b.remove()});  // 复制按钮留着，导出的报告里也能复制
+  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy;else if(!b.dataset.code)b.remove()});  // 复制按钮留着，导出的报告里也能复制
   d.querySelectorAll('[id]').forEach(x=>x.id=pre+x.id);d.querySelectorAll('.flash').forEach(x=>x.classList.remove('flash'));
   d.querySelectorAll('details').forEach(x=>x.removeAttribute('open'));return d.innerHTML}  // 导出也默认收起，点开能看（决策 98）
 // 导出存到哪、存完的提示（一直在，直到你关掉）
@@ -666,7 +671,7 @@ async function exportReport(folder){
 <div class="tabs seg" role="group" aria-label="报告版本"><button id="tb-b" aria-pressed="true" onclick="sw('b')">结论建议</button><button id="tb-d" aria-pressed="false" onclick="sw('d')">技术细节</button></div></div>
 <div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
 <p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。${log}</p></div>
-<div id="tip" hidden></div><script>${tipShow.toString()}${todoCopy.toString()}document.addEventListener('click',e=>{if(todoCopy(e))return;const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
+<div id="tip" hidden></div><script>${tipShow.toString()}${todoCopy.toString()}${codeTog.toString()}document.addEventListener('click',e=>{if(todoCopy(e)||codeTog(e))return;const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
   let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
@@ -722,11 +727,14 @@ function fixC(D){const FX=activeFixes(D);
    <p class="num" style="margin:0 0 10px">一般 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒</p>
    ${F?`<p style="margin:0 0 6px"><b>为什么是问题：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p>`:'<p style="margin:0"><b>不用改。</b>这段没有偶发特别慢的轮，也没比上次慢。</p>'}</div>`;
 }
-function fixDev(D){const FX=activeFixes(D);initPick(FX);
-  return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来，标了"建议"的是推荐做的。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
-   <table><tbody><tr><th style="width:7em">数据</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table>
-   ${F.opts.map((o,oi)=>{const on=fixPick.has(fi+'-'+oi);return `<div class="optdev ${on?'on':''}"><b>${o.name}</b>${on?' <span class="chip c-ok">建议</span>':''}<ul class="notes"><li>改法：${o.how}</li><li>改动大小：${o.size}</li><li>风险：${o.rk}</li></ul></div>`}).join('')}</div>`).join('')}
-   <p class="note" style="margin:0">改法是 AI 读代码后给的思路，没有实现、没有测过；代码位置按这次识别结果。码表不会自动改代码。</p></section>`;
+// 怎么改（10-21 用户定）：没方案就整块不显示；"数据"改"推算"（表里有的数不再重复）；几个问题共用的方案只列一次，标对应哪几个问题；
+// 查原因的方案不写改动大小、风险（AI 写"—"）
+function fixDev(D){const FX=activeFixes(D);initPick(FX);if(!FX.length)return '';
+  const opts=[];FX.forEach((F,fi)=>F.opts.forEach(o=>{const n=String(o.name).trim(),x=opts.find(y=>y.key===n);if(x){x.for.push(fi+1);x.rec=x.rec||o.rec}else opts.push({...o,key:n,for:[fi+1]})}));
+  const has=v=>v&&!/^[—\-－]+$/.test(String(v).trim());
+  return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">改法是 AI 读代码后给的思路，没有实现、没有测过。</p>${FX.map((F,fi)=>`<div style="margin-bottom:14px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
+   <table><tbody><tr><th style="width:7em">推算</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table></div>`).join('')}
+   <h3 style="margin:4px 0 6px;font-size:15px">方案</h3>${opts.map(o=>`<div class="optdev ${o.rec?'on':''}"><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''} <span class="note">${FX.length>1?`对应问题 ${o.for.join('、')} · `:''}找谁：${o.who}</span><ul class="notes"><li>改法：${o.how}</li>${has(o.size)?`<li>改动大小：${o.size}</li>`:''}${has(o.rk)?`<li>风险：${o.rk}</li>`:''}</ul></div>`).join('')}</section>`;
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);

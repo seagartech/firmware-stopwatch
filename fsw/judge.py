@@ -165,6 +165,18 @@ def judge(scenario, rounds, prev=None):
                                 "spiky_rounds": [r["n"] for r in rounds if r["segs"].get(k) is not None
                                                  and r["segs"][k] > st["med"] * SPIKE_RATIO] if spiky else []})
 
+    # 每轮慢在哪段（按线算）：这条线自己的段里，比这一段一般用时多出最多的那段（放回答那几段、推算段不算）。
+    # 报告"有问题的轮"和写建议都用它，AI 不再自己猜（10-21：AI 写错过"第 4、5 轮没有单独慢的段"）
+    def round_cause(keys):
+        cand = [k for k in keys if k in seg_st and k not in playing and segs_def[k].get("basis") != "estimated"]
+        out_ = []
+        for r in rounds:
+            d = [(r["segs"][k] - seg_st[k]["med"], k) for k in cand if r["segs"].get(k) is not None]
+            if d:
+                x, k = max(d)
+                out_.append({"n": r["n"], "k": k, "name": segs_def[k]["name"], "v": r["segs"][k], "med": seg_st[k]["med"], "more": x})
+        return out_
+
     for i, l in enumerate(lines_def):
         ends = [r["ends"][i] for r in rounds if r["ends"][i] is not None]
         if not ends:
@@ -184,7 +196,7 @@ def judge(scenario, rounds, prev=None):
                              "verdict": ANSWER if by_answer else vs["change"] if vs else RECORDED, "exp": e, "vs": vs,
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category", "start_gap")} if es else None,
                              "combo": ANSWER_TXT if by_answer and e is None else combo(e, vs, _big(l, seg_st, segs_def, st), es, st["med"]),
-                             "segments": l["segments"]})
+                             "segments": l["segments"], "round_cause": round_cause(l["segments"])})
 
     # 第一次反应：每轮几条线里最早到的那一下
     if out["lines"]:

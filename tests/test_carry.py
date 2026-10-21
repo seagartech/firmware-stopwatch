@@ -179,8 +179,8 @@ def test_user_asks_1017_noise_retest_label_advice_reuse_short_totals(run_ok=None
     assert "Math.abs(d)<=Math.max(.1,Math.abs(prev)*.1)" in c and "持平" in c  # 和后台 judge.vs_prev 同一条规则
     assert "flow==='retest'||remeasure?'改完再测':'第一次测'" in JS and "if(!REAL)return;remeasure=true;" in JS
     assert "沿用 ${htmlEsc(ADV.at)} 写的" in JS
-    rows = next(x for x in JS.splitlines() if "const lineRows=" in x)
-    assert 'class="tipname" title=' in rows and "合计</b>：" not in rows
+    d = grab("dev")  # 10-21 用户：合计名字短（"…合计"），段按线分组写在组头里，不再藏在悬停里
+    assert 'class="grp"' in d and " 合计</b>" in d and "tipname" not in d
 
 
 def test_advice_signature_ignores_which_rounds_and_seconds():

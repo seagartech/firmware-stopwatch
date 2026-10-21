@@ -15,7 +15,7 @@ PROJ = Path.home() / "firmware-stopwatch-data" / "xiaozhi-899bf4"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PORT = 8798
 INJECT = """<script>(async()=>{autoSave=function(){};await new Promise(r=>setTimeout(r,1500));
-const pg=await (await fetch('/_page')).json();REAL={work:SRC,project_dir:PDIR};IDENT={page:pg};FSWJ={status:'done'};mode='boss';
+const pg=await (await fetch('/_page')).json();REAL={...PJ,work:SRC,project_dir:PDIR};pName=PJ.name+(PJ.board?`（${PJ.board}）`:'');IDENT={page:pg};FSWJ={status:'done'};mode='boss';
 page='report';await fetchReport();JREP.raw_log=RAW;render();
 await advStart();await fetch('/_advwait');ADV=await (await fetch('/api/advise')).json();fixPick=null;
 render();await exportReport(OUT);document.title='DONE';})()</script>"""
@@ -29,6 +29,8 @@ def one(run, out_dir):
     shutil.copy(PROJ / "project.json", p / "project.json")
     if (PROJ / "advice").is_dir():  # 存下的建议：问题没变就直接用，不再调用大模型
         shutil.copytree(PROJ / "advice", p / "advice")
+    pj = json.loads((PROJ / "project.json").read_text(encoding="utf-8"))  # 项目名、芯片、板子：报告顶上那行要用（10-21 修：以前没带，导出成"，还没选板子"）
+    pj = {k: pj.get(k) or "" for k in ("name", "chip", "board")}
     src = json.loads((PROJ / "project.json").read_text(encoding="utf-8")).get("source") or ""
     for r in sorted((PROJ / "runs").iterdir()):
         if r.name < run and (r / "raw.log").exists() and (r / "run.json").exists():
@@ -76,7 +78,7 @@ def one(run, out_dir):
     @app.get("/_regen")
     def _regen():
         html = (Path(__import__("fsw.web.app", fromlist=["x"]).__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
-        return HTMLResponse(html.replace("</body>", f"<script>const OUT={json.dumps(str(out_dir))};const RAW={json.dumps(str(target / "raw.log"))};const SRC={json.dumps(src)};const PDIR={json.dumps(str(p))};</script>{INJECT}</body>"))
+        return HTMLResponse(html.replace("</body>", f"<script>const OUT={json.dumps(str(out_dir))};const RAW={json.dumps(str(target / "raw.log"))};const SRC={json.dumps(src)};const PDIR={json.dumps(str(p))};const PJ={json.dumps(pj, ensure_ascii=False)};</script>{INJECT}</body>"))
 
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=PORT, log_level="warning"))
     th = threading.Thread(target=srv.run, daemon=True)

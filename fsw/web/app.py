@@ -331,6 +331,32 @@ class SyncBody(BaseModel):
     skipped: list[str] = []
 
 
+def code_ctx(job):
+    """技术细节"展开代码"：每个计时点在原版源码里的位置、函数名和前后各 3 行（10-21 用户定）。
+    读项目里记的原版源码（只读）；计时版插过计时点，行号会变，不用它。截下来放进报告，发给别人、断网也能看。"""
+    page, pd = (job or {}).get("_page") or {}, (job or {}).get("_project_dir")
+    try:
+        root = Path(json.loads((Path(pd) / "project.json").read_text(encoding="utf-8"))["source"]).resolve()
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    out = {}
+    for s in page.get("steps") or []:
+        path, line = s.get("path"), s.get("l")
+        if not path or not isinstance(line, int) or line <= 0:
+            continue
+        f = (root / path).resolve()
+        if root not in f.parents or not f.is_file():
+            continue
+        try:
+            src = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        a = max(1, line - 3)
+        out[s["p"]] = {"path": path, "l": line, "func": re.sub(r"[（(].*$", "", s.get("func") or "").strip(),
+                       "ctx": [[n, src[n - 1]] for n in range(a, min(len(src), line + 3) + 1)]}
+    return out
+
+
 def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
                config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None):
     app = FastAPI(title="固件码表")
@@ -1404,7 +1430,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                    "startName": (sc.get("start") or {}).get("name", ""),
                    "gap": [{"n": r["n"], "names": r["gap"]} for r in ok if r.get("gap")]}
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
-                "timing": _timing() if raw else None, "quality": quality, "start_lag": _start_lag(raw, sc),
+                "quality": quality, "start_lag": _start_lag(raw, sc), "code": code_ctx(job) if raw else {},
                 "prev": prev,
                 "measured_at": (job or {}).get("measured_at") if ok and same else None}
 
