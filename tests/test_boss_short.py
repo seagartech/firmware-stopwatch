@@ -63,6 +63,7 @@ def test_details_folded_by_default():
     assert "不用改的" not in fa and "S.fine" not in fa  # 收起块删了（10-21 用户定）
     ot = grab("optTable")
     assert "pick?'':ESTNOTE" in ot  # 工作量怎么分：表下一行小字
+    assert "replace(/^(小|中|大|不确定)" in ot  # 依据开头重复的档位去掉
     est = grab("ESTNOTE")
     assert "不确定" in est and "估算" not in est and "自动改代码" not in est
     ok = grab("devOk")
