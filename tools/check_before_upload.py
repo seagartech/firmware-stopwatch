@@ -40,8 +40,9 @@ PROCESS_NAMES = [
 # 这两个文件里必须写出过程文档的名字才能检查它们，只对"过程文档"这一类放行
 SELF_FILES = {"tools/check_before_upload.py", "tests/test_check_before_upload.py"}
 
-# GitHub 给每个账号的匿名邮箱，只有用它当提交邮箱才不暴露真实邮箱
-ANON_EMAIL = re.compile(r"@users\.noreply\.github\.com$")
+# GitHub 给每个账号的匿名邮箱，只有用它当提交邮箱才不暴露真实邮箱；
+# 云端 AI 提交用的 noreply@anthropic.com 是公开的不收信地址，不算私人信息（2026-10-21 用户定）
+ANON_EMAIL = re.compile(r"@users\.noreply\.github\.com$|^noreply@anthropic\.com$")
 
 DEFAULT_PRIVATE_WORDS = Path.home() / ".config" / "firmware-stopwatch" / "upload_private_words.txt"
 

@@ -60,7 +60,7 @@ def test_real_log_first_sentence_after_wake_is_round_1():
     assert [r["t"][1] for r in got[1:4]] == [60.746, 66.436, 71.696]    # 后面几轮和实测时一样
 
 
-TRY = Path(__file__).parent / "fixtures" / "try_wake_then_question_interrupted.log"
+TRY = Path(__file__).parent / "fixtures" / "try_wake_then_question_interrupted.txt"
 REAL2 = Path.home() / "firmware-stopwatch-data" / "xiaozhi-899bf4" / "runs" / "20261020-082418"  # 只在用户那台 Mac 上有
 
 
