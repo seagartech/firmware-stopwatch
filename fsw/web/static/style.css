@@ -211,6 +211,7 @@ table.num td.r,table.num th.r{white-space:nowrap}
 .bopt{padding:8px 10px;cursor:pointer;font-size:14.5px}
 .bopt.hi,.bopt:hover{background:var(--bg2,rgba(0,0,0,.05))}
 .bopt[aria-selected="true"]{font-weight:600}
+.bopt.off{color:var(--muted);cursor:not-allowed}.bopt.off:hover{background:none}
 
 /* 正在做的那一步：序号外面转圈（决策 105） */
 .istep.cur>b{position:relative}
