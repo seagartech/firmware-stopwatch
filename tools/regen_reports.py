@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
+from fsw import measure as meas, standards as stds
 from fsw.web.app import create_app
 
 PROJ = Path.home() / "firmware-stopwatch-data" / "xiaozhi-899bf4"
@@ -36,10 +37,12 @@ def one(run, out_dir):
         if r.name < run and (r / "raw.log").exists() and (r / "run.json").exists():
             shutil.copytree(r, p / "runs" / r.name)
     lines = (target / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
+    page = json.loads((target / "run.json").read_text(encoding="utf-8"))["page"]
+    last = meas.Spec.from_scenario(stds.real_scenario(page, stds.find(page.get("steps") or []), None)).last
     pts = [(i, l.split(",")[1]) for i, l in enumerate(lines) if l.startswith("FSW,P")]
     seen, cut = set(), None
-    for i, name in pts:  # 第 2 轮从第一个重复出现的计时点开始（P1 不一定最先打印，不能按第二个 P1 切）
-        if name in seen:
+    for i, name in pts:  # 第 2 轮从第一个重复出现的计时点开始（P1 不一定最先打印，不能按第二个 P1 切；回答放完这类一轮里报好几次的点不算）
+        if name in seen and name not in last:
             cut = i
             break
         seen.add(name)
