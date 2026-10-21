@@ -668,7 +668,7 @@ async function exportReport(folder){
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
   EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path}
-// 接下来找谁（10-21 用户定）：每人一段消息。服务器、网络、第三方可能是别家公司，消息一律按外部对接人写：
+// 协作沟通（10-21 用户定）：每人一段消息。服务器、网络、第三方可能是别家公司，消息一律按外部对接人写：
 // 不带我们的源码位置，不用码表的内部说法（码表、达标率、线名），附设备外几段的每轮数据方便对方对日志；发给固件研发的另附改法和代码位置
 const isFw=w=>/固件/.test(w);
 function todoText(w,chosen,FX,D){const mine=chosen.filter(o=>o.who===w),fw=isFw(w),[dev,what]=String(D.S.crumb).split(' · ');
@@ -684,13 +684,13 @@ const pNos=o=>'问题 '+o.fis.map(i=>i+1).join('、');
 function myPick(D,FX){initPick(FX);
   if(!FX.length)return '';  // 没有要改的问题：不显示
   const chosen=pickedOpts(FX),who=[...new Set(chosen.map(o=>o.who))];
-  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">接下来找谁</h3><p class="note" style="margin:0 0 8px">每个问题按「建议」方案，按人合成一段，复制后发给对方。发给设备以外的人（服务器、网络等）的不带源码位置，可以直接转给外部对接人。</p>
-   ${who.map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX,D)}</pre></div>`).join('')}</div>`;
+  // 协作沟通（10-21 用户定名、默认收起）：收起时也看得出要找谁、几件
+  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak);padding-top:10px;padding-bottom:10px"><details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"><span><b>协作沟通</b>　发给：${who.map(w=>`${w}（${chosen.filter(o=>o.who===w).length} 件）`).join('、')}</span></summary><p class="note" style="margin:8px 0">每个问题按「建议」方案，按人合成一段，复制后发给对方。发给设备以外的人（服务器、网络等）的不带源码位置，可以直接转给外部对接人。</p>
+   ${who.map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX,D)}</pre></div>`).join('')}</details></div>`;
 }
 function fixA(D){const FX=activeFixes(D);initPick(FX);
   return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
-   <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：为什么、对用户的影响、可选方案<span hidden>${fi}</span></summary>
-   <h3 style="margin:10px 0 8px">${F.title}</h3>
+   <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}<span>问题 ${fi+1}：<b>${F.title}</b>${(F.opts.find(o=>o.rec)||F.opts[0])?`　建议：${(F.opts.find(o=>o.rec)||F.opts[0]).name}`:''}</span><span hidden>${fi}</span></summary>
    <p style="margin:0 0 6px"><b>为什么：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>
    ${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX)+
    `<details class="lvwhy"><summary>不用改的、工作量和效果怎么估的</summary><p class="note" style="margin:6px 0 0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}</details>`;
