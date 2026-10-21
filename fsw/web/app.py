@@ -1123,7 +1123,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.post("/api/collect/start")
     def collect_start(body: CollectBody):
         if not 3 <= body.rounds <= 100:
-            raise HTTPException(400, "测几轮要在 3～100 轮之间：3～9 轮适合跑流程，正式测建议 20 轮以上。")
+            raise HTTPException(400, "轮数要在 3～100 轮之间。")
         old = col["job"]
         if old and old["status"] in ("running", "waiting_device", "paused"):
             old["_stop"] = True
@@ -1222,7 +1222,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["gap_run"] = run
                     worst = max(run.items(), key=lambda kv: kv[1], default=None)
                     if worst and worst[1] >= MISS_RUN:
-                        job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都记在起点之前，不像是这一轮的事，这几轮用到它的两段空着。"
+                        job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都不在这一轮该在的位置（没打出来，或者比它前一步还早），这几轮用到它的两段空着。"
                                             "要是上一轮没有被中途打断，多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 elif not r.get("stale"):  # 没收全：同一个点连着几轮都没收到，点名（多半是这一步没走到，或者插的位置走不到）
                     run = {m: job.get("miss_run", {}).get(m, 0) + 1 for m in r.get("missing") or []}
@@ -1663,7 +1663,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.get("/api/rounds")
     def rounds_template(what: str = "", start: str = ""):
-        """多轮实测每轮做什么：按你写的"测什么"挑模板（对话类用固定的 20 句；别的按起点的说法，比如"按一下按键"）。"""
+        """多轮实测每轮做什么：按你写的"测什么"挑模板（对话类用固定的一组句子，按轮数取前几句；别的按起点的说法，比如"按一下按键"）。"""
         t = next(t for t in ROUNDS if not t["match"] or re.search(t["match"], what))
         fill = lambda v: [fill(x) for x in v] if isinstance(v, list) else str(v).replace("{start}", start.strip() or "触发一次")
         return {"template": t["name"], **{k: fill(v) for k, v in t["fields"].items()}}

@@ -327,8 +327,114 @@ def test_carried_round_still_takes_its_late_last_sound():
 
 
 def test_carried_round_not_complete_is_left_alone():
-    """带过来的那一轮没收全（比如还差最后一声）：不提前交，照旧等。"""
+    """带过来的那一轮缺的不只是最后一声（这里还差"收到听写文字"）：不提前交，照旧等。"""
+    c = m.Collector(interrupt_spec())
+    for l in MISSED_RESET_LOG[:8]:
+        c.feed(l)
+    assert c.close_carried() == []
+
+
+def test_carried_round_missing_only_last_sound_turns_green_and_takes_it_late():
+    """只差"不判快慢"那条线的最后一声：开测马上交出（那条线先空着），最后一声晚到了照样算回这一轮。"""
     c = m.Collector(interrupt_spec())
     for l in MISSED_RESET_LOG[:9]:
         c.feed(l)
-    assert c.close_carried() == []
+    first = c.close_carried()
+    assert len(first) == 1 and first[0]["ok"] and first[0]["ends"][2] is None and first[0]["gap"]
+    upd = c.feed("FSW,P10,22758257,155")
+    assert len(upd) == 1 and upd[0].get("update") and round(upd[0]["ends"][2], 2) == 10.62 and not upd[0].get("gap")
+
+
+# ---- 10-21 真测：试一次收齐就停，带过来的那一轮最后一声（回复放完）换调试口时丢了 ----
+LOST_LAST_LOG = """FSW,P1,21065839,0
+FSW,P2,21405112,0
+FSW,P3,21429037,0
+FSW,P4,21431236,0
+FSW,P9,21909767,0
+FSW,P10,21910749,0
+FSW,P5,22274839,0
+FSW,P6,22285020,0
+FSW,P8,24866389,44
+FSW,P8,25586359,12
+FSW,P7,25640290,0
+FSW,P1,30846121,0
+FSW,P2,31112925,0
+FSW,P3,31181739,0
+FSW,P4,31184633,0
+FSW,P9,31559124,0
+FSW,P10,31560071,0
+FSW,P5,32020559,0
+FSW,P6,32034400,0
+FSW,P7,35277272,0
+FSW,P8,35336324,56
+FSW,RESET,35336769,0""".splitlines()
+
+
+def test_carried_round_with_lost_last_sound_does_not_swallow_next_sentence():
+    """10-21 用户："第一次说'一加一等于几'后，并没有直接把第一个格子标绿"。试一次那句只差放完那一声（丢了）：
+    以前那一轮一直等，把"一加一"并进来，第 1 轮放完记成 9.7 秒。现在开测就交出试一次那句，"一加一"单独算第 2 轮。"""
+    segs = {"P1-P2": ["P1", "P2"], "P2-P3": ["P2", "P3"], "P3-P4": ["P3", "P4"], "P4-P5": ["P4", "P5"], "P5-P6": ["P5", "P6"],
+            "P6-P7": ["P6", "P7"], "P7-P8": ["P7", "P8"]}
+    talk = [segs[k] for k in ("P1-P2", "P2-P3", "P3-P4", "P4-P5", "P5-P6")]
+    spec = m.Spec(start="P1", segments=segs, lines=[{"name": "到出声", "segs": talk},
+                                                    {"name": "到放完", "segs": talk + [segs["P6-P7"], segs["P7-P8"]]}],
+                  need=["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"], last={"P8"}, soft={"P7", "P8"}, marks={"P1", "P8"},
+                  names={"P8": "回复播放完毕"})
+    c = m.Collector(spec)
+    for l in LOST_LAST_LOG[:11]:
+        c.feed(l)
+    first = c.close_carried()
+    assert len(first) == 1 and first[0]["ok"] and round(first[0]["segs"]["P1-P2"], 6) == 0.339273 and first[0]["ends"][1] is None
+    out = []
+    for l in LOST_LAST_LOG[11:]:
+        out += c.feed(l)
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 1 and ok[0]["n"] == 2 and not ok[0].get("update")
+    assert round(ok[0]["segs"]["P1-P2"], 6) == 0.266804 and round(ok[0]["ends"][1], 6) == round((35336324 - 30846121) / 1e6, 6)
+
+
+def _order_spec():
+    """10-21 真测的场景：收到合成结束（P7）和回复播放完毕（P8）都"记最后一次"，两者谁先谁后不一定。"""
+    segs = {"P1-P2": ["P1", "P2"], "P2-P3": ["P2", "P3"], "P3-P4": ["P3", "P4"], "P4-P5": ["P4", "P5"], "P5-P6": ["P5", "P6"],
+            "P6-P7": ["P6", "P7"], "P7-P8": ["P7", "P8"]}
+    talk = [segs[k] for k in ("P1-P2", "P2-P3", "P3-P4", "P4-P5", "P5-P6")]
+    return m.Spec(start="P1", segments=segs, lines=[{"name": "到出声", "segs": talk},
+                                                    {"name": "到放完", "segs": talk + [segs["P6-P7"], segs["P7-P8"]]}],
+                  need=["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"], last={"P8"}, soft={"P7", "P8"},
+                  marks={"P1", "P7", "P8"}, names={"P8": "回复播放完毕"})
+
+
+ORDER_LOG = """FSW,RESET,26538948,0
+FSW,P1,26662903,0
+FSW,P1,30566234,0
+FSW,P2,30939601,0
+FSW,P3,30973754,0
+FSW,P4,30976263,0
+FSW,P5,31763199,0
+FSW,P6,31772650,0
+FSW,P8,35316336,60
+FSW,P7,35371142,0
+FSW,RESET,35373674,0
+FSW,P1,35516299,0""".splitlines()
+
+
+def test_playback_done_before_synthesis_end_closes_at_reset():
+    """10-21 用户：先放完、50 毫秒后才收到合成结束的轮，以前收不了尾，要等下一句开口才变绿，还连着几轮报"记在起点之前"。
+    现在回到聆听就交出，放完照常记上（这两段先后乱了，报告合成一段）。"""
+    c = m.Collector(_order_spec())
+    out = []
+    for l in ORDER_LOG[:11]:
+        out += c.feed(l)
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 1 and not ok[0].get("gap") and round(ok[0]["ends"][1], 6) == round((35316336 - 30566234) / 1e6, 6)
+    assert ok[0]["segs"]["P7-P8"] < 0
+
+
+def test_step_bar_waits_for_next_step_before_lighting_start():
+    """10-21 用户："上面变绿色字的又开始错乱了"：回到聆听 0.12 秒后设备多报一次"说完"，人还没开口第一步就绿了。"""
+    c = m.Collector(_order_spec())
+    for l in ORDER_LOG[:3]:
+        c.feed(l)
+    assert c.have() == []
+    c.feed(ORDER_LOG[3])
+    assert c.have() == ["P1", "P2"]

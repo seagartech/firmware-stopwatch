@@ -291,7 +291,7 @@ def test_real_collect_page_does_not_borrow_demo_content():
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
     assert "/api/rounds" in js and "const CX=" in js and "const DX=" in js
     for fn in ("function colSetup(", "function colA(", "function colB(", "function colC(", "function tipOf(",
-               "function needMore(", "function enough(", "function colApply("):
+               "function colApply("):
         body = js.split(fn)[1].split("\nfunction ")[0]
         assert "build(SCENES[scene])" not in body and "CC()" not in body, fn
 
@@ -342,10 +342,11 @@ def test_flash_page_says_when_insert_plan_was_reused():
     assert "FSWJ.reused" in js and "用上次的插入方案，没调用大模型" in js
 
 
-def test_round_count_is_flexible_3_to_100():
-    """测几轮：10 / 20 / 30 快捷按钮 + 自己填（3～100）；停下满 3 轮就能看报告；报告按轮数分三档说。"""
+def test_round_count_is_fixed_10():
+    """测几轮固定 10 轮，不让人选（决策 170）；停下满 3 轮就能看报告；报告按轮数分三档说。"""
     js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
-    assert 'id="col-n"' in js and 'min="3" max="100"' in js
+    assert 'id="col-n"' not in js and "data-coln" not in js and "测几轮" not in js and "const colN=AUTO_ROUNDS" in js
+    assert "colN=u.colN" not in js  # 以前存下的轮数（比如 20）不再带回来
     assert "can=k>=MIN_ROUNDS" in js and "const MIN_ROUNDS=3" in js
     rp = js.split("function reportPage(")[1].split("\nfunction ")[0]
     assert "适合跑流程，数字不作数" in rp
