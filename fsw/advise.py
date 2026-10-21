@@ -88,7 +88,9 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - impact：对用户的影响。
 - opts：2～3 个方案。每个方案写 name、how（具体改法，固件改动写到文件和行号附近）、size（改动大小，比如"约 20 行，只加不改"）、
   rk（风险）、effect（效果，一律是估算，写"约多少秒"）、cost（代价）、work（工作量，只能写 大、中、小、不确定 之一）、
-  wn（工作量的依据，一句话）、who（找谁：固件研发 / 服务器方 / 后端研发 / 产品 等）、rec（建议做的写 1，不建议就不写）。
+  wn（工作量的依据，一句话）、who（找谁：固件研发 / 服务器方 / 后端研发 / 产品 等）、rec（建议做的写 1，不建议就不写）、
+  ask（直接发给 who 的请求：请对方做什么、看哪几步，带上相关数据）。
+- done：怎么算解决，一句话，写对方也能看懂的具体数字（比如"说完到开始播放一般回到 0.5 秒左右、每轮都不超过 2.0 秒"）。
 - rec：最后一句建议。
 - dev：给研发看的技术细节：data（相关数据）、cause（原因）、change（改法）、size（改动大小）、rk（风险）、verify（改完怎么用码表验证）。
 - 另外写一句 fine："不用改的"是哪些（设备自己哪几段正常）。
@@ -118,6 +120,8 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - 问题里写了"超过标准 1.5 倍"的那几轮，why 要说那几轮多出来的时间在哪一段（对照上面各段"偶发特别慢"的轮次）；对不上就写"推断"。
 - 要加计时点的方案，先看上面"计时点在代码里的位置"：新点要能把一段拆开，不能和已有的点在同一处或紧挨着。
 - 加计时点把一段拆开的方案不算查原因：按改一处判工作量，effect 写"能把这 X 秒拆成哪几截，看清慢在哪一截"。
+- ask 和 done 会原样发给对方，对方可能是别家公司（服务器、云服务、第三方）：不写我们的文件名、行号、函数名，
+  不写"码表""达标率""计时点""线"这些我们内部的说法，不写"上次"（写"我们之前测的一次"）；用业内通行说法（语音识别、首包音频、表情指令等）。
 - dev.verify 用线的名字写（比如"「从刷卡到门开」一般用时降到 0.5 秒以下"），不写计时点编号。
 说明文字里写段和计时点的中文名（比如"服务器生成回复"），名字照原样用，不改成口语，不要写 P2-P5 这样的编号；代码位置写文件名和行号。
 why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的：不能写文件名、行号、函数名、变量名；代码位置只写在 how 和 dev 里。
@@ -126,8 +130,8 @@ why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的�
 只输出一个 ```json 代码块：
 ```json
 {{"fixes": [{{"when": ["问题编号"], "seg": "主要涉及的段编号（seg 只写一段；讲了几段就写最主要的那段）", "why": "…", "impact": "…",
-  "opts": [{{"name": "…", "how": "…", "size": "…", "rk": "…", "effect": "约 … 秒", "cost": "…", "work": "小", "wn": "…", "who": "固件研发", "rec": 1}}],
-  "rec": "…", "dev": {{"data": "…", "cause": "…", "change": "…", "size": "…", "rk": "…", "verify": "…"}}}}],
+  "opts": [{{"name": "…", "how": "…", "size": "…", "rk": "…", "effect": "约 … 秒", "cost": "…", "work": "小", "wn": "…", "who": "固件研发", "rec": 1, "ask": "…"}}],
+  "rec": "…", "done": "…", "dev": {{"data": "…", "cause": "…", "change": "…", "size": "…", "rk": "…", "verify": "…"}}}}],
  "fine": "…"}}
 ```
 """
@@ -206,6 +210,10 @@ def check(data, j, scenario):
                     bad.append(f"{where}方案 {oi} 没写{name}")
             if (o or {}).get("work") and o["work"] not in WORK:
                 bad.append(f"{where}方案 {oi} 的工作量只能写大、中、小、不确定")
+        for d, k, name in ((f, "done", "怎么算解决"), *((o, "ask", f"方案 {oi} 的请求") for oi, o in enumerate(opts, 1) if isinstance(o, dict))):
+            t = str(d.get(k) or "")   # 原样发给对方（可能是别家公司）：不带代码、不用码表的内部说法
+            if (hit := _code_in(t) or next((w for w in OUTSIDE_BAN if w in t), None)):
+                bad.append(f"{where}{name}会发给对方，不能写「{hit}」")
         for k in MANAGER_FIELDS:
             if (hit := _code_in(f.get(k))):
                 bad.append(f"{where}给负责人看的文字里写了代码（{hit}），代码位置只能写在改法和技术细节里")
@@ -265,7 +273,7 @@ def _sec2_sub(text):
 
 def _tidy(f, opts):
     """给负责人看的文字：秒数留一位小数；效果栏表头已写"估算"，去掉 AI 自己加的"（估算）"。技术细节不动。"""
-    for d, ks in ((f, MANAGER_FIELDS), *((o, MANAGER_OPT_FIELDS) for o in opts if isinstance(o, dict))):
+    for d, ks in ((f, (*MANAGER_FIELDS, "done")), *((o, (*MANAGER_OPT_FIELDS, "ask")) for o in opts if isinstance(o, dict))):
         for k in ks:
             if isinstance(d.get(k), str):
                 d[k] = _sec_sub(d[k])
@@ -278,6 +286,7 @@ def _tidy(f, opts):
 
 
 MANAGER_FIELDS = ("why", "impact", "rec")
+OUTSIDE_BAN = ("码表", "达标率", "计时点")
 MANAGER_OPT_FIELDS = ("name", "effect", "cost", "wn")
 CODE_RE = re.compile(r"[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp|py|js)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\)|\b[a-z]+[A-Z]\w*|\b[A-Za-z]+_\w+")
 
@@ -300,7 +309,7 @@ def _rounds_said(text):
 
 
 # 写法要求改了就加一，旧的建议不再沿用
-PROMPT_VER = 12
+PROMPT_VER = 13
 
 
 def signature(j, scenario):
