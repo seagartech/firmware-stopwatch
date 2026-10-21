@@ -105,3 +105,4 @@ def test_home_greys_out_boards_with_another_chip():
     assert "const list=boardOk(hBoardQ)" in JS                      # 上下键、回车只在能选的里面走
     assert "换成 ${DEVCHIP.chip} 的板子" in JS                # 已选的板子对不上：开始测量点不了，写明还差什么
     assert "正在读设备上的芯片，设备会重启一下" in JS
+    assert "另有 ${off.length} 块芯片不同的板子不能选，变灰排在最后" in JS    # 列表只显示前 50 块：变灰的在后面看不到，开头先说一句（10-21 用户走查）
