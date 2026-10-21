@@ -95,6 +95,7 @@ def label(j):
 @pytest.mark.parametrize("a,b,fair,pv,level,why", [
     (0.6, 1.0, 1.5, None, "必须改", "达标率 0%，20 次里 20 次超过标准 1.5 秒"),                         # 每轮 1.6 都超过 1.5
     ([0.3] * 20, [0.6] * 17 + [3.0] * 3, 1.5, None, "必须改", "20 次里 3 次超过标准 1.5 秒的 1.5 倍"),  # 3.3 > 2.25 的占 15% > 10%
+    ([0.3] * 10, [0.6] * 7 + [1.6] * 2 + [3.0], 1.5, None, "建议改", "达标率 70%，10 次里 3 次超过标准 1.5 秒"),  # 超过 1.5 倍的正好 10%：不 > 10%，不算必须改（10-21 真测第 8 轮）
     ([0.6] * 20, [0.6] * 17 + [1.6] * 3, 1.5, None, "建议改", "达标率 85%，20 次里 3 次超过标准 1.5 秒"),  # 2.2 超标但没到 2.25：达标率 85% < 90%
     ([0.3] * 20, [0.9] * 10 + [1.8] * 10, 1.5, None, "建议改", "达标率 50%，20 次里 10 次超过标准 1.5 秒"),  # 正好一半超标：中位数 1.65 超标，原来判必须改；达标率 50% 不 < 50%，现在判建议改（10-20 用户同意）
     (0.6, 1.0, 9.0, prev(1.4), "建议改", "比上次慢了 0.20 秒"),                            # 体验可以，比上次慢 0.2（大于 0.1 秒，也大于上次的 10%）
@@ -103,7 +104,7 @@ def label(j):
     (0.6, 1.0, None, None, "未判", "没有体验标准，也没有上次可比，这次只记用时"),           # 第一次测，也没有体验标准
 ])
 def test_line_labels(a, b, fair, pv, level, why):
-    j = J.judge(sc(fair=fair), rounds(a, b), pv)
+    j = J.judge(sc(fair=fair), rounds(a, b, n=len(b) if isinstance(b, list) else 20), pv)
     assert (label(j)["level"], label(j)["why"]) == (level, why)
 
 
@@ -314,3 +315,10 @@ def test_biggest_is_on_the_main_line_not_the_answer_length_line():
     rs = [{"n": i + 1, "segs": {"a": 1.0, "b": 2.0 + i * 0.3}, "ends": [1.0, 3.0 + i * 0.3], "probs": []} for i in range(10)]
     j = J.judge(s, rs)
     assert j["lines"][1]["verdict"] == J.ANSWER and j["biggest"] == "a"
+
+
+def test_must_by_big_rounds_names_the_rounds_for_the_round_chart():
+    # 10-21 真测：必须改写的是"超过标准 1.5 倍"，逐轮图却没标是哪几轮
+    j = J.judge(sc(fair=1.5), rounds([0.3] * 20, [0.6] * 17 + [3.0] * 3))
+    assert (label(j)["rounds"], label(j)["tail"]) == ([18, 19, 20], 1.5)
+    assert "rounds" not in label(J.judge(sc(fair=1.5), rounds(0.6, 1.0)))   # 达标率低的必须改不点名轮次：看红虚线
