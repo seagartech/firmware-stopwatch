@@ -233,7 +233,7 @@ def judge(scenario, rounds, prev=None):
             lv, why = "达标", ANSWER_TXT
         elif l["exp"] == "差":
             lv, why, sev = "必须改", rate_txt(l), 2 - l["pass_rate"]
-        elif "pass_rate" in l and l["count"] >= 10 and l["big_n"] / l["count"] > 1 - PASS_OK:
+        elif "pass_rate" in l and l["count"] >= 10 and l["big_n"] / l["count"] > round(1 - PASS_OK, 6):  # 1 - 0.9 算出来是 0.0999…，不取整会把正好 10% 判成大于 10%
             lv, why, sev = "必须改", f"{l['count']} 次里 {l['big_n']} 次超过标准 {fair} 秒的 {TAIL_BIG} 倍", 1 + l["big_n"] / l["count"]
         elif "pass_rate" in l and l["count"] >= 10 and l["pass_rate"] < PASS_OK:
             lv, why, sev = "建议改", rate_txt(l), 10 + 1 - l["pass_rate"]   # 超标的排在"比上次慢"前面
@@ -245,7 +245,8 @@ def judge(scenario, rounds, prev=None):
             lv = "达标"
             why = "；".join(x for x in (exp_txt(l["exp"], l["exp_std"] or {}, l["med"]) if l["exp"] else None,
                                          None if not vs else "和上次比持平" if vs["change"] == "持平" else f"比上次快了 {-vs['d']:.2f} 秒") if x)
-        labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why})
+        labels.append({"k": f"line:{l['name']}", "kind": "line", "line": l["name"], "level": lv, "why": why,
+                       **({"rounds": l["big_rounds"], "tail": TAIL_BIG} if why.endswith(f"{TAIL_BIG} 倍") else {})})  # 点名了超过几倍的轮：逐轮图标红这几轮
         sevs[f"line:{l['name']}"] = sev
     for p in scenario.get("problems") or []:  # 对错问题：功能出错，不是快慢，单独一块，只写出错的轮次
         rs = [r["n"] for r in rounds if p["key"] in (r.get("probs") or [])]
