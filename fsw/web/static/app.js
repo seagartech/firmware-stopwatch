@@ -68,7 +68,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
-  firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],fine:ADV&&ADV.status==='done'&&ADV.fine?htmlEsc(ADV.fine):(()=>{const ok=J.segments.filter(g=>!g.outside&&!g.spiky&&g.verdict!=='慢了'&&g.verdict!=='看回答长短');return ok.length?`设备自己的几段（${ok.map(g=>`${htmlEsc(g.name)} ${fms(g.med)} 秒`).join('、')}）没有偶发特别慢${J.prev&&J.prev.segs?'，也没比上次慢':''}，不用改。`:'设备自己的几段还没有能判的。'})(),
+  firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],
   tech:{cond:[['项目',`${htmlEsc(REAL.name)}，${CHIP()}`],['判快慢依据',`${sc.experience?`体验标准：超过 ${sc.experience.fair} 秒算差（${htmlEsc(sc.experience.short||'参考值')}）`:'没有对得上的体验标准'}；${J.prev&&J.prev.segs?`和上次（${htmlEsc(J.prev.measured_at)}，${J.prev.n} 轮）比`:'第一次测，没有上次可比'}`]],pts:sc.points?Object.keys(sc.points).length:(IDENT.page.steps||[]).length,
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
@@ -228,13 +228,16 @@ function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;if
   // 一句话里只留最关键的效果：优先摘出"约快 X 秒"，摘不出来、全文又不长才整句放，否则只写做什么，效果去"详情"里看
   const e=String(o.effect||''),m=e.match(/(?:约快|快约|快)\s*[\d.]+(?:～[\d.]+)?\s*秒/),eff=m?`，预计${m[0]}`:e&&e.length<=30?`，预计${e}`:'';
   return `建议：${o.name}${eff}。`}  // 出错 / 建议改 / 必须改每条一句的"建议"
+// 设备自己的段都正常时，拍板列表末尾说一句（10-21 用户定）：负责人知道不用找固件研发；明细在分段用时表里
+function devOk(D){const g=D.J?D.J.segments.filter(x=>!x.outside):[];if(!g.length||g.some(x=>x.spiky||x.verdict==='慢了'))return '';
+  return `<p class="note" style="margin:6px 0 0;color:var(--fg)">设备自己的几段都正常${D.J.prev&&D.J.prev.segs?'，也没比上次慢':''}，不用改。</p>`}
 function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
   // 每条一句（10-20 用户定）：标签（右对齐一列）、线名 用时：问题。建议：做什么，预计效果。　详情 → 问题 N　依据 → 数据
   // 标签规则（10-20 用户定）：一句来源 + 每个标签一行，和上面列表同一套标签、同样右对齐
   // 还有一个选择（10-21 用户定）：同一个问题里有找别人做的方案，点一句，免得藏在收起的方案表里；同一个方案只点一次
   const said=new Set(),alt=F=>{const r=F.opts.find(o=>o.rec)||F.opts[0],a=F.opts.find(o=>!o.rec&&o.who!==r.who&&!said.has(o.name));if(!a)return '';said.add(a.name);return `<br><span class="note" style="color:var(--fg)">还有一个选择：${a.name}。${a.effect}；${a.cost}。</span>`};
   const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${lvTag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+x.src[1])}${n>=0?alt(FX[n]):''}</span></li>`};
-  return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
+  return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${devOk(D)}${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
   <details class="lvwhy"><summary>标签规则</summary><p class="note" style="margin:8px 0">数字和标签由码表按规则算，"为什么、怎么改"由 AI 读代码写。</p><ul class="decide rules">
   <li><span class="tagcol">${lvTag(4)}</span><span>功能出错，不看快慢。</span></li>
   <li><span class="tagcol">${lvTag(0)}</span><span>达标率 &lt; 50%，或超过标准 1.5 倍的轮次 &gt; 10%。</span></li>
@@ -612,9 +615,10 @@ function staleBar(){if(!(JREP&&!JREP._none&&repKey().startsWith('real')))return 
 // 负责人看的文字不出现代码：括号里带文件名、行号、函数名的整段去掉（码表格式检查也会拦，这里兜底早先存下的建议）
 const noCode=t=>String(t||'').replace(/\s*[（(][^（）()]*?(?:[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\))[^（）()]*?[）)]/g,'');
 function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:noCode(plain(F.why)),impact:noCode(plain(F.impact)),rec:noCode(plain(F.rec)),opts:F.opts.map(o=>({...o,name:noCode(plain(o.name)),effect:noCode(plain(o.effect)),cost:noCode(plain(o.cost)),wn:noCode(plain(o.wn))}))})});return out}
-const ESTNOTE='<ul class="notes"><li><b>工作量</b>只分大、中、小，看的是要改多少、要不要别人配合，不折算成天数（码表不知道你们团队的人手和熟练度）。</li><li><span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护</li><li><b>效果</b>都是估算：依据是这次的实测数据、代码和公开资料，做完要用码表再测一次才算数。</li><li>码表只给建议，不会自动改代码。</li></ul>';
+// 工作量怎么分（10-21 用户定）：表下一行小字，不放收起块、不用浮窗
+const ESTNOTE='<p class="note" style="margin:6px 0 0">工作量：<span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护　<span class="wk wk-u">不确定</span> 要先查清原因</p>';
 function optTable(F,fi,pick){
-  return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>`;
+  return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>${pick?'':ESTNOTE}`;
 }
 function initPick(FX){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}  // 不再勾选（10-21）：每次都按建议方案算；以前只在第一次算，卡片还没到时算成空的，有的演示一直没有消息
 let copied=null;
@@ -692,8 +696,7 @@ function fixA(D){const FX=activeFixes(D);initPick(FX);
   return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
    <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}<span>问题 ${fi+1}：<b>${F.title}</b>${(F.opts.find(o=>o.rec)||F.opts[0])?`　建议：${(F.opts.find(o=>o.rec)||F.opts[0]).name}`:''}</span><span hidden>${fi}</span></summary>
    <p style="margin:0 0 6px"><b>为什么：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>
-   ${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX)+
-   `<details class="lvwhy"><summary>不用改的、工作量和效果怎么估的</summary><p class="note" style="margin:6px 0 0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}</details>`;
+   ${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX);
 }
 function fixB(D){const FX=activeFixes(D);
   if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}
@@ -707,7 +710,7 @@ function fixB(D){const FX=activeFixes(D);
    <div class="acts" style="margin-top:8px"><button class="btn pri" data-todo="1">${fixTodo?'收起待办':'生成待办，发给相关的人'}</button></div>
    ${fixTodo?`<pre style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13.5px;margin:10px 0 0">${Object.entries(who).map(([w,a])=>`【${w}】\n${chosen.filter(o=>o.who===w).map(o=>`· ${o.name}（${pNos(o)}：${FX[o.fi].title}）\n  做完的标准：${FX[o.fi].dev.verify}`).join('\n')}`).join('\n\n')}\n\n做完后用码表按同样的条件再测一次，看前后对比。</pre><p class="note">样子里只演示文字；真产品可以复制，或存成文件。</p>`:''}`
    :'<p class="note">还没勾任何方案。</p>';
-  return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div><p class="note" style="margin:0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}`;
+  return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div>${ESTNOTE}`;
 }
 function segJudge(D,s){if(D.J){const j=D.J.segments.find(x=>x.k===s.k);if(j){if(j.spiky)return ['偶发特别慢','c-warn'];return [VTXT[j.verdict]||j.verdict,VCLS[j.verdict]||'c-gray']}}const spk=s.max>s.med*2.5&&s.max-s.med>.3;return spk?['偶发特别慢','c-warn']:['只记录用时','c-gray']}
 function fixC(D){const FX=activeFixes(D);
@@ -718,7 +721,7 @@ function fixC(D){const FX=activeFixes(D);
    <div class="panel" id="fix-${fi}" style="border-left:3px solid ${F?(F.lv===0?'var(--bad)':'var(--warn)'):'var(--ok)'}"><h3 style="margin:0 0 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${F?lvTag(F.lv):''}${s.name} <span class="chip ${jc}">${jv}</span> <span class="note">谁负责：${s.owner}</span></h3>
    <p style="margin:0 0 6px"><b>这段在做什么：</b>${s.what}。</p>
    <p class="num" style="margin:0 0 10px">一般 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒</p>
-   ${F?`<p style="margin:0 0 6px"><b>为什么是问题：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p>`:'<p style="margin:0"><b>不用改。</b>这段没有偶发特别慢的轮，也没比上次慢。</p>'}</div>${ESTNOTE}`;
+   ${F?`<p style="margin:0 0 6px"><b>为什么是问题：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p>`:'<p style="margin:0"><b>不用改。</b>这段没有偶发特别慢的轮，也没比上次慢。</p>'}</div>`;
 }
 function fixDev(D){const FX=activeFixes(D);initPick(FX);
   return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来；"已选"跟着结论建议里的勾选走，改了勾选这里会跟着变。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>

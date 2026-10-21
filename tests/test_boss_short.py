@@ -60,7 +60,13 @@ def test_details_folded_by_default():
     fa = grab("fixA")
     assert "<details" in fa and "optTable(F,fi,false)" in fa.split("<details", 1)[1]  # 方案表收在里面，不再勾选（10-21）
     assert "<b>为什么：</b>" in fa.split("<details", 1)[1] and "<b>对用户的影响：</b>" in fa.split("<details", 1)[1]
-    assert "ESTNOTE" in fa.split("<details")[-1]  # 结尾说明收起
+    assert "不用改的" not in fa and "S.fine" not in fa  # 收起块删了（10-21 用户定）
+    ot = grab("optTable")
+    assert "pick?'':ESTNOTE" in ot  # 工作量怎么分：表下一行小字
+    est = grab("ESTNOTE")
+    assert "不确定" in est and "估算" not in est and "自动改代码" not in est
+    ok = grab("devOk")
+    assert "设备自己的几段都正常" in ok and "devOk(D)" in grab("decideList")
     dl = grab("decideList")
     assert "另有 ${" in dl and "达标" in dl and "标签规则" in dl.split("<details")[-1]
     mp = grab("myPick")
