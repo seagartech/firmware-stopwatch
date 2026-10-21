@@ -281,3 +281,5 @@ table.segtab tr.coderow td{padding-top:0}
 pre.codectx{margin:0;padding:8px;background:var(--soft);border-radius:6px;font-size:12px;line-height:1.5;white-space:pre;overflow-x:auto}
 pre.codectx i{font-style:normal;color:var(--muted);display:inline-block;width:3.2em;text-align:right;margin-right:10px;user-select:none}
 pre.codectx .hit{display:inline-block;min-width:100%;background:color-mix(in srgb,var(--warn) 18%,transparent);font-weight:600}
+/* 10-21 用户：1848 那份出了横向滚动条。路径、函数名在 / 和 :: 处换行（app.js 的 brk），别的列不硬撑 */
+table.segtab td .code{white-space:normal}
