@@ -676,7 +676,7 @@ function todoText(w,chosen,FX,D){const mine=chosen.filter(o=>o.who===w),fw=isFw(
   // 每轮数据：设备外的几段，表头写从哪个点到哪个点（几段的起点可能相同，写清楚免得对方相加）；一般不到 0.01 秒的段不列
   const outS=D.allSegs.filter(s=>((D.J&&D.J.segments.find(x=>x.k===s.k))||{}).outside&&s.med>=0.01),rows=D.rounds.map((r,i)=>[r.n,...outS.map(s=>s.v[i]==null?'—':s.v[i].toFixed(2))].join(' | '));
   const tbl=!fw&&outS.length?`\n\n每轮数据（秒，设备上记到的时刻之差）：\n轮 | ${outS.map(s=>String(s.code).split('→').map(p=>plain(p.trim()).replace(/^“|”$/g,'')).join(' → ')).join(' | ')}\n${rows.join('\n')}`:'';
-  return `【${dev}响应时间测量，请帮忙处理】\n\n你好，我们测了 ${dev} 从${what}的时间（${at}连续 ${D.n} 轮），有 ${mine.length} 件事想请你们帮忙：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];
+  return `【${dev}响应时间测量，请帮忙处理】\n\n你好，我们测了 ${dev}从${what}的时间（${at}连续 ${D.n} 轮），有 ${mine.length} 件事想请你们帮忙：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];
     return `${k+1}. ${noCode(plain(o.ask||o.name))}\n   怎么算解决：${noCode(plain(F.done||F.dev.verify))}`+(fw?`\n   改法：${plain(o.how)}`:'')}).join('\n\n')+tbl+`\n\n改好后告诉我们，我们按同样条件再测一次对比。`}
 // 勾了的方案；同一个人做同一件事出现在几张卡片里（10-20 真测：「思考中」表情两张卡片都有），待办只算一件，标上解决哪几个问题
 function pickedOpts(FX){const out=[],seen={};FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(!fixPick.has(fi+'-'+oi))return;const k=o.who+'|'+o.name;if(seen[k]){seen[k].fis.push(fi);return}out.push(seen[k]={...o,fi,fis:[fi]})}));return out}
