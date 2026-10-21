@@ -173,6 +173,14 @@ def test_history_with_anonymous_email_passes(tmp_path):
     assert scan(tmp_path) == []
 
 
+def test_ai_noreply_email_in_history_passes(tmp_path):
+    if not shutil.which("git"):
+        return
+    commit(git_repo(tmp_path), "noreply@anthropic.com", {"a.py": "x = 1\n"})
+
+    assert scan(tmp_path) == []
+
+
 def test_real_email_in_history_is_blocked_and_masked(tmp_path):
     if not shutil.which("git"):
         return
