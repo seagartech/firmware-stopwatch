@@ -130,18 +130,11 @@ def test_backend_records_each_stage(setup, tmp_path):  # noqa: F811
     assert "build" in saved["stages"]
 
 
-def test_tech_details_show_the_timing_box_and_manager_view_does_not(tmp_path):
-    import shutil
-    import subprocess
+def test_report_no_longer_shows_how_long_the_test_itself_took():
+    """10-21 用户：「这次测试本身用了多久」讲的是码表自己，看报告的研发用不上，两页都不放（改了决策 99）；码表照样记 timeline.json。"""
     from tests.test_boss_short import grab, JS
-    if not shutil.which("node"):
-        return
-    a = tln.account(tl_first(tmp_path).data, DEVICE)
-    code = "\n".join(grab(n) for n in ("mmssT", "VTAG", "timingBox")) + f"\nconsole.log(timingBox({json.dumps(a, ensure_ascii=False)}));"
-    html = subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout
-    assert "这次测试本身用了多久" in html and "码表耗时" in html and "等人" in html
-    assert "说了 22 句" in html and "补测 1 轮" in html and "c-warn\">能忍" in html
-    assert "timingBox(" in grab("dev") and "timingBox(" not in grab("reportPage")  # 负责人版不加
+    assert "timingBox" not in JS and "这次测试本身用了多久" not in JS
+    assert "这次测试本身用了多久" not in grab("dev") and "这次测试本身用了多久" not in grab("reportPage")
 
 
 def test_long_gap_between_rounds_is_waiting_not_playback():

@@ -42,6 +42,10 @@ def problems(j, scenario):
             rs = lambda k: "、".join(map(str, l.get(k) or []))
             slow = (f"；超过标准的是第 {rs('over_rounds')} 轮" if l.get("over_rounds") else "") + \
                    (f"，其中超过标准 1.5 倍的是第 {rs('big_rounds')} 轮" if l.get("big_rounds") else "")
+            rc = {c["n"]: c for c in l.get("round_cause") or []}
+            cause = "；".join(f"第 {n} 轮多在「{rc[n]['name']}」（{rc[n]['v']:.2f} 秒，一般 {rc[n]['med']:.2f} 秒）"
+                             for n in l.get("over_rounds") or [] if n in rc and rc[n]["more"] >= 0.1)
+            slow += f"；超标那几轮各自多出来的时间（码表算的，照着写）：{cause}" if cause else ""
             vs = l.get("vs")  # 整条线和上次比（某一段的上次不成立时，这条线的对比还在）
             was = f"；这条线上次一般 {vs['prev']:.2f} 秒，这次 {l['med']:.2f} 秒" if vs and vs["change"] != "持平" else ""
             out.append({"key": key, "seg": seg, "level": x["level"], "what": f"{x['line']}：{x['why']}{slow}{was}"})
@@ -92,7 +96,9 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
   ask（直接发给 who 的请求：请对方做什么、看哪几步，带上相关数据；每轮数据表会附在消息后面，不要写"需要的话可以提供数据"这类话）。
 - done：怎么算解决，一句话，写对方也能看懂的具体数字（比如"说完到开始播放一般回到 0.5 秒左右、每轮都不超过 2.0 秒"）。
 - rec：最后一句建议。
-- dev：给研发看的技术细节：data（相关数据）、cause（原因）、change（改法）、size（改动大小）、rk（风险）、verify（改完怎么用码表验证）。
+- dev：给研发看的技术细节：data（推算，1～3 句：只写报告表格里没有的，比如各段相加和整条线对不对得上、两段相减推出来的数；
+  不要重复一般、最慢、上次这些表格里已有的数）、cause（原因）、change（改法）、size（改动大小）、rk（风险）、verify（改完怎么用码表验证）。
+  查原因的方案（还没定怎么改）size、rk 写「—」。
 中文、大白话。拿不准的写"推断"，不要编。why 写 2～4 句。
 
 ## 写法规矩（10-20 用户看过真报告后定，必须照做）
@@ -116,7 +122,7 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - 让别人拿哪几轮去查，看那一段自己的数据：每轮都差不多慢的段，拿全部轮次去查；只有个别轮特别慢的，才点名那几轮。
   不要把整条线超标的轮次套到别的段上（那几轮可能是另一段慢）。
 - 同一件事（同一个人改同一处）出现在几张卡片里，name 要一字不差，码表按名字把待办合成一件。
-- 问题里写了"超过标准 1.5 倍"的那几轮，why 要说那几轮多出来的时间在哪一段（对照上面各段"偶发特别慢"的轮次）；对不上就写"推断"。
+- 问题里写了超标那几轮各自多出来的时间在哪一段的，照着写，不要另下结论；没写的才对照上面各段"偶发特别慢"的轮次推断，并写"推断"。
 - 要加计时点的方案，先看上面"计时点在代码里的位置"：新点要能把一段拆开，不能和已有的点在同一处或紧挨着。
 - 加计时点把一段拆开的方案不算查原因：按改一处判工作量，effect 写"能把这 X 秒拆成哪几截，看清慢在哪一截"。
 - ask 和 done 会原样发给对方。找固件研发的 ask 可以写代码位置；其余的对方可能是别家公司（服务器、云服务、第三方）：不写我们的文件名、行号、函数名，
@@ -233,6 +239,7 @@ def check(data, j, scenario):
             if "0.00 秒" in str(f.get(k) or ""):
                 bad.append(f"{where}写了「0.00 秒」这种没意义的数")
         _tidy(f, opts)
+        _named(f, opts, scenario)
         fixes.append(f)
     rounds = {p["key"]: p.get("rounds") or [] for p in probs}
     for i, f in enumerate(fixes, 1):
@@ -285,6 +292,34 @@ def _tidy(f, opts):
                 d[k] = _sec2_sub(d[k])
 
 
+SEG_RE = re.compile(r" ?(?<![A-Za-z0-9_])(P\d+)\s*(?:-|→|–|—|~|～|->)\s*(P\d+)(?![0-9A-Za-z_]) ?")  # 前后的空格一起去掉：中文里「」两边不留空格
+PT_RE = re.compile(r" ?(?<![A-Za-z0-9_])(P\d+)(?![0-9A-Za-z_]) ?")
+
+
+def _named(f, opts, scenario):
+    """文字里不出现计时点编号（10-21 用户定：P1→P2 这种谁也看不懂）：段编号换成段名，单个点换成点名。
+    AI 被要求写名字，但 dev 里常常还是写编号；这里统一换掉，不靠 AI 自觉。"""
+    segs, pts = scenario.get("segments") or {}, scenario.get("point_names") or {}
+
+    def seg(m):
+        g = segs.get(f"{m.group(1)}-{m.group(2)}")
+        if g:
+            return f"「{g['name']}」"
+        a, b = pts.get(m.group(1)), pts.get(m.group(2))
+        return f"「{a}」到「{b}」" if a and b else m.group(0)
+
+    def sub(t):
+        t = SEG_RE.sub(seg, t)
+        return PT_RE.sub(lambda m: f"「{pts[m.group(1)]}」" if m.group(1) in pts else m.group(0), t)
+
+    dev = f.get("dev") if isinstance(f.get("dev"), dict) else {}
+    for d, ks in ((f, ("why", "impact", "rec", "done")), (dev, DEV_FIELDS),
+                  *((o, tuple(OPT_FIELDS) + ("ask",)) for o in opts if isinstance(o, dict))):
+        for k in ks:
+            if isinstance(d.get(k), str):
+                d[k] = sub(d[k])
+
+
 MANAGER_FIELDS = ("why", "impact", "rec")
 OUTSIDE_BAN = ("码表", "达标率", "计时点")
 MANAGER_OPT_FIELDS = ("name", "effect", "cost", "wn")
@@ -309,7 +344,7 @@ def _rounds_said(text):
 
 
 # 写法要求改了就加一，旧的建议不再沿用
-PROMPT_VER = 15
+PROMPT_VER = 17
 
 
 def signature(j, scenario):
