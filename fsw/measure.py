@@ -376,6 +376,10 @@ class Collector:
         tol = STALE_US if x in self.spec.marks or not self.spec.marks or x in self._line_ends() else 0
         got = sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - tol)
         b = self._before_end(x)
+        # 前一步也是"记最后一次"的点（比如"收到合成结束"）：它和终点谁先谁后不一定（10-21 真测：一半的轮先放完、50 毫秒后才收到合成结束），
+        # 不拿它卡，往前找一个只记一次的步骤（比如"扬声器开始出声"）。两段的先后乱了由报告合成一段（见 judge.merge_overruns）
+        while b and b != self.spec.start and b in self.spec.marks:
+            b = next((g[0] for g in self.spec.segments.values() if g[1] == b), None)
         if got and b and b != x:
             # 线的终点（比如喇叭最后一声）中途可能多打一次（播放卡了一下）：只认它前一步之后的那次，前一步还没到就当还没收到
             tb = [o[0] for o in ([self.cur[b]] if b == self.spec.start else self._after(b))] if b in self.cur else []
@@ -408,7 +412,10 @@ class Collector:
         if self.done:
             return []
         if self.spec.start in self.cur:
-            return [x for x in self.spec.need if x == self.spec.start or self._after(x)]
+            # 起点要等它后面的一步到了才涂绿：设备回到聆听时常常先多报一次起点（10-21 真测：每轮结束 0.2 秒后报一次"检测到说话结束"），
+            # 人还没开口第一步就绿了
+            got = [x for x in self.spec.need if x != self.spec.start and self._after(x)]
+            return ([self.spec.start] if got else []) + got
         # 起点还没打出来（设备一轮结束才打）：按先后看，上一步没到的不算到（打断回答后服务器补发的"开始说话"，你还没说话就先涂绿了）；
         # 上一步到过、但比它的上一步还早的（就是那个补发的）跳过去，往前接着比
         shown = {}
