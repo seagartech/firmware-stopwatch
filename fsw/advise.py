@@ -122,6 +122,8 @@ when 里只写这张卡片真正讨论的问题编号：没在 why 里讲到的�
 - 加计时点把一段拆开的方案不算查原因：按改一处判工作量，effect 写"能把这 X 秒拆成哪几截，看清慢在哪一截"。
 - ask 和 done 会原样发给对方。找固件研发的 ask 可以写代码位置；其余的对方可能是别家公司（服务器、云服务、第三方）：不写我们的文件名、行号、函数名，
   不写"码表""达标率""计时点""线"这些我们内部的说法，不写"上次"（写"我们之前测的一次"）；用业内通行说法（语音识别、首包音频、表情指令等）。
+  时间都是设备上记到的：起止写成"设备收到…""设备判断说完"，不要写成对方"发出…"的时刻。秒数一律留两位小数（1.16 秒，不写 1.2 秒）。
+  done 的目标数要和这张卡片 rec、dev.verify 里的是同一个数，不要另定标准。
 - dev.verify 用线的名字写（比如"「从刷卡到门开」一般用时降到 0.5 秒以下"），不写计时点编号。
 说明文字里写段和计时点的中文名（比如"服务器生成回复"），名字照原样用，不改成口语，不要写 P2-P5 这样的编号；代码位置写文件名和行号。
 why、impact、rec、方案的 name / effect / cost / wn 是给负责人看的：不能写文件名、行号、函数名、变量名；代码位置只写在 how 和 dev 里。
@@ -273,14 +275,14 @@ def _sec2_sub(text):
 
 def _tidy(f, opts):
     """给负责人看的文字：秒数留一位小数；效果栏表头已写"估算"，去掉 AI 自己加的"（估算）"。技术细节不动。"""
-    for d, ks in ((f, (*MANAGER_FIELDS, "done")), *((o, (*MANAGER_OPT_FIELDS, "ask")) for o in opts if isinstance(o, dict))):
+    for d, ks in ((f, MANAGER_FIELDS), *((o, MANAGER_OPT_FIELDS) for o in opts if isinstance(o, dict))):
         for k in ks:
             if isinstance(d.get(k), str):
                 d[k] = _sec_sub(d[k])
                 if k == "effect":
                     d[k] = d[k].replace("（估算）", "").replace("(估算)", "").strip()
-    for d in (f.get("dev") if isinstance(f.get("dev"), dict) else {}, *(o for o in opts if isinstance(o, dict))):
-        for k in ("how", *DEV_FIELDS):
+    for d in (f, f.get("dev") if isinstance(f.get("dev"), dict) else {}, *(o for o in opts if isinstance(o, dict))):
+        for k in ("how", "ask", "done", *DEV_FIELDS):   # 发给对方的数留两位，免得"一般 1.2 秒、最慢 1.2 秒"看着像写错
             if isinstance(d.get(k), str):
                 d[k] = _sec2_sub(d[k])
 
@@ -309,7 +311,7 @@ def _rounds_said(text):
 
 
 # 写法要求改了就加一，旧的建议不再沿用
-PROMPT_VER = 13
+PROMPT_VER = 14
 
 
 def signature(j, scenario):
