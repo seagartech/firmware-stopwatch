@@ -58,13 +58,13 @@ def test_decide_comes_before_the_timing_chart():
 
 def test_details_folded_by_default():
     fa = grab("fixA")
-    assert "<details" in fa and "optTable(F,fi,true)" in fa.split("<details", 1)[1]  # 方案表收在里面
+    assert "<details" in fa and "optTable(F,fi,false)" in fa.split("<details", 1)[1]  # 方案表收在里面，不再勾选（10-21）
     assert "<b>为什么：</b>" in fa.split("<details", 1)[1] and "<b>对用户的影响：</b>" in fa.split("<details", 1)[1]
     assert "ESTNOTE" in fa.split("<details")[-1]  # 结尾说明收起
     dl = grab("decideList")
     assert "另有 ${" in dl and "达标" in dl and "标签规则" in dl.split("<details")[-1]
     mp = grab("myPick")
-    assert "<details" in mp and "todoText(" in mp.split("<details", 1)[1]  # 发给对方的消息收起
+    assert "<details" not in mp and "todoText(" in mp and "type=\"checkbox\"" not in mp  # 接下来找谁：消息默认展开，没有勾选（10-21 用户定）
 
 
 def test_no_details_open_by_default_in_manager_view():

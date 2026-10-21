@@ -231,7 +231,9 @@ function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;if
 function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
   // 每条一句（10-20 用户定）：标签（右对齐一列）、线名 用时：问题。建议：做什么，预计效果。　详情 → 问题 N　依据 → 数据
   // 标签规则（10-20 用户定）：一句来源 + 每个标签一行，和上面列表同一套标签、同样右对齐
-  const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${lvTag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+x.src[1])}</span></li>`};
+  // 还有一个选择（10-21 用户定）：同一个问题里有找别人做的方案，点一句，免得藏在收起的方案表里；同一个方案只点一次
+  const said=new Set(),alt=F=>{const r=F.opts.find(o=>o.rec)||F.opts[0],a=F.opts.find(o=>!o.rec&&o.who!==r.who&&!said.has(o.name));if(!a)return '';said.add(a.name);return `<br><span class="note" style="color:var(--fg)">还有一个选择：${a.name}。${a.effect}；${a.cost}。</span>`};
+  const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${lvTag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+x.src[1])}${n>=0?alt(FX[n]):''}</span></li>`};
   return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
   <details class="lvwhy"><summary>标签规则</summary><p class="note" style="margin:8px 0">数字和标签由码表按规则算，"为什么、怎么改"由 AI 读代码写。</p><ul class="decide rules">
   <li><span class="tagcol">${lvTag(4)}</span><span>功能出错，不看快慢。</span></li>
@@ -614,7 +616,7 @@ const ESTNOTE='<ul class="notes"><li><b>工作量</b>只分大、中、小，看
 function optTable(F,fi,pick){
   return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>`;
 }
-function initPick(FX){if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}}
+function initPick(FX){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}  // 不再勾选（10-21）：每次都按建议方案算；以前只在第一次算，卡片还没到时算成空的，有的演示一直没有消息
 let copied=null;
 // 结论建议、待办里的文字：把"P2-P5""P4→P5""P7"这类编号换成中文名（技术细节里照原样）
 function plain(t){if(!t)return t;const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
@@ -666,30 +668,30 @@ async function exportReport(folder){
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
   EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path}
-function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
-  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${o.fis.map(i=>FX[i].title).join('；')}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+// 接下来找谁（10-21 用户定）：每人一段消息。服务器、网络、第三方可能是别家公司，消息一律按外部对接人写：
+// 不带我们的源码位置，不用码表的内部说法（码表、达标率、线名），附设备外几段的每轮数据方便对方对日志；发给固件研发的另附改法和代码位置
+const isFw=w=>/固件/.test(w);
+function todoText(w,chosen,FX,D){const mine=chosen.filter(o=>o.who===w),fw=isFw(w),[dev,what]=String(D.S.crumb).split(' · ');
+  const at=D.S.real&&JREP&&JREP.measured_at?`${JREP.measured_at} 开始，`:'';
+  const outS=D.allSegs.filter(s=>((D.J&&D.J.segments.find(x=>x.k===s.k))||{}).outside),rows=D.rounds.map((r,i)=>[r.n,...outS.map(s=>s.v[i]==null?'—':f(s.v[i]))].join(' | '));
+  const tbl=!fw&&outS.length?`\n\n每轮数据（秒）：\n轮 | ${outS.map(s=>plain(s.name)).join(' | ')}\n${rows.join('\n')}`:'';
+  return `【${dev}响应时间测量，请帮忙处理】\n\n你好，我们测了${dev}从${what}的时间（${at}连续 ${D.n} 轮），有 ${mine.length} 件事想请你们帮忙：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];
+    return `${k+1}. ${noCode(plain(o.ask||o.name))}\n   怎么算解决：${noCode(plain(F.done||F.dev.verify))}`+(fw?`\n   改法：${plain(o.how)}`:'')}).join('\n\n')+tbl+`\n\n改好后告诉我们，我们按同样条件再测一次对比。`}
 // 勾了的方案；同一个人做同一件事出现在几张卡片里（10-20 真测：「思考中」表情两张卡片都有），待办只算一件，标上解决哪几个问题
 function pickedOpts(FX){const out=[],seen={};FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(!fixPick.has(fi+'-'+oi))return;const k=o.who+'|'+o.name;if(seen[k]){seen[k].fis.push(fi);return}out.push(seen[k]={...o,fi,fis:[fi]})}));return out}
 const pNos=o=>'问题 '+o.fis.map(i=>i+1).join('、');
 function myPick(D,FX){initPick(FX);
-  const chosen=pickedOpts(FX);
-  const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
-  const none=FX.map((F,fi)=>chosen.some(o=>o.fis.includes(fi))?'':`问题 ${fi+1}`).filter(Boolean);
-  const body=chosen.length?`<details class="lvwhy"><summary>勾了哪几个、每个预计的效果</summary><ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>${pNos(o)}：${o.name}。预计${o.effect}。</li>`).join('')}</ul></details>
-   <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
-   ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
-   ${none.length?`<p style="margin:6px 0;color:var(--bad)">${none.join('、')}一个方案都没选，等于先不处理。</p>`:''}
-   <details class="lvwhy" ${fixTodo?'open':''} data-todod="1"><summary>待办：按人分好的消息（${Object.keys(who).length} 个人）</summary><p class="note" style="margin:10px 0 6px">按人分好，每人一块，各自复制后贴到钉钉、微信或邮件里发给对方。</p>${Object.keys(who).map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX)}</pre></div>`).join('')}</details>`
-   :'<p class="note">还没勾任何方案。</p>';
-  if(!FX.length)return '';  // 没有要改的问题：没有方案可勾，不显示"勾了 0 个方案"（10-18 真机）
-  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你的决定：勾了 ${chosen.length} 个方案</h3>${body}</div>`;
+  if(!FX.length)return '';  // 没有要改的问题：不显示
+  const chosen=pickedOpts(FX),who=[...new Set(chosen.map(o=>o.who))];
+  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">接下来找谁</h3><p class="note" style="margin:0 0 8px">每个问题按「建议」方案，按人合成一段，复制后发给对方。发给设备以外的人（服务器、网络等）的不带源码位置，可以直接转给外部对接人。</p>
+   ${who.map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX,D)}</pre></div>`).join('')}</div>`;
 }
 function fixA(D){const FX=activeFixes(D);initPick(FX);
   return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
    <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：为什么、对用户的影响、可选方案<span hidden>${fi}</span></summary>
    <h3 style="margin:10px 0 8px">${F.title}</h3>
    <p style="margin:0 0 6px"><b>为什么：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>
-   ${optTable(F,fi,true)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX)+
+   ${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX)+
    `<details class="lvwhy"><summary>不用改的、工作量和效果怎么估的</summary><p class="note" style="margin:6px 0 0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}</details>`;
 }
 function fixB(D){const FX=activeFixes(D);
@@ -720,7 +722,7 @@ function fixC(D){const FX=activeFixes(D);
 function fixDev(D){const FX=activeFixes(D);initPick(FX);
   return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来；"已选"跟着结论建议里的勾选走，改了勾选这里会跟着变。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
    <table><tbody><tr><th style="width:7em">数据</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table>
-   ${F.opts.map((o,oi)=>{const on=fixPick.has(fi+'-'+oi);return `<div class="optdev ${on?'on':''}"><b>${o.name}</b> <span class="chip ${on?'c-ok':'c-gray'}">${on?'已选':'没选'}</span><ul class="notes"><li>改法：${o.how}</li><li>改动大小：${o.size}</li><li>风险：${o.rk}</li></ul></div>`}).join('')}</div>`).join('')}
+   ${F.opts.map((o,oi)=>{const on=fixPick.has(fi+'-'+oi);return `<div class="optdev ${on?'on':''}"><b>${o.name}</b>${on?' <span class="chip c-ok">建议</span>':''}<ul class="notes"><li>改法：${o.how}</li><li>改动大小：${o.size}</li><li>风险：${o.rk}</li></ul></div>`}).join('')}</div>`).join('')}
    <p class="note" style="margin:0">改法是 AI 读代码后给的思路，没有实现、没有测过；代码位置按这次识别结果。码表不会自动改代码。</p></section>`;
 }
 function reportPage(D){
