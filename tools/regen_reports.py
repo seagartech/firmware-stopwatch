@@ -104,7 +104,7 @@ def one(run, out_dir):
     html = new[0].read_text(encoding="utf-8")
     cur = __import__("re").search(r"测于 (\d{4}-\d\d-\d\d \d\d:\d\d)", html)
     if cur:
-        html = html.replace("测于 " + cur.group(1), "测于 " + when)
+        html = html.replace(cur.group(1), when)  # 发给对方的消息里也写了测量时间，一起改回去
     dest = new[0].with_name(f"全程_{stamp}.html")
     dest.write_text(html, encoding="utf-8")
     if dest != new[0]:

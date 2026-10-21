@@ -68,7 +68,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(pName)} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
-  firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],fine:ADV&&ADV.status==='done'&&ADV.fine?htmlEsc(ADV.fine):(()=>{const ok=J.segments.filter(g=>!g.outside&&!g.spiky&&g.verdict!=='慢了'&&g.verdict!=='看回答长短');return ok.length?`设备自己的几段（${ok.map(g=>`${htmlEsc(g.name)} ${fms(g.med)} 秒`).join('、')}）没有偶发特别慢${J.prev&&J.prev.segs?'，也没比上次慢':''}，不用改。`:'设备自己的几段还没有能判的。'})(),
+  firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],
   tech:{cond:[['项目',`${htmlEsc(REAL.name)}，${CHIP()}`],['判快慢依据',`${sc.experience?`体验标准：超过 ${sc.experience.fair} 秒算差（${htmlEsc(sc.experience.short||'参考值')}）`:'没有对得上的体验标准'}；${J.prev&&J.prev.segs?`和上次（${htmlEsc(J.prev.measured_at)}，${J.prev.n} 轮）比`:'第一次测，没有上次可比'}`]],pts:sc.points?Object.keys(sc.points).length:(IDENT.page.steps||[]).length,
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
@@ -228,11 +228,16 @@ function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;if
   // 一句话里只留最关键的效果：优先摘出"约快 X 秒"，摘不出来、全文又不长才整句放，否则只写做什么，效果去"详情"里看
   const e=String(o.effect||''),m=e.match(/(?:约快|快约|快)\s*[\d.]+(?:～[\d.]+)?\s*秒/),eff=m?`，预计${m[0]}`:e&&e.length<=30?`，预计${e}`:'';
   return `建议：${o.name}${eff}。`}  // 出错 / 建议改 / 必须改每条一句的"建议"
+// 设备自己的段都正常时，拍板列表末尾说一句（10-21 用户定）：负责人知道不用找固件研发；明细在分段用时表里
+function devOk(D){const g=D.J?D.J.segments.filter(x=>!x.outside):[];if(!g.length||g.some(x=>x.spiky||x.verdict==='慢了'))return '';
+  return `<p class="note" style="margin:6px 0 0;color:var(--fg)">设备自己的几段都正常${D.J.prev&&D.J.prev.segs?'，也没比上次慢':''}，不用改。</p>`}
 function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
   // 每条一句（10-20 用户定）：标签（右对齐一列）、线名 用时：问题。建议：做什么，预计效果。　详情 → 问题 N　依据 → 数据
   // 标签规则（10-20 用户定）：一句来源 + 每个标签一行，和上面列表同一套标签、同样右对齐
-  const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${lvTag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+x.src[1])}</span></li>`};
-  return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
+  // 还有一个选择（10-21 用户定）：同一个问题里有找别人做的方案，点一句，免得藏在收起的方案表里；同一个方案只点一次
+  const said=new Set(),alt=F=>{const r=F.opts.find(o=>o.rec)||F.opts[0],a=F.opts.find(o=>!o.rec&&o.who!==r.who&&!said.has(o.name));if(!a)return '';said.add(a.name);return `<br><span class="note" style="color:var(--fg)">还有一个选择：${a.name}。${a.effect}；${a.cost}。</span>`};
+  const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${lvTag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+x.src[1])}${n>=0?alt(FX[n]):''}</span></li>`};
+  return `${open.length?'':'<p class="note" style="margin:0 0 8px">这次没有需要处理的。</p>'}<ul class="decide">${open.map(li).join('')}</ul>${devOk(D)}${fold.length?`<details class="lvwhy"><summary>另有 ${fold.length} 条达标 / 不判快慢</summary><ul class="decide">${fold.map(li).join('')}</ul></details>`:''}
   <details class="lvwhy"><summary>标签规则</summary><p class="note" style="margin:8px 0">数字和标签由码表按规则算，"为什么、怎么改"由 AI 读代码写。</p><ul class="decide rules">
   <li><span class="tagcol">${lvTag(4)}</span><span>功能出错，不看快慢。</span></li>
   <li><span class="tagcol">${lvTag(0)}</span><span>达标率 &lt; 50%，或超过标准 1.5 倍的轮次 &gt; 10%。</span></li>
@@ -610,12 +615,12 @@ function staleBar(){if(!(JREP&&!JREP._none&&repKey().startsWith('real')))return 
 // 负责人看的文字不出现代码：括号里带文件名、行号、函数名的整段去掉（码表格式检查也会拦，这里兜底早先存下的建议）
 const noCode=t=>String(t||'').replace(/\s*[（(][^（）()]*?(?:[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\))[^（）()]*?[）)]/g,'');
 function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:d.t,lv:d.lv,why:noCode(plain(F.why)),impact:noCode(plain(F.impact)),rec:noCode(plain(F.rec)),opts:F.opts.map(o=>({...o,name:noCode(plain(o.name)),effect:noCode(plain(o.effect)),cost:noCode(plain(o.cost)),wn:noCode(plain(o.wn))}))})});return out}
-const ESTNOTE='<ul class="notes"><li><b>工作量</b>只分大、中、小，看的是要改多少、要不要别人配合，不折算成天数（码表不知道你们团队的人手和熟练度）。</li><li><span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护</li><li><b>效果</b>都是估算：依据是这次的实测数据、代码和公开资料，做完要用码表再测一次才算数。</li><li>码表只给建议，不会自动改代码。</li></ul>';
+// 工作量怎么分（10-21 用户定）：表下一行小字，不放收起块、不用浮窗
+const ESTNOTE='<p class="note" style="margin:6px 0 0">工作量：<span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护　<span class="wk wk-u">不确定</span> 要先查清原因</p>';
 function optTable(F,fi,pick){
-  return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${o.wn}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>`;
+  return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${String(o.wn||'').replace(/^(小|中|大|不确定)\s*[：:，,]\s*/,'')}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>${pick?'':ESTNOTE}`;
 }
-function initPick(FX){if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}}
-let copied=null;
+function initPick(FX){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}  // 不再勾选（10-21）：每次都按建议方案算；以前只在第一次算，卡片还没到时算成空的，有的演示一直没有消息
 // 结论建议、待办里的文字：把"P2-P5""P4→P5""P7"这类编号换成中文名（技术细节里照原样）
 function plain(t){if(!t)return t;const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
  const seg={};Object.entries(D.S.segs).forEach(([k,g])=>{seg[k]=g.name;const [a,b]=String(g.code||'').split('→').map(x=>x.trim());if(a&&b){seg[a+'-'+b]=g.name;seg[a+'→'+b]=g.name}});
@@ -631,7 +636,7 @@ function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
   d.querySelectorAll('.stale,.expdone').forEach(x=>x.remove());
   d.querySelectorAll('section').forEach(x=>{const t=(x.querySelector('h2')||{}).textContent||'';if(t.startsWith('改完以后')||t.startsWith('设备上现在是'))x.remove()});
   d.querySelectorAll('input[type=checkbox],input[type=radio]').forEach(i=>{const s=document.createElement('span');s.textContent=i.checked?'☑':'☐';s.className='ck';i.replaceWith(s)});
-  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else b.remove()});
+  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy;else b.remove()});  // 复制按钮留着，导出的报告里也能复制
   d.querySelectorAll('[id]').forEach(x=>x.id=pre+x.id);d.querySelectorAll('.flash').forEach(x=>x.classList.remove('flash'));
   d.querySelectorAll('details').forEach(x=>x.removeAttribute('open'));return d.innerHTML}  // 导出也默认收起，点开能看（决策 98）
 // 导出存到哪、存完的提示（一直在，直到你关掉）
@@ -660,37 +665,37 @@ async function exportReport(folder){
 <div class="exphead"><div><h1>⏱ 固件码表 · 测量报告（导出）</h1><div class="note">${htmlEsc(info)} · ${at}${mock?'<span class="mock">模拟数据，不是实测</span>':''}</div></div>
 <div class="tabs seg" role="group" aria-label="报告版本"><button id="tb-b" aria-pressed="true" onclick="sw('b')">结论建议</button><button id="tb-d" aria-pressed="false" onclick="sw('d')">技术细节</button></div></div>
 <div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
-<p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。勾选的方案和待办是导出那一刻的样子；要改勾选，请在码表里打开这份报告。${log}</p></div>
-<div id="tip" hidden></div><script>${tipShow.toString()}document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
+<p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。${log}</p></div>
+<div id="tip" hidden></div><script>${tipShow.toString()}${todoCopy.toString()}document.addEventListener('click',e=>{if(todoCopy(e))return;const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
   let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
   EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path}
-function todoText(w,chosen,FX){const mine=chosen.filter(o=>o.who===w);
-  return `你好，这次用码表测了设备的反应速度，有 ${mine.length} 件事要请你处理：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];return `${k+1}. ${plain(o.name)}\n   为什么：${o.fis.map(i=>FX[i].title).join('；')}。${plain(F.why)}\n   怎么做：${plain(o.how)}\n   做完的标准：${plain(F.dev.verify)}`}).join('\n\n')+`\n\n做完告诉我，我用码表按同样的条件再测一次。`}
+// 协作沟通（10-21 用户定）：每人一段消息。服务器、网络、第三方可能是别家公司，消息一律按外部对接人写：
+// 不带我们的源码位置，不用码表的内部说法（码表、达标率、线名），附设备外几段的每轮数据方便对方对日志；发给固件研发的另附改法和代码位置
+const isFw=w=>/固件/.test(w);
+function todoText(w,chosen,FX,D){const mine=chosen.filter(o=>o.who===w),fw=isFw(w),[dev,what]=String(D.S.crumb).split(' · ');
+  const at=D.S.real&&JREP&&JREP.measured_at?`${JREP.measured_at} 开始，`:'';
+  // 每轮数据：设备外的几段，表头写从哪个点到哪个点（几段的起点可能相同，写清楚免得对方相加）；一般不到 0.01 秒的段不列
+  const outS=D.allSegs.filter(s=>((D.J&&D.J.segments.find(x=>x.k===s.k))||{}).outside&&s.med>=0.01),rows=D.rounds.map((r,i)=>[r.n,...outS.map(s=>s.v[i]==null?'—':s.v[i].toFixed(2))].join(' | '));
+  const tbl=!fw&&outS.length?`\n\n每轮数据（秒，设备上记到的时刻之差）：\n轮 | ${outS.map(s=>String(s.code).split('→').map(p=>plain(p.trim()).replace(/^“|”$/g,'')).join(' → ')).join(' | ')}\n${rows.join('\n')}`:'';
+  return `【${dev}响应时间测量，请帮忙处理】\n\n你好，我们测了 ${dev}从${what}的时间（${at}连续 ${D.n} 轮），有 ${mine.length} 件事想请你们帮忙：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];
+    return `${k+1}. ${noCode(plain(o.ask||o.name))}\n   怎么算解决：${noCode(plain(F.done||F.dev.verify))}`+(fw?`\n   改法：${plain(o.how)}`:'')}).join('\n\n')+tbl+`\n\n改好后告诉我们，我们按同样条件再测一次对比。`}
 // 勾了的方案；同一个人做同一件事出现在几张卡片里（10-20 真测：「思考中」表情两张卡片都有），待办只算一件，标上解决哪几个问题
 function pickedOpts(FX){const out=[],seen={};FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(!fixPick.has(fi+'-'+oi))return;const k=o.who+'|'+o.name;if(seen[k]){seen[k].fis.push(fi);return}out.push(seen[k]={...o,fi,fis:[fi]})}));return out}
 const pNos=o=>'问题 '+o.fis.map(i=>i+1).join('、');
 function myPick(D,FX){initPick(FX);
-  const chosen=pickedOpts(FX);
-  const who={};chosen.forEach(o=>(who[o.who]=who[o.who]||[]).push(o.name));
-  const none=FX.map((F,fi)=>chosen.some(o=>o.fis.includes(fi))?'':`问题 ${fi+1}`).filter(Boolean);
-  const body=chosen.length?`<details class="lvwhy"><summary>勾了哪几个、每个预计的效果</summary><ul style="margin:6px 0;padding-left:1.2em">${chosen.map(o=>`<li>${pNos(o)}：${o.name}。预计${o.effect}。</li>`).join('')}</ul></details>
-   <p style="margin:6px 0"><b>要找：</b>${Object.entries(who).map(([w,a])=>`${w}（${a.length} 件）`).join('、')}</p>
-   ${chosen.some(o=>o.risk)?`<p style="margin:6px 0;color:var(--warn)"><b>要你权衡：</b>${chosen.filter(o=>o.risk).map(o=>`${o.name}，${o.cost}`).join('；')}。</p>`:''}
-   ${none.length?`<p style="margin:6px 0;color:var(--bad)">${none.join('、')}一个方案都没选，等于先不处理。</p>`:''}
-   <details class="lvwhy" ${fixTodo?'open':''} data-todod="1"><summary>待办：按人分好的消息（${Object.keys(who).length} 个人）</summary><p class="note" style="margin:10px 0 6px">按人分好，每人一块，各自复制后贴到钉钉、微信或邮件里发给对方。</p>${Object.keys(who).map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX)}</pre></div>`).join('')}</details>`
-   :'<p class="note">还没勾任何方案。</p>';
-  if(!FX.length)return '';  // 没有要改的问题：没有方案可勾，不显示"勾了 0 个方案"（10-18 真机）
-  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你的决定：勾了 ${chosen.length} 个方案</h3>${body}</div>`;
+  if(!FX.length)return '';  // 没有要改的问题：不显示
+  const chosen=pickedOpts(FX),who=[...new Set(chosen.map(o=>o.who))];
+  // 协作沟通（10-21 用户定名、默认收起）：收起时也看得出要找谁、几件
+  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak);padding-top:10px;padding-bottom:10px"><details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"><span><b>协作沟通</b>　发给：${who.map(w=>`${w}（${chosen.filter(o=>o.who===w).length} 件）`).join('、')}</span></summary><p class="note" style="margin:8px 0">每个问题按「建议」方案，按人合成一段，复制后发给对方。发给设备以外的人（服务器、网络等）的不带源码位置，可以直接转给外部对接人。</p>
+   ${who.map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill copy" data-copy="todo-${wi}" aria-label="复制发给${w}的消息">${COPY_IC}复制</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX,D)}</pre></div>`).join('')}</details></div>`;
 }
 function fixA(D){const FX=activeFixes(D);initPick(FX);
   return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
-   <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：为什么、对用户的影响、可选方案<span hidden>${fi}</span></summary>
-   <h3 style="margin:10px 0 8px">${F.title}</h3>
+   <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}<span>问题 ${fi+1}：<b>${F.title}</b>${(F.opts.find(o=>o.rec)||F.opts[0])?`　建议：${(F.opts.find(o=>o.rec)||F.opts[0]).name}`:''}</span><span hidden>${fi}</span></summary>
    <p style="margin:0 0 6px"><b>为什么：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>
-   ${optTable(F,fi,true)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX)+
-   `<details class="lvwhy"><summary>不用改的、工作量和效果怎么估的</summary><p class="note" style="margin:6px 0 0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}</details>`;
+   ${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX);
 }
 function fixB(D){const FX=activeFixes(D);
   if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}
@@ -704,7 +709,7 @@ function fixB(D){const FX=activeFixes(D);
    <div class="acts" style="margin-top:8px"><button class="btn pri" data-todo="1">${fixTodo?'收起待办':'生成待办，发给相关的人'}</button></div>
    ${fixTodo?`<pre style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13.5px;margin:10px 0 0">${Object.entries(who).map(([w,a])=>`【${w}】\n${chosen.filter(o=>o.who===w).map(o=>`· ${o.name}（${pNos(o)}：${FX[o.fi].title}）\n  做完的标准：${FX[o.fi].dev.verify}`).join('\n')}`).join('\n\n')}\n\n做完后用码表按同样的条件再测一次，看前后对比。</pre><p class="note">样子里只演示文字；真产品可以复制，或存成文件。</p>`:''}`
    :'<p class="note">还没勾任何方案。</p>';
-  return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div><p class="note" style="margin:0"><b>不用改的：</b>${D.S.fine}</p>${ESTNOTE}`;
+  return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div>${ESTNOTE}`;
 }
 function segJudge(D,s){if(D.J){const j=D.J.segments.find(x=>x.k===s.k);if(j){if(j.spiky)return ['偶发特别慢','c-warn'];return [VTXT[j.verdict]||j.verdict,VCLS[j.verdict]||'c-gray']}}const spk=s.max>s.med*2.5&&s.max-s.med>.3;return spk?['偶发特别慢','c-warn']:['只记录用时','c-gray']}
 function fixC(D){const FX=activeFixes(D);
@@ -715,12 +720,12 @@ function fixC(D){const FX=activeFixes(D);
    <div class="panel" id="fix-${fi}" style="border-left:3px solid ${F?(F.lv===0?'var(--bad)':'var(--warn)'):'var(--ok)'}"><h3 style="margin:0 0 6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${F?lvTag(F.lv):''}${s.name} <span class="chip ${jc}">${jv}</span> <span class="note">谁负责：${s.owner}</span></h3>
    <p style="margin:0 0 6px"><b>这段在做什么：</b>${s.what}。</p>
    <p class="num" style="margin:0 0 10px">一般 ${f(s.med)} 秒，最慢 ${f(s.max)} 秒</p>
-   ${F?`<p style="margin:0 0 6px"><b>为什么是问题：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p>`:'<p style="margin:0"><b>不用改。</b>这段没有偶发特别慢的轮，也没比上次慢。</p>'}</div>${ESTNOTE}`;
+   ${F?`<p style="margin:0 0 6px"><b>为什么是问题：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p>`:'<p style="margin:0"><b>不用改。</b>这段没有偶发特别慢的轮，也没比上次慢。</p>'}</div>`;
 }
 function fixDev(D){const FX=activeFixes(D);initPick(FX);
-  return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来；"已选"跟着结论建议里的勾选走，改了勾选这里会跟着变。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
+  return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">每个方案的改法都列出来，标了"建议"的是推荐做的。</p>${FX.map((F,fi)=>`<div style="margin-bottom:16px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
    <table><tbody><tr><th style="width:7em">数据</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table>
-   ${F.opts.map((o,oi)=>{const on=fixPick.has(fi+'-'+oi);return `<div class="optdev ${on?'on':''}"><b>${o.name}</b> <span class="chip ${on?'c-ok':'c-gray'}">${on?'已选':'没选'}</span><ul class="notes"><li>改法：${o.how}</li><li>改动大小：${o.size}</li><li>风险：${o.rk}</li></ul></div>`}).join('')}</div>`).join('')}
+   ${F.opts.map((o,oi)=>{const on=fixPick.has(fi+'-'+oi);return `<div class="optdev ${on?'on':''}"><b>${o.name}</b>${on?' <span class="chip c-ok">建议</span>':''}<ul class="notes"><li>改法：${o.how}</li><li>改动大小：${o.size}</li><li>风险：${o.rk}</li></ul></div>`}).join('')}</div>`).join('')}
    <p class="note" style="margin:0">改法是 AI 读代码后给的思路，没有实现、没有测过；代码位置按这次识别结果。码表不会自动改代码。</p></section>`;
 }
 function reportPage(D){
@@ -1532,6 +1537,13 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  // 后台还在跑的那种新打开：进首页，顶上一条「接着看」回到上次那页；刷新还停在原页
  if(FRESH&&page!=='home'&&page!=='settings'){LASTP=page;page='home';hStage=Math.min(hStage,1)}
  else if(page==='home'&&u.last&&u.last!=='home'&&canView(u.last))LASTP=u.last}
+// 复制按钮（10-21 用户定）：点了换成对勾"已复制"，2 秒后变回来；只改按钮本身，不重画页面，导出的报告里也能用
+const COPY_IC='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+function todoCopy(e){const b=e.target.closest&&e.target.closest('[data-copy]');if(!b)return false;const el=document.getElementById(b.dataset.copy);if(!el)return true;const t=el.textContent;
+  const old=()=>{const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(_){}a.remove()};
+  try{navigator.clipboard.writeText(t).catch(old)}catch(_){old()}
+  if(!b.dataset.html)b.dataset.html=b.innerHTML;b.innerHTML='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg>已复制';b.classList.add('done');
+  clearTimeout(b._t);b._t=setTimeout(()=>{b.innerHTML=b.dataset.html;b.classList.remove('done')},2000);return true}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{
@@ -1629,7 +1641,7 @@ if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   const df=e.target.closest('[data-df]');if(df){diffFile=+df.dataset.df;render();return}
   const od=e.target.closest('[data-ondev]');if(od){onDev=od.dataset.ondev;flRun(2,3);render();return}
   if(e.target.closest('[data-openlog]')){if(repKey().startsWith('real')&&JREP&&JREP.raw_log)api('/api/open-folder',{path:JREP.raw_log}).then(j=>toast(j.ok?'✓ 已在访达里打开':'✕ '+(j.detail||'打不开')));else toast('演示数据没有原始日志文件：真测完才有');return}
-  const cp=e.target.closest('[data-copy]');if(cp){const el=document.getElementById(cp.dataset.copy);if(el){try{navigator.clipboard.writeText(el.textContent)}catch(_){};copied=el.dataset.who;render();setTimeout(()=>{copied=null;if(page==='report')render()},1500)}return}
+  if(todoCopy(e))return
   if(e.target.closest('#v-exp')){exportStart();return}
   if(e.target.closest('[data-expdir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p&&p.path){EXP.dir=p.path;render()}});return}
   if(e.target.closest('[data-expgo]')){pop='export';EXP.state='saving';render();exportReport(EXP.dir);return}  // 对话框留着，存好、没存成都在框里说

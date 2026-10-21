@@ -58,15 +58,29 @@ def test_decide_comes_before_the_timing_chart():
 
 def test_details_folded_by_default():
     fa = grab("fixA")
-    assert "<details" in fa and "optTable(F,fi,true)" in fa.split("<details", 1)[1]  # 方案表收在里面
+    assert "<details" in fa and "optTable(F,fi,false)" in fa.split("<details", 1)[1]  # 方案表收在里面，不再勾选（10-21）
     assert "<b>为什么：</b>" in fa.split("<details", 1)[1] and "<b>对用户的影响：</b>" in fa.split("<details", 1)[1]
-    assert "ESTNOTE" in fa.split("<details")[-1]  # 结尾说明收起
+    assert "不用改的" not in fa and "S.fine" not in fa  # 收起块删了（10-21 用户定）
+    ot = grab("optTable")
+    assert "pick?'':ESTNOTE" in ot  # 工作量怎么分：表下一行小字
+    assert "replace(/^(小|中|大|不确定)" in ot  # 依据开头重复的档位去掉
+    est = grab("ESTNOTE")
+    assert "不确定" in est and "估算" not in est and "自动改代码" not in est
+    ok = grab("devOk")
+    assert "设备自己的几段都正常" in ok and "devOk(D)" in grab("decideList")
     dl = grab("decideList")
     assert "另有 ${" in dl and "达标" in dl and "标签规则" in dl.split("<details")[-1]
     mp = grab("myPick")
-    assert "<details" in mp and "todoText(" in mp.split("<details", 1)[1]  # 发给对方的消息收起
+    assert "<details" in mp and "todoText(" in mp.split("<details", 1)[1] and "type=\"checkbox\"" not in mp  # 协作沟通：默认收起，没有勾选（10-21 用户定）
 
 
 def test_no_details_open_by_default_in_manager_view():
     for fn in ("fixA", "decideList", "myPick"):
         assert "<details open" not in grab(fn)
+
+
+def test_copy_button_turns_into_check_and_works_in_export():
+    tc = grab("todoCopy")
+    assert "已复制" in tc and "2000" in tc and "render(" not in tc  # 只改按钮本身，2 秒变回（10-21 用户定）
+    assert "execCommand('copy')" in tc  # 本地文件打开时剪贴板被拦，用旧办法
+    assert "${todoCopy.toString()}" in JS and "if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy" in JS  # 导出的报告里也能复制
