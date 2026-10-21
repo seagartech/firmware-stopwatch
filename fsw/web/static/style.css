@@ -32,6 +32,9 @@ header.top{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-conte
 .spin{display:inline-block;width:.9em;height:.9em;border:2px solid var(--line);border-top-color:var(--speak);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}@keyframes sp{to{transform:rotate(360deg)}}
 .lnk2{border:1px solid var(--line);border-radius:6px;background:none;font:inherit;color:var(--fg);padding:1px 8px;cursor:pointer}
 .mock{display:inline-block;font-size:12px;color:var(--warn);border:1px solid var(--warn);border-radius:4px;padding:0 6px;margin-left:8px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{border:0;background:none;color:var(--muted);font:inherit;font-size:14px;padding:6px 14px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--fg);color:var(--bg)}
 button:focus-visible{outline:2px solid var(--speak);outline-offset:2px}
 h1{font-size:clamp(22px,4vw,30px);line-height:1.35;font-weight:700;margin:0 0 6px;text-wrap:balance}
 h2{font-size:17px;margin:0 0 10px;font-weight:700}
