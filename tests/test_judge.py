@@ -173,8 +173,8 @@ def test_tiers_and_first_reaction():
     assert t["med"] == pytest.approx(1.595) and t["p90"] == pytest.approx(1.67) and t["max"] == pytest.approx(1.69)
 
 
-def test_fewer_than_20_rounds_is_reference_only():
-    assert J.judge(sc(), rounds(0.6, 1.0, n=12))["few"] and not J.judge(sc(), rounds(0.6, 1.0))["few"]
+def test_fewer_than_10_rounds_is_reference_only():
+    assert J.judge(sc(), rounds(0.6, 1.0, n=8))["few"] and not J.judge(sc(), rounds(0.6, 1.0))["few"]
 
 
 def test_labels_sorted_must_first():

@@ -227,6 +227,8 @@ class Collector:
         pv = self.prev
         if us > pv["until"]:
             return False, self._prev_close()
+        if pv.get("carry") and self.spec.start in self.cur:  # 试一次带过来的那一轮：下一句已经开始，之后放的声音都是下一句的
+            return False, self._prev_close()
         if pv.get("ready"):  # 已经收齐、在等"取最后一次"的终点的尾巴：结束标记之后才报出来的最后一声算回上一轮
             if name in self.spec.last and self._before_end(name) not in self.cur:
                 pv["occ"].setdefault(name, []).append((us, val))
@@ -374,6 +376,10 @@ class Collector:
         tol = STALE_US if x in self.spec.marks or not self.spec.marks or x in self._line_ends() else 0
         got = sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - tol)
         b = self._before_end(x)
+        # 前一步也是"记最后一次"的点（比如"收到合成结束"）：它和终点谁先谁后不一定（10-21 真测：一半的轮先放完、50 毫秒后才收到合成结束），
+        # 不拿它卡，往前找一个只记一次的步骤（比如"扬声器开始出声"）。两段的先后乱了由报告合成一段（见 judge.merge_overruns）
+        while b and b != self.spec.start and b in self.spec.marks:
+            b = next((g[0] for g in self.spec.segments.values() if g[1] == b), None)
         if got and b and b != x:
             # 线的终点（比如喇叭最后一声）中途可能多打一次（播放卡了一下）：只认它前一步之后的那次，前一步还没到就当还没收到
             tb = [o[0] for o in ([self.cur[b]] if b == self.spec.start else self._after(b))] if b in self.cur else []
@@ -406,7 +412,10 @@ class Collector:
         if self.done:
             return []
         if self.spec.start in self.cur:
-            return [x for x in self.spec.need if x == self.spec.start or self._after(x)]
+            # 起点要等它后面的一步到了才涂绿：设备回到聆听时常常先多报一次起点（10-21 真测：每轮结束 0.2 秒后报一次"检测到说话结束"），
+            # 人还没开口第一步就绿了
+            got = [x for x in self.spec.need if x != self.spec.start and self._after(x)]
+            return ([self.spec.start] if got else []) + got
         # 起点还没打出来（设备一轮结束才打）：按先后看，上一步没到的不算到（打断回答后服务器补发的"开始说话"，你还没说话就先涂绿了）；
         # 上一步到过、但比它的上一步还早的（就是那个补发的）跳过去，往前接着比
         shown = {}
@@ -436,10 +445,18 @@ class Collector:
         """试一次带过来的那一轮已经收全：马上交出（格子马上变绿），不等下一句开始才知道它结束了
         （10-19 用户："说完今天星期几格子不变色，说完恐龙一下子绿两个"）。这一轮的结束标记在换调试口时过去了，读不到，
         所以当它已经结束：后面的点算下一轮；它回答还没放完、晚到的"最后一声"照样算回它（只更新数，见 _prev_update），
-        直到下一个结束标记。"""
-        if not (self.ready and not self.done and (self.spec.last or ended)):  # ended：这一轮在试一次里已经结束（读到过结束标记）
+        直到下一个结束标记。
+        只差"不判快慢"那条线的最后一声（比如回答放完）也马上交出，那条线先空着：试一次收齐就停，换调试口时这一声常常丢了，
+        等它的话下一句会被并进这一轮（10-21 真测："一加一等于几"说完第一个格子不变绿，第 1 轮放完记成 9.7 秒）。
+        它晚到了照样算回这一轮。"""
+        miss = set(self._miss_after()) if not self.ready and not self.done and self.spec.start in self.cur else set()
+        if miss and miss <= self.spec.last & self.spec.soft:
+            self.done = True
+            r = self._ok_or_stale()
+        elif not (self.ready and not self.done and (self.spec.last or ended)):  # ended：这一轮在试一次里已经结束（读到过结束标记）
             return []
-        r = self._close()
+        else:
+            r = self._close()
         self.prev = {"cur": self.cur, "occ": self.occ, "reset_us": self.reset_us, "miss": set(), "until": float("inf"),
                      "at": time.monotonic(), "ready": True, "sent": r, "carry": True}
         self.last_cur, self.post = dict(self.cur), {}
@@ -550,6 +567,10 @@ class Collector:
                 if after:
                     self.cur[x] = after[-1]
             new = {**sent, **self._numbers(), "update": True}
+            gap = [g for g in sent.get("gap") or [] if not any(self.spec.names.get(x, x) == g and x in self.cur for x in self.spec.last)]
+            if gap != (sent.get("gap") or []):  # 空着的最后一声晚到了：那条线这一轮不再空着
+                new.pop("gap", None)
+                new.update({"gap": gap} if gap else {})
         finally:
             self.cur, self.occ, self.reset_us = mine
         self.prev["sent"] = new

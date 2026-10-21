@@ -136,10 +136,9 @@ def test_beep_is_unlocked_inside_the_click():
 
 
 @node
-def test_more_rounds_suggested_at_most_until_30_and_says_why():
-    e = grab("enough")
-    assert "stable=cap||" in e.replace(" ", "")  # 到 30 轮不再因为"还在变"催
-    assert "moreWhy" in JS
+def test_no_more_rounds_or_enough_panel():
+    """10-21 用户定固定测 10 轮：测完不再有"再测 10 轮"和"测的够不够"（决策 170）。"""
+    assert 'data-col="more"' not in JS and "function enough(" not in JS and "moreWhy" not in JS and "#enough" not in JS
 
 
 def test_export_dialog_says_what_now_export_contains():

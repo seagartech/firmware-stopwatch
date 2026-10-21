@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
+from fsw import measure as meas, standards as stds
 from fsw.web.app import create_app
 
 PROJ = Path.home() / "firmware-stopwatch-data" / "xiaozhi-899bf4"
@@ -36,10 +37,12 @@ def one(run, out_dir):
         if r.name < run and (r / "raw.log").exists() and (r / "run.json").exists():
             shutil.copytree(r, p / "runs" / r.name)
     lines = (target / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
+    page = json.loads((target / "run.json").read_text(encoding="utf-8"))["page"]
+    last = meas.Spec.from_scenario(stds.real_scenario(page, stds.find(page.get("steps") or []), None)).last
     pts = [(i, l.split(",")[1]) for i, l in enumerate(lines) if l.startswith("FSW,P")]
     seen, cut = set(), None
-    for i, name in pts:  # 第 2 轮从第一个重复出现的计时点开始（P1 不一定最先打印，不能按第二个 P1 切）
-        if name in seen:
+    for i, name in pts:  # 第 2 轮从第一个重复出现的计时点开始（P1 不一定最先打印，不能按第二个 P1 切；回答放完这类一轮里报好几次的点不算）
+        if name in seen and name not in last:
             cut = i
             break
         seen.add(name)
@@ -85,7 +88,10 @@ def one(run, out_dir):
     th.start()
     while not srv.started:
         time.sleep(0.1)
-    body = {"page": meta["page"], "source": "device", "rounds": 10, "project_dir": str(p), "what": meta.get("what")}
+    saved = target / "rounds.json"  # 当时测了几轮（10 / 20 / 30）：按存下的轮数往上取整到 10 的倍数
+    got = len(json.loads(saved.read_text(encoding="utf-8")).get("rounds") or []) if saved.exists() else 0
+    want = max(10, -(-got // 10) * 10)
+    body = {"page": meta["page"], "source": "device", "rounds": want, "project_dir": str(p), "what": meta.get("what")}
     base = f"http://127.0.0.1:{PORT}"
     urllib.request.urlopen(urllib.request.Request(base + "/api/collect/start", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}))
     for _ in range(300):
