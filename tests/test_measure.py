@@ -391,3 +391,50 @@ def test_carried_round_with_lost_last_sound_does_not_swallow_next_sentence():
     ok = [r for r in out if r.get("ok")]
     assert len(ok) == 1 and ok[0]["n"] == 2 and not ok[0].get("update")
     assert round(ok[0]["segs"]["P1-P2"], 6) == 0.266804 and round(ok[0]["ends"][1], 6) == round((35336324 - 30846121) / 1e6, 6)
+
+
+def _order_spec():
+    """10-21 真测的场景：收到合成结束（P7）和回复播放完毕（P8）都"记最后一次"，两者谁先谁后不一定。"""
+    segs = {"P1-P2": ["P1", "P2"], "P2-P3": ["P2", "P3"], "P3-P4": ["P3", "P4"], "P4-P5": ["P4", "P5"], "P5-P6": ["P5", "P6"],
+            "P6-P7": ["P6", "P7"], "P7-P8": ["P7", "P8"]}
+    talk = [segs[k] for k in ("P1-P2", "P2-P3", "P3-P4", "P4-P5", "P5-P6")]
+    return m.Spec(start="P1", segments=segs, lines=[{"name": "到出声", "segs": talk},
+                                                    {"name": "到放完", "segs": talk + [segs["P6-P7"], segs["P7-P8"]]}],
+                  need=["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"], last={"P8"}, soft={"P7", "P8"},
+                  marks={"P1", "P7", "P8"}, names={"P8": "回复播放完毕"})
+
+
+ORDER_LOG = """FSW,RESET,26538948,0
+FSW,P1,26662903,0
+FSW,P1,30566234,0
+FSW,P2,30939601,0
+FSW,P3,30973754,0
+FSW,P4,30976263,0
+FSW,P5,31763199,0
+FSW,P6,31772650,0
+FSW,P8,35316336,60
+FSW,P7,35371142,0
+FSW,RESET,35373674,0
+FSW,P1,35516299,0""".splitlines()
+
+
+def test_playback_done_before_synthesis_end_closes_at_reset():
+    """10-21 用户：先放完、50 毫秒后才收到合成结束的轮，以前收不了尾，要等下一句开口才变绿，还连着几轮报"记在起点之前"。
+    现在回到聆听就交出，放完照常记上（这两段先后乱了，报告合成一段）。"""
+    c = m.Collector(_order_spec())
+    out = []
+    for l in ORDER_LOG[:11]:
+        out += c.feed(l)
+    ok = [r for r in out if r.get("ok")]
+    assert len(ok) == 1 and not ok[0].get("gap") and round(ok[0]["ends"][1], 6) == round((35316336 - 30566234) / 1e6, 6)
+    assert ok[0]["segs"]["P7-P8"] < 0
+
+
+def test_step_bar_waits_for_next_step_before_lighting_start():
+    """10-21 用户："上面变绿色字的又开始错乱了"：回到聆听 0.12 秒后设备多报一次"说完"，人还没开口第一步就绿了。"""
+    c = m.Collector(_order_spec())
+    for l in ORDER_LOG[:3]:
+        c.feed(l)
+    assert c.have() == []
+    c.feed(ORDER_LOG[3])
+    assert c.have() == ["P1", "P2"]

@@ -1222,7 +1222,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["gap_run"] = run
                     worst = max(run.items(), key=lambda kv: kv[1], default=None)
                     if worst and worst[1] >= MISS_RUN:
-                        job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都记在起点之前，不像是这一轮的事，这几轮用到它的两段空着。"
+                        job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都不在这一轮该在的位置（没打出来，或者比它前一步还早），这几轮用到它的两段空着。"
                                             "要是上一轮没有被中途打断，多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
                 elif not r.get("stale"):  # 没收全：同一个点连着几轮都没收到，点名（多半是这一步没走到，或者插的位置走不到）
                     run = {m: job.get("miss_run", {}).get(m, 0) + 1 for m in r.get("missing") or []}
