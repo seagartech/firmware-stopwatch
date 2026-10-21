@@ -621,7 +621,6 @@ function optTable(F,fi,pick){
   return `<div class="scroll"><table><thead><tr>${pick?'<th></th>':''}<th>方案</th><th>效果（估算）</th><th>代价</th><th>工作量</th><th>找谁</th></tr></thead><tbody>${F.opts.map((o,oi)=>{const id=fi+'-'+oi;return `<tr>${pick?`<td><input type="checkbox" data-pick="${id}" ${fixPick.has(id)?'checked':''} aria-label="选这个方案"></td>`:''}<td><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''}${o.risk?' <span class="chip c-warn">要权衡</span>':''}</td><td>${o.effect}</td><td>${o.cost}</td><td><span class="wk wk-${{'小':'s','中':'m','大':'l'}[o.work]||'u'}">${o.work}</span><br><span class="note">${String(o.wn||'').replace(/^(小|中|大|不确定)\s*[：:，,]\s*/,'')}</span></td><td>${o.who}</td></tr>`}).join('')}</tbody></table></div>${pick?'':ESTNOTE}`;
 }
 function initPick(FX){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}  // 不再勾选（10-21）：每次都按建议方案算；以前只在第一次算，卡片还没到时算成空的，有的演示一直没有消息
-let copied=null;
 // 结论建议、待办里的文字：把"P2-P5""P4→P5""P7"这类编号换成中文名（技术细节里照原样）
 function plain(t){if(!t)return t;const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
  const seg={};Object.entries(D.S.segs).forEach(([k,g])=>{seg[k]=g.name;const [a,b]=String(g.code||'').split('→').map(x=>x.trim());if(a&&b){seg[a+'-'+b]=g.name;seg[a+'→'+b]=g.name}});
@@ -637,7 +636,7 @@ function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
   d.querySelectorAll('.stale,.expdone').forEach(x=>x.remove());
   d.querySelectorAll('section').forEach(x=>{const t=(x.querySelector('h2')||{}).textContent||'';if(t.startsWith('改完以后')||t.startsWith('设备上现在是'))x.remove()});
   d.querySelectorAll('input[type=checkbox],input[type=radio]').forEach(i=>{const s=document.createElement('span');s.textContent=i.checked?'☑':'☐';s.className='ck';i.replaceWith(s)});
-  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else b.remove()});
+  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy;else b.remove()});  // 复制按钮留着，导出的报告里也能复制
   d.querySelectorAll('[id]').forEach(x=>x.id=pre+x.id);d.querySelectorAll('.flash').forEach(x=>x.classList.remove('flash'));
   d.querySelectorAll('details').forEach(x=>x.removeAttribute('open'));return d.innerHTML}  // 导出也默认收起，点开能看（决策 98）
 // 导出存到哪、存完的提示（一直在，直到你关掉）
@@ -666,8 +665,8 @@ async function exportReport(folder){
 <div class="exphead"><div><h1>⏱ 固件码表 · 测量报告（导出）</h1><div class="note">${htmlEsc(info)} · ${at}${mock?'<span class="mock">模拟数据，不是实测</span>':''}</div></div>
 <div class="tabs seg" role="group" aria-label="报告版本"><button id="tb-b" aria-pressed="true" onclick="sw('b')">结论建议</button><button id="tb-d" aria-pressed="false" onclick="sw('d')">技术细节</button></div></div>
 <div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
-<p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。勾选的方案和待办是导出那一刻的样子；要改勾选，请在码表里打开这份报告。${log}</p></div>
-<div id="tip" hidden></div><script>${tipShow.toString()}document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
+<p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。${log}</p></div>
+<div id="tip" hidden></div><script>${tipShow.toString()}${todoCopy.toString()}document.addEventListener('click',e=>{if(todoCopy(e))return;const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
   let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
@@ -690,7 +689,7 @@ function myPick(D,FX){initPick(FX);
   const chosen=pickedOpts(FX),who=[...new Set(chosen.map(o=>o.who))];
   // 协作沟通（10-21 用户定名、默认收起）：收起时也看得出要找谁、几件
   return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak);padding-top:10px;padding-bottom:10px"><details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"><span><b>协作沟通</b>　发给：${who.map(w=>`${w}（${chosen.filter(o=>o.who===w).length} 件）`).join('、')}</span></summary><p class="note" style="margin:8px 0">每个问题按「建议」方案，按人合成一段，复制后发给对方。发给设备以外的人（服务器、网络等）的不带源码位置，可以直接转给外部对接人。</p>
-   ${who.map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill" data-copy="todo-${wi}">${copied===w?'已复制':'复制给'+w}</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX,D)}</pre></div>`).join('')}</details></div>`;
+   ${who.map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill copy" data-copy="todo-${wi}" aria-label="复制发给${w}的消息">${COPY_IC}复制</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX,D)}</pre></div>`).join('')}</details></div>`;
 }
 function fixA(D){const FX=activeFixes(D);initPick(FX);
   return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
@@ -1538,6 +1537,13 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  // 后台还在跑的那种新打开：进首页，顶上一条「接着看」回到上次那页；刷新还停在原页
  if(FRESH&&page!=='home'&&page!=='settings'){LASTP=page;page='home';hStage=Math.min(hStage,1)}
  else if(page==='home'&&u.last&&u.last!=='home'&&canView(u.last))LASTP=u.last}
+// 复制按钮（10-21 用户定）：点了换成对勾"已复制"，2 秒后变回来；只改按钮本身，不重画页面，导出的报告里也能用
+const COPY_IC='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+function todoCopy(e){const b=e.target.closest&&e.target.closest('[data-copy]');if(!b)return false;const el=document.getElementById(b.dataset.copy);if(!el)return true;const t=el.textContent;
+  const old=()=>{const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(_){}a.remove()};
+  try{navigator.clipboard.writeText(t).catch(old)}catch(_){old()}
+  if(!b.dataset.html)b.dataset.html=b.innerHTML;b.innerHTML='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg>已复制';b.classList.add('done');
+  clearTimeout(b._t);b._t=setTimeout(()=>{b.innerHTML=b.dataset.html;b.classList.remove('done')},2000);return true}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{
@@ -1635,7 +1641,7 @@ if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   const df=e.target.closest('[data-df]');if(df){diffFile=+df.dataset.df;render();return}
   const od=e.target.closest('[data-ondev]');if(od){onDev=od.dataset.ondev;flRun(2,3);render();return}
   if(e.target.closest('[data-openlog]')){if(repKey().startsWith('real')&&JREP&&JREP.raw_log)api('/api/open-folder',{path:JREP.raw_log}).then(j=>toast(j.ok?'✓ 已在访达里打开':'✕ '+(j.detail||'打不开')));else toast('演示数据没有原始日志文件：真测完才有');return}
-  const cp=e.target.closest('[data-copy]');if(cp){const el=document.getElementById(cp.dataset.copy);if(el){try{navigator.clipboard.writeText(el.textContent)}catch(_){};copied=el.dataset.who;render();setTimeout(()=>{copied=null;if(page==='report')render()},1500)}return}
+  if(todoCopy(e))return
   if(e.target.closest('#v-exp')){exportStart();return}
   if(e.target.closest('[data-expdir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p&&p.path){EXP.dir=p.path;render()}});return}
   if(e.target.closest('[data-expgo]')){pop='export';EXP.state='saving';render();exportReport(EXP.dir);return}  // 对话框留着，存好、没存成都在框里说

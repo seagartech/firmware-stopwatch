@@ -77,3 +77,10 @@ def test_details_folded_by_default():
 def test_no_details_open_by_default_in_manager_view():
     for fn in ("fixA", "decideList", "myPick"):
         assert "<details open" not in grab(fn)
+
+
+def test_copy_button_turns_into_check_and_works_in_export():
+    tc = grab("todoCopy")
+    assert "已复制" in tc and "2000" in tc and "render(" not in tc  # 只改按钮本身，2 秒变回（10-21 用户定）
+    assert "execCommand('copy')" in tc  # 本地文件打开时剪贴板被拦，用旧办法
+    assert "${todoCopy.toString()}" in JS and "if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy" in JS  # 导出的报告里也能复制
