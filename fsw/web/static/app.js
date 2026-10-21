@@ -428,7 +428,7 @@ const examples=`<div class="pills"><span class="note">比如：</span>${['从按
 const WHOLE='全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果';
 let AUTO=false,autoHold='',autoBusy='',autoT0=0;
 const TRY_SECS=180;  // 和后台 TRY_SECONDS 一致：试一次最多等多久
-const AUTO_ROUNDS=10;
+const AUTO_ROUNDS=10;  // 轮数固定，不让人选（10-21 用户定：10 轮和 20 轮中位数差 0.04 秒以内，多一个选项多一处要想）
 function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),REAL&&REAL.root].includes(p.path));
  const auto=again?3.5:7.5,human=Math.round((AUTO_ROUNDS*15+45)/60);  // 按验证 14 的实测：大模型三次约 5 分钟，编译烧录约 2.5 分钟；每轮约 15 秒
  return `<section class="estbox"><h2 style="font-size:15px;margin:0 0 8px">预计总耗时</h2><div class="estgrid">
@@ -445,7 +445,7 @@ function autoTick(){if(!AUTO||pop)return;
   return go('steps',()=>{hStage=1;mode='boss';if(bad){AUTO=false;autoHold=bad;page='steps';render();window.scrollTo(0,0);return}
    page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)})}
  if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){AUTO=false;envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
- if(page==='flash'&&fl.st===2)return go('collect',()=>{page='collect';colN=AUTO_ROUNDS;justFlashed=true;colStart();render();window.scrollTo(0,0)});
+ if(page==='flash'&&fl.st===2)return go('collect',()=>{justFlashed=true;page='collect';colStart();render();window.scrollTo(0,0)});
  if(page==='collect'&&col.st===2)return go('report',()=>setTimeout(()=>{if(!AUTO||page!=='collect'||col.st!==2)return;AUTO=false;page='report';mode='boss';render();window.scrollTo(0,0)},1500));
 }
 function autoStart(){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-boardq');b&&b.focus();return}
@@ -1094,33 +1094,9 @@ function ding(bad){if(!beep)return;try{actx=actx||new (window.AudioContext||wind
 function beepBtn(){return `${beepBlocked&&beep&&!(actx&&actx.state==='running')?'<button class="btn" data-beeptest="1" style="border-color:var(--warn);color:var(--warn)">🔇 提示音被浏览器关着，点这里打开</button>':''}<span style="display:inline-flex;gap:10px;align-items:center"><button class="tgl" role="switch" aria-checked="${beep}" data-beep="1"><span class="trk"></span>提示音${beep?'开':'关'}</button>${beep?'<button class="pill" data-beeptest="1">试听</button>':''}</span>`}
 function beepLog(what){try{fetch('/api/client-log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({what,state:actx?actx.state:'none',rate:actx?actx.sampleRate:0,dings,ua:navigator.userAgent,hidden:document.hidden})})}catch(e){}}
 function beepNote(){return CX().beepNote}
-function needMore(){const g=okRounds(),C=CX(),L=DX().lines.length-1;if(g.length<10)return false;const all=g.map(x=>x.e[L]),half=Math.floor(g.length/2),run=all.slice(0,half);const stable=Math.abs(med(run)-med(all))<.05;const few=C.probs.some(p=>{const n=g.filter(x=>x.probs.some(q=>q.k===p.k)).length;return n>0&&n<=3})&&g.length<30;return !stable||few}
-let moreWhy='';
-function enough(){const g=okRounds(),C=CX(),D=DX(),L=D.lines.length-1,ln=D.lines[L];if(g.length<10)return '';
- const all=g.map(x=>x.e[L]),fin=med(all),run=all.map((_,i)=>med(all.slice(0,i+1))),half=Math.floor(g.length/2);
- const cap=g.length>=30,stable=cap||Math.abs(run[half-1]-fin)<.05;  // 到 30 轮就不再催：再测下去一般用时变化也不大
- const rare=C.probs.map(p=>({p,ns:g.filter(x=>x.probs.some(q=>q.k===p.k)).map(x=>x.n)})).filter(o=>o.ns.length>0);
- const few=rare.filter(o=>o.ns.length<=3&&!cap),more=!stable||few.length>0;
- moreWhy=more?(!stable?`一般用时还在变：测到一半时 ${f(run[half-1])} 秒，现在 ${f(fin)} 秒，差 ${f(Math.abs(run[half-1]-fin))} 秒（差 0.05 秒以内算稳）`:`「${few[0].p.t}」只出现了 ${few[0].ns.length} 次，还分不清是偶尔还是常态`)+'。最多建议测到 30 轮。':'';
- const W=940,H=150,l=46,r=10,t=14,b=24,lo=Math.min(...run,fin-.1),hi=Math.max(...run,fin+.1);
- const X=i=>l+(W-l-r)*i/Math.max(1,g.length-1),Y=v=>t+(H-t-b)*(1-(v-lo)/(hi-lo));
- const band=`<rect x="${l}" y="${Y(fin+.05)}" width="${W-l-r}" height="${Y(fin-.05)-Y(fin+.05)}" fill="var(--ok)" opacity=".15"/>`;
- const path=run.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' ');
- const dots=run.map((v,i)=>`<g class="hit" data-tip="${`前 ${i+1} 轮：一般 &lt;b&gt;${f(v)} 秒&lt;/b&gt;`}"><rect x="${X(i)-8}" y="${t}" width="16" height="${H-t-b}" fill="transparent"/><circle cx="${X(i)}" cy="${Y(v)}" r="${i===g.length-1?4.5:3}" fill="var(--speak)" stroke="var(--panel)" stroke-width="2"/></g>`).join('');
- const chart1=`<svg viewBox="0 0 ${W} ${H}" style="width:100%" role="img" aria-label="一般用时随轮数的变化">${band}
-  <text x="${l-6}" y="${Y(fin)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${f(fin)}</text>
-  <line x1="${X(half-1)}" x2="${X(half-1)}" y1="${t}" y2="${H-b}" stroke="var(--line)" stroke-dasharray="3 3"/><text x="${X(half-1)+4}" y="${t+10}" font-size="11" fill="var(--muted)">测到一半</text>
-  <path d="${path}" fill="none" stroke="var(--speak)" stroke-width="2"/>${dots}
-  <text x="${l}" y="${H-6}" font-size="11" fill="var(--muted)">第 1 轮</text><text x="${W-r}" y="${H-6}" text-anchor="end" font-size="11" fill="var(--muted)">第 ${g.length} 轮</text></svg>`;
- const strip=o=>{const cw=Math.min(14,Math.floor(440/g.length));return `<div class="estrip"><span class="elab">${o.p.t}</span><span class="ecells">${g.map(x=>{const on=o.ns.includes(x.n);return `<i class="ecell" style="width:${cw}px;${on?`background:var(--${o.p.c})`:''}" ${on?`data-tip="第 ${x.n} 轮出现"`:''}></i>`}).join('')}</span><span class="ev ${o.ns.length<=3&&!cap?'warn':'ok'}">${o.ns.length} 次${o.ns.length<=3&&!cap?'，太少':''}</span></div>`};
- const v=(ok,a,b)=>`<span class="ev ${ok?'ok':'warn'}">${ok?'✓ '+a:'… '+b}</span>`;
- return `<section class="panel" id="enough" style="border-color:${more?'var(--warn)':'var(--ok)'}">
- <h2 style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">测的够不够<span class="ev ${more?'warn':'ok'}" style="font-size:15px">${more?'建议再测 10 轮':'✓ 够了，可以看结果'}</span></h2>
- <div class="eblk"><div class="ehead"><b>① 一般用时稳了吗</b>${v(stable,'稳了','还在变')}</div><p class="note" style="margin:2px 0 0">线是"测到第几轮时，${ln.end}的一般用时"。后半段落在绿色带里就是稳了。</p>${chart1}</div>
- ${rare.length?`<div class="eblk"><div class="ehead"><b>② 偶尔出的问题看清了吗</b>${v(!few.length,'看清了','次数太少')}</div><p class="note" style="margin:2px 0 6px">一格一轮，亮的是出了这个问题的那轮。只出现 1～3 次，还分不清是偶尔还是常态。</p>${rare.map(strip).join('')}</div>`:''}
- <p class="note" style="margin:6px 0 0">${more?`为什么建议再测：${moreWhy}<br>不再测也能出报告，报告里会注明"次数少，只供参考"。`:''}按收到的数算的，不用大模型。</p></section>`}
 const MIN_ROUNDS=3;  // 至少几轮能出报告（3～9 轮只适合跑流程，报告注明）
-let colVar='b',colN=AUTO_ROUNDS,col={st:0,att:0,got:[],phase:0},colT=null;
+const colN=AUTO_ROUNDS;
+let colVar='b',col={st:0,att:0,got:[],phase:0},colT=null;
 const CC=()=>COLLECT[scene];
 // 真流程：每轮做什么（/api/rounds 按你写的"测什么"挑模板）、线和问题（后台多轮实测状态里这次真的场景），不借演示数据
 let RCT=null,COLJ=null;
@@ -1177,8 +1153,6 @@ function colSetup(){const C=CX(),D=DX();return `${justFlashed?`<div class="okbar
  <div class="status" style="margin:6px 0 4px">${REAL&&!devNow().on?'<span><i class="dot" style="background:var(--warn)"></i>没看到设备：用 USB 线插上，或按电源键开机（闲置会自动关机），检测到会自动继续</span>':`<span><i class="dot" style="background:var(--ok)"></i>${C.dev}已连上${REAL?' '+htmlEsc(devNow().port):''}，计时点输出正常</span>`}<span><i class="dot" style="background:var(--ok)"></i>${C.mode}</span><span><i class="dot" style="background:var(--ok)"></i>量 ${D.lines.length} 条线：${D.lines.map(l=>D.S.startShort+' → '+l.end).join('；')}</span></div>
  <dl class="cform">
   <dt>谁来${C.act}</dt><dd><p style="margin:0">${C.who}</p><p class="note" style="margin:4px 0 0">${C.why}</p></dd>
-  <dt>测几轮</dt><dd><div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><div class="seg" role="group" aria-label="测几轮">${[10,20,30].map(n=>`<button data-coln="${n}" aria-pressed="${n===colN}">${n} 轮${n===20?'（推荐）':''}</button>`).join('')}</div><label class="note" style="display:inline-flex;align-items:center;gap:6px">自己填<input type="number" id="col-n" min="3" max="100" step="1" value="${[10,20,30].includes(colN)?'':colN}" placeholder="3～100" style="width:5.5em"> 轮</label></div>
-   <p class="note" style="margin:4px 0 0">20 轮够看出一般多快、最慢的几次、偶尔出的错。轮数越多越准，也越费时间（${C.per}，估算）。${colN<10?`<br><span style="color:var(--warn)">${colN} 轮只适合跑流程：报告会注明"数字不作数"，达标率只按 &lt; 50% 判。</span>`:''}</p></dd>
   <dt>${C.listName} ${colN} ${C.unit}</dt><dd><details><summary class="pill" style="display:inline-block;list-style:none;cursor:pointer">展开清单</summary><ol class="note" style="columns:2;margin:8px 0 0">${[...Array(colN)].map((_,i)=>`<li>${C.items[i%C.items.length]}</li>`).join('')}</ol></details>
    <p class="note" style="margin:4px 0 0">${C.itemsFrom||'固定清单'}。不用背，每轮页面上会大字提示。</p></dd>
   <dt>提示音</dt><dd>${beepBtn()}<p class="note" style="margin:4px 0 0">${beepNote()}</p></dd>
@@ -1225,8 +1199,8 @@ function collectPage(){
  if(col.st===4)return `<div class="stack">${suspectBox()}${colB()}</div>`;
  const body={a:colA,b:colB,c:colC}[colVar]();
  const g=okRounds(),bad=col.got.length-g.length;
- return `<div class="stack">${col.st===1&&col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:''}${col.st===1?`<div class="status" style="justify-content:flex-end">${beepBtn()}</div>`:''}${body}${col.st===2||(col.st===3&&okRounds().length>=10)?enough():''}
- <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${col.st===3?(()=>{const k=g.length,can=k>=MIN_ROUNDS,to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];return `<span class="note">已停止。测了的 ${k} 轮都留着，可以接着测。${can?'也可以先看结果，会注明只测了 '+k+' 轮。':''}</span><span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" data-go="${to[0]}" ${can?'':blk('[data-col="resume"]',`至少测 ${MIN_ROUNDS} 轮才能看结果`)}>${to[1]}</button><button class="btn" data-col="restart">从头重测</button><button class="btn pri" data-col="resume">接着测（从第 ${k+1} 轮）</button></span>`})():`${col.st===1?'<span style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn" data-col="stop">停止实测</button><span class="note">可以随时停，停了能接着测，已测的都留着。</span></span>':`<span class="note">${col.st===2?`测完 ${g.length} 轮${bad?`（另有 ${bad} 轮没收全，没算）`:''}；原始日志已存。`:'可以随时停，停了能接着测，已测的都留着。'}</span>`}<span style="display:flex;gap:8px;align-items:center">${col.st===1?'':`<button class="btn ${needMore()?'pri':''}" data-col="more">再测 10 轮${needMore()?'（建议）':''}</button>`}${flow==='retest'&&rtC().steps[3][1]?`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="compare" ${col.st===2?'':blk('[data-col="stop"]','测完才能看')}>查看前后对比</button>`:`<button class="btn ${col.st===2&&needMore()?'':'pri'}" data-go="report" ${col.st===2?'':blk('[data-col="stop"]','测完才能看')}>查看报告</button>`}</span>`}</div></section></div>`}
+ return `<div class="stack">${col.st===1&&col.msg?`<div class="why" style="border-left-color:var(--warn)">${htmlEsc(col.msg)}</div>`:''}${col.st===1?`<div class="status" style="justify-content:flex-end">${beepBtn()}</div>`:''}${body}
+ <section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${col.st===3?(()=>{const k=g.length,can=k>=MIN_ROUNDS,to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];return `<span class="note">已停止。测了的 ${k} 轮都留着，可以接着测。${can?'也可以先看结果，会注明只测了 '+k+' 轮。':''}</span><span style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" data-go="${to[0]}" ${can?'':blk('[data-col="resume"]',`至少测 ${MIN_ROUNDS} 轮才能看结果`)}>${to[1]}</button><button class="btn" data-col="restart">从头重测</button><button class="btn pri" data-col="resume">接着测（从第 ${k+1} 轮）</button></span>`})():`${col.st===1?'<span style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn" data-col="stop">停止实测</button><span class="note">可以随时停，停了能接着测，已测的都留着。</span></span>':`<span class="note">${col.st===2?`测完 ${g.length} 轮${bad?`（另有 ${bad} 轮没收全，没算）`:''}；原始日志已存。`:'可以随时停，停了能接着测，已测的都留着。'}</span>`}<span style="display:flex;gap:8px;align-items:center">${flow==='retest'&&rtC().steps[3][1]?`<button class="btn pri" data-go="compare" ${col.st===2?'':blk('[data-col="stop"]','测完才能看')}>查看前后对比</button>`:`<button class="btn pri" data-go="report" ${col.st===2?'':blk('[data-col="stop"]','测完才能看')}>查看报告</button>`}</span>`}</div></section></div>`}
 
 // ===== 前后对比 =====（通用：两次结果都用报告页同一套计算；改后数据是模拟的）
 
@@ -1262,7 +1236,7 @@ function cmpB(){const {B,A}=cmpData();const T=niceT(Math.max(...B.lines.map(l=>l
    if(op===1&&sx(t0+d)-sx(t0)>80){const bd=B.lines[l.i].segMed[j];g+=`<text x="${(sx(t0)+sx(t0+d))/2}" y="${y+13}" text-anchor="middle" font-size="11.5" fill="var(--fg)">${D.S.segs[k].name}${flat(bd,d)?'':d<bd?' ↓':' ↑'}</text>`}t0+=d});
   g+=`<text x="${sx(t0)+8}" y="${y+13}" font-size="12.5" class="num" fill="${l.col}">${f(l.med)} 秒</text>`});
  return `<section class="panel"><h2>改前改后叠在一起看</h2><div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="前后对比时间线">${g}</svg></div>
- <p class="note">浅色是改前，深色是改后；段名旁的 ↓ ↑ 表示这一段快了还是慢了。数字取 20 轮中位数。</p></section>`}
+ <p class="note">浅色是改前，深色是改后；段名旁的 ↓ ↑ 表示这一段快了还是慢了。数字取各轮的中位数。</p></section>`}
 function cmpC(){const {B,A}=cmpData();const L=A.lines.length-1,lb=B.lines[L],la=A.lines[L];
  const T=niceT(Math.max(...B.rounds.flatMap(r=>r.ends),...A.rounds.flatMap(r=>r.ends))/1.1),W=900,X0=90,X1=860,sx=t=>X0+(X1-X0)*t/T,st=step(T);
  let g='';for(let t=0;t<=T+1e-9;t+=st)g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="10" y2="104" stroke="var(--soft)"/><text x="${sx(t)}" y="122" text-anchor="middle" font-size="12" fill="var(--muted)">${+t.toFixed(2)} 秒</text>`;
@@ -1272,7 +1246,7 @@ function cmpC(){const {B,A}=cmpData();const L=A.lines.length-1,lb=B.lines[L],la=
  const card=([t,k])=>`<div class="tcard"><span class="note">${t}</span><b class="num">${f(la[k])} 秒</b><span>${dchip(lb[k],la[k])}</span></div>`;
  return `<section class="panel"><h2>结论</h2><p style="font-size:16px;line-height:1.7;margin:4px 0 12px">${cmpHead()}</p>
  <div class="tcards">${TIERS.map(card).join('')}${la.pass_rate==null?'':`<div class="tcard"><span class="note">达标率</span><b class="num">${passPct(la)}</b><span>${pchip(lb,la)}</span></div>`}</div><p class="note">上面几格是"${la.end}"那条线。</p>
- <h3 class="h3">20 轮"${la.end}"的用时，一个点一轮</h3><div class="scroll"><svg viewBox="0 0 ${W} 130" style="min-width:640px;width:100%" role="img" aria-label="改前改后每轮分布">${g}</svg></div>
+ <h3 class="h3">${A.rounds.length} 轮"${la.end}"的用时，一个点一轮</h3><div class="scroll"><svg viewBox="0 0 ${W} 130" style="min-width:640px;width:100%" role="img" aria-label="改前改后每轮分布">${g}</svg></div>
  <p class="note">竖线是一般用时。点挤得越紧，说明越稳定。</p></section>`}
 const CMPVAR={a:{label:'A 对照表',idea:'A 对照表：用时、达标率和每一段，改前、改后、变化三列，箭头标快慢。最全，适合研发查是哪一段变了。'},
  b:{label:'B 叠图',idea:'B 叠图：报告里那张计时图，改前（浅）改后（深）叠在一起，段名旁带 ↓ ↑。一眼看出变化落在哪一段。'},
@@ -1363,9 +1337,6 @@ function popHTML(){const F=FF[scene],C=CC();
    `<button class="btn pri" data-pop="close" data-nudge="#sideask" data-msg="先回答这个问题">开始核对</button>`)}
  if(pop==='flash')return box('设备准备好了',`<p>插计时点、编译、烧录都完成了。刚才试的那一次，${live().length} 个计时点都收到了。</p><p>下一步<b>多轮实测</b>：照提示${C.act} ${colN} ${C.unit}，码表记下每一${C.unit}里每一段用了多久，最后出报告。</p>`,
    `<button class="btn" data-pop="close">留在这页</button><button class="btn pri" data-go="collect">开始多轮实测</button>`);
- if(pop==='col'){const g=okRounds(),bad=col.got.length-g.length;const to=flow==='retest'&&rtC().steps[3][1]?['compare','查看前后对比']:['report','查看报告'];
-  return box(`测完了 ${g.length} 轮`,`<p>${bad?`有 ${bad} 轮没收全，没算，已自动补收。`:'每轮都收全了。'}</p><p class="note">页面下方「测的够不够」写了要不要再测；不再收就直接看结果。</p>`,
-   `<button class="btn" data-pop="close" data-nudge="#enough">先看够不够</button><button class="btn pri" data-go="${to[0]}">${to[1]}</button>`)}
  if(pop==='bg'&&bgToolErr())return box(TOOLT(BG.cause),`<p>${htmlEsc(toolSay(BG.message))}</p>${BG.error?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div>`:''}<p class="note">找关键步骤照常做；烧录前解决就行。</p>`,`${BG.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}<button class="btn pri" data-bgretry="1">重试</button>`);
  if(pop==='bg'&&bgFailed())return box('原版编译没通过，不是码表改的',`<p>${htmlEsc(String(BG.message||'').replace(/^原版编译没通过，不是码表改的：/,''))}</p><div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div><p class="note">找关键步骤照常做；烧录前要先让原版编得过。</p>`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='bg'){const d=bgDone(),no=!envComp()||bgWaitTool();return box(d?'✓ 原始代码已编好':no?'后台编原始代码：等编译工具装好':`后台在编原始代码：${bgPct()}%`,`${d||no?'':`<span class="pbar" style="display:block;margin:0 0 12px"><i style="width:${bgPct()}%"></i></span>`}<ul class="notes" style="font-size:14px;color:var(--fg)">${BGTIP.split('<br>').map(x=>`<li>${x}</li>`).join('')}</ul>${no?'<p class="note">编译工具装好后自动开始，不用点。</p>':''}`,`<button class="btn pri" data-pop="close">知道了</button>`)}
@@ -1510,7 +1481,7 @@ function canViewNear(p){const L=flow==='retest'?['retest','steps','flash','colle
 window.addEventListener('popstate',()=>{if(booting)return;let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}if(!PAGES.some(p=>p.id===h)||h===page)return;
  navPop=true;pop=null;if(hStage>=2)hStage=1;page=canView(h)?h:canViewNear(h);render();window.scrollTo(0,0)});
 function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(STEPS||[]),...added].find(r=>r.p===p);if(x)ed[p]=[x.f,x.l]}
- return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colN,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:''}}
+ return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:''}}
 let uiLast='',uiT=null;
 const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
 function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;try{sessionStorage.setItem('fsw-ui',s)}catch(e){}  // 这个标签页自己也存一份：别的标签页开了新的一轮，这里刷新也不丢
@@ -1523,7 +1494,7 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  // 关了浏览器或标签页再打开：算新的一轮，从空白首页开始；只有实测、烧录还在后台跑着时才接上，首页顶上给「接着看」
  if(FRESH){const cj=await get('/api/collect'),fj=await get('/api/fsw'),run=x=>!!x&&['running','waiting_device'].includes(x.status);if(!run(cj)&&!run(fj)){page='home';return}}
  scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
- REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colN=u.colN||colN;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;remeasure=!!u.remeasure;
+ REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;remeasure=!!u.remeasure;
  const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;
   for(const [p,v] of Object.entries(u.ed||{})){const x=[...STEPS,...added].find(r=>r.p===p);if(x&&v){x.f=v[0];x.l=v[1];edits[p]=true}}};
  const quiet=j=>{const b=beep;beep=false;try{colApply(j)}finally{beep=b}};  // 接上已测的轮：不再一轮轮"叮"
@@ -1674,8 +1645,7 @@ if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   const cv=e.target.closest('[data-colvar]');if(cv){colVar=cv.dataset.colvar;render();return}
   if(e.target.closest('[data-beeptest]')){resetAudio();unlockAudio();beepBlocked=false;ding(false);setTimeout(()=>{beepMsg=actx?actx.state:'none';beepLog('试听');render()},400);return}
   if(e.target.closest('[data-beep]')){beep=!beep;render();return}
-  const cn=e.target.closest('[data-coln]');if(cn){colN=+cn.dataset.coln;render();return}
-  const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='more'){colN+=10;colStart(true)}else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){if(col.st===4)autoBusy='';colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
+  const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){if(col.st===4)autoBusy='';colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
   if(e.target.closest('[data-resume]')){page='home';hStage=2;render();window.scrollTo(0,0);return}
   const tk=e.target.closest('[data-test]');if(tk){const i=document.getElementById('set-key'),v=i?i.value.trim():'';keyErr='';if(v&&!v.startsWith('•'))keyDraft=v;tk.disabled=true;tk.textContent='正在测试……';
    api('/api/llm/test',{provider:setLLM,key:v&&!v.startsWith('•')?v:null}).then(r=>{keyTested=!!r.ok;keyErr=r.ok?'':r.message;render()}).catch(()=>{keyErr='码表后台没有回应，看看运行码表的窗口是不是关了。';render()});return}
@@ -1694,7 +1664,7 @@ document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.clo
 document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dropzone');if(!z)return;e.preventDefault();uploadDrop(e.dataTransfer.items)});
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&hStage===2){hStage=1;render()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pop){pop=null;render();return}if(e.key==='Escape'&&hStage===2){hStage=1;render()}});
-document.addEventListener('change',e=>{if(e.target.id==='col-n'){const n=Math.round(+e.target.value);if(n>=3&&n<=100){colN=n;render()}else{toast('测几轮要在 3～100 轮之间');e.target.value=[10,20,30].includes(colN)?'':colN}return}if(e.target.id==='h-board'){return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.id==='set-reuse'){reuseLast=e.target.checked;return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
+document.addEventListener('change',e=>{if(e.target.id==='h-board'){return}if(e.target.dataset&&e.target.dataset.pick){const id=e.target.dataset.pick;fixPick.has(id)?fixPick.delete(id):fixPick.add(id);render();return}if(e.target.dataset&&e.target.dataset.sw){swOn=e.target.checked;return}if(e.target.dataset&&e.target.dataset.drop){const p=e.target.dataset.drop;dropped.has(p)?dropped.delete(p):dropped.add(p);render();return}if(e.target.id==='set-reuse'){reuseLast=e.target.checked;return}if(e.target.name==='llm'){setLLM=e.target.value;keyTested=false;keyErr='';keyDraft='';render()}});
 document.getElementById('v-boss').addEventListener('click',()=>{mode='boss';render()});
 document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render()});
 (async function init(){

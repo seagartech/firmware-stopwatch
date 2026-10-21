@@ -1123,7 +1123,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.post("/api/collect/start")
     def collect_start(body: CollectBody):
         if not 3 <= body.rounds <= 100:
-            raise HTTPException(400, "测几轮要在 3～100 轮之间：3～9 轮适合跑流程，正式测建议 20 轮以上。")
+            raise HTTPException(400, "轮数要在 3～100 轮之间。")
         old = col["job"]
         if old and old["status"] in ("running", "waiting_device", "paused"):
             old["_stop"] = True
@@ -1663,7 +1663,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
     @app.get("/api/rounds")
     def rounds_template(what: str = "", start: str = ""):
-        """多轮实测每轮做什么：按你写的"测什么"挑模板（对话类用固定的 20 句；别的按起点的说法，比如"按一下按键"）。"""
+        """多轮实测每轮做什么：按你写的"测什么"挑模板（对话类用固定的一组句子，按轮数取前几句；别的按起点的说法，比如"按一下按键"）。"""
         t = next(t for t in ROUNDS if not t["match"] or re.search(t["match"], what))
         fill = lambda v: [fill(x) for x in v] if isinstance(v, list) else str(v).replace("{start}", start.strip() or "触发一次")
         return {"template": t["name"], **{k: fill(v) for k, v in t["fields"].items()}}
