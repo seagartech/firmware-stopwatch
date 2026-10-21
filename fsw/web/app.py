@@ -31,7 +31,7 @@ from fsw import rangelist as rl
 from fsw import carry as cy
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
-from fsw.platforms.espidf import EspIdf, ToolEnvError, find_idf, find_ports, pick_idf
+from fsw.platforms.espidf import EspIdf, ToolEnvError, chip_name, find_idf, find_ports, pick_idf, port_key
 from fsw.platforms.espidf.install import MacInstaller, choose_version
 from fsw.workspace import workspace as ws
 from fsw.workspace.workspace import ascii_work_root, prepare
@@ -99,6 +99,19 @@ class EspDevice:
             return EspIdf(found["path"]).flash_saved(fw, port, on_progress=on_progress)
         except ToolEnvError as e:
             return {"ok": False, "cause": "tool", "message": e.message, "error": e.detail}
+
+    def read_chip(self, port):
+        """设备上是哪种芯片（选板子时核对用）：乐鑫烧录工具连一下，设备会重启一下。"""
+        found = pick_idf(self.idf_finder(), None)
+        if not found:
+            return {"chip": None, "error": "没找到乐鑫编译工具，读芯片要用它带的 esptool。"}
+        try:
+            return EspIdf(found["path"]).read_chip(port)
+        except ToolEnvError as e:
+            return {"chip": None, "error": e.detail or e.message}
+
+    def port_key(self, port):
+        return port_key(port)
 
     def read(self, port, seconds, on_line, stop=None):
         ser = EspIdf.open_port(port)
@@ -223,6 +236,15 @@ def _overall(fw_dir):
         st["out"] = max(st["out"], min(100, int((st["seg"] * 100 + pct) / n)))
         return st["out"]
     return step
+
+
+def _fw_chip(fw):
+    """存下的固件是给哪种芯片编的（乐鑫编译时写进 flasher_args.json）。"""
+    try:
+        args = json.loads((Path(fw) / "flasher_args.json").read_text(encoding="utf-8"))
+        return chip_name((args.get("extra_esptool_args") or {}).get("chip"))
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def _garbled(line):
@@ -870,8 +892,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job["seconds"]["flash"] = r.get("seconds")
             if r.get("cause") == "tool":
                 return _fail(job, "burn", r["message"], error=r.get("error"), cause="tool")
+            if r.get("wrong_chip"):  # 选的板子和设备芯片不同：乐鑫工具没写进去，设备里原来的东西没动
+                w = r["wrong_chip"]
+                _remember_chip(port, w["device"])
+                return _fail(job, "burn", f"板子选错了：设备上的芯片是 {w['device']}，你选的板子用的是 {w['firmware']}。"
+                                          f"乐鑫烧录工具没往里写，设备里原来的东西没动。回首页换一块芯片是 {w['device']} 的板子，再点「开始测量」。",
+                             error=r.get("error"), wrong_chip=w)
             if not r.get("ok"):
                 return _fail(job, "burn", "烧录中断", error=r.get("error"))
+            _remember_chip(port, _fw_chip(fsw_fw))  # 烧进去了：设备就是固件要的芯片，以后选板子直接核对，不用再读
             _on_device(a.project_dir, True)
             job["_just_flashed"] = True  # 刚烧完设备会重启；之后点「再试一次」时设备一直开着，不用再等它开机
             T().end("flash")
@@ -893,7 +922,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             my_gen = job.get("gen")
             superseded = lambda: fsw["job"] is not job or job.get("gen") != my_gen or job.get("cancel")  # 又插了一次 / 又点了编译烧录 / 再试一次：这一趟作废，让出调试口、不改页面状态
             job.update(phase="try", status="running", pct=0, got=[], log="等设备开机" if fresh else "设备开着，等计时点",
-                       try_started=time.time(), dev_seen=None if fresh else time.time(), boot_quiet=False)
+                       try_started=time.time(), dev_seen=None if fresh else time.time(), boot_quiet=False, heard=None)
             want = set(int(k[1:]) for k in (ins.current(_fsw_dirs(a)[0]) or {"steps": {}})["steps"])
             # 和多轮实测同一个标准：有一轮（从一个起点到下一个起点）插上的计时点全部收到，才算试通。
             # 有的点只在某些情况下才走到（比如只喊唤醒词时，设备不会判断"你说完了"），所以某一轮没收全不马上判失败：
@@ -937,6 +966,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             def on_line(line):
                 if superseded():
                     return
+                job["heard"] = time.time()  # 调试口收到过东西（哪怕不是计时点）：口是通的。一直没有就是口卡住了，页面提示拔插 USB
                 if not job.get("dev_seen") and _plain(line):
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 feed(line)
@@ -995,6 +1025,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 odd = sum(1 for l in lines if _garbled(l))
                 why = ("收到的都是乱码，多半是波特率不对（码表按 115200 读）。" if lines and odd >= len(lines) / 2 else
+                       # 10-21 真测：调试口还在，但一个字节都读不到，连乐鑫烧录工具也连不上；拔插 USB 线就好了
+                       "调试口一个字都没收到，连设备平常的输出都没有：多半是电脑上的 USB 口卡住了（口还在，但收不到东西）。"
+                       "拔下 USB 线，等 2 秒再插回去，然后点「再试一次」。拔插后还是这样，看看有没有别的软件（比如串口监视器）占着它。"
+                       if not job.get("heard") and not lines else
                        "常见原因：没触发到；串口被别的软件占着（比如串口监视器）；波特率不对（码表按 115200 读）。")
                 return _fail(job, "try", f"{TRY_SECONDS // 60} 分钟里没收到计时点。点「再试一次」，然后做一次要测的事。", why=why,
                              error=f"（{TRY_SECONDS} 秒内没有计时点输出）", offer_restore=job["try_fails"] >= 2)
@@ -2056,6 +2090,64 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     def env_status(cc: bool = True):
         """电脑上的环境：装了哪些乐鑫编译工具、本机 Claude Code 登没登录、插着哪些设备。都不用大模型、不花钱。"""
         return {"idf": idf_finder(), "claude_code": cc_status() if cc else None, "ports": port_finder()}
+
+    # ---- 设备上是哪种芯片：选板子时核对，芯片对不上的板子不让选（10-21 用户定）----
+    chip_lock = threading.Lock()
+
+    def _chips_file():
+        return live["data"] / "devices.json"
+
+    def _chips():
+        try:
+            return json.loads(_chips_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _key(port):
+        return getattr(device, "port_key", lambda p: p)(port)
+
+    def _remember_chip(port, chip):
+        chip = chip_name(chip)
+        if not (port and chip):
+            return
+        d = _chips()
+        d[_key(port)] = chip
+        try:
+            _chips_file().parent.mkdir(parents=True, exist_ok=True)
+            _chips_file().write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+    @app.get("/api/device/chip")
+    def device_chip():
+        """插着的设备记下过是哪种芯片没有（读过、或者烧录成功过）。不碰设备。"""
+        ports = port_finder()
+        if not ports:
+            return {"port": None, "chip": None}
+        return {"port": ports[0], "chip": _chips().get(_key(ports[0]))}
+
+    @app.post("/api/device/chip")
+    def device_chip_read():
+        """读一下插着的设备是哪种芯片（设备会重启一下），记下来。码表正在用调试口（试一次、多轮实测、烧录）时不读。"""
+        ports = port_finder()
+        if not ports:
+            return {"port": None, "chip": None, "error": "没插设备"}
+        port = ports[0]
+        known = _chips().get(_key(port))
+        if known:
+            return {"port": port, "chip": known}
+        job = fsw.get("job") or {}
+        if EspIdf._OPEN or (job.get("status") in ("running", "waiting_device") and job.get("phase") in ("flash", "try")):
+            return {"port": port, "chip": None, "busy": True}
+        if not chip_lock.acquire(blocking=False):
+            return {"port": port, "chip": None, "busy": True}
+        try:
+            r = getattr(device, "read_chip", lambda p: {"chip": None, "error": "这种设备读不了芯片"})(port)
+        finally:
+            chip_lock.release()
+        if r.get("chip"):
+            _remember_chip(port, r["chip"])
+        return {"port": port, "chip": chip_name(r.get("chip")), "error": r.get("error")}
 
     @app.get("/api/ports")
     def ports():

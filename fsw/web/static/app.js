@@ -395,13 +395,29 @@ function boardMatch(boards,q){const qn=bNorm(q),toks=String(q||'').toLowerCase()
  const sc=b=>{const id=bNorm(b.id),last=bNorm(b.id.split('/').pop()),chip=bNorm(b.chip);
   return last===qn?6:last.startsWith(qn)?5:id.includes(qn)?4:toks.length>1&&toks.every(t=>id.includes(t))?3:chip.includes(qn)?2:sub(id,qn)?1:0};
  return boards.map(b=>[sc(b),b]).filter(x=>x[0]>0).sort((a,b)=>b[0]-a[0]||a[1].id.length-b[1].id.length||a[1].id.localeCompare(b[1].id)).map(x=>x[1])}
+// 设备上是哪种芯片（10-21 用户定）：插着设备、要选板子时读一次（设备会重启一下），记下来；芯片对不上的板子变灰、写原因，不让选
+let DEVCHIP={port:'',chip:null,reading:false,err:''};
+const chipN=s=>{const t=String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');return t.startsWith('ESP32')&&t.length>5?t.slice(0,5)+'-'+t.slice(5):t};
+const chipOff=b=>!!(DEVCHIP.chip&&b&&b.chip&&chipN(b.chip)!==DEVCHIP.chip);
+async function devChipCheck(){if(!PORTS.length&&DEVCHIP.port&&!DEVCHIP.reading){DEVCHIP={port:'',chip:null,reading:false,err:''};render();return}  // 拔了：不再按它筛
+ if(!REAL||!(REAL.boards||[]).length||!PORTS.length||DEVCHIP.port===PORTS[0])return;
+ DEVCHIP={port:PORTS[0],chip:null,reading:false,err:''};
+ try{let r=await (await fetch('/api/device/chip')).json();
+  if(!r.chip&&r.port===DEVCHIP.port){DEVCHIP.reading=true;render();r=await (await post('/api/device/chip',{})).json()}
+  if(r.port!==DEVCHIP.port)return;DEVCHIP={port:r.port,chip:r.chip||null,reading:false,err:r.chip?'':(r.busy?'':r.error||'')};if(r.busy)DEVCHIP.port=''}catch(e){DEVCHIP.reading=false}
+ render()}
 let hBoardOpen=false,hBoardHi=0,hBoardLoad='';  // hBoardLoad：刚点选、后台还在按这块板子重读项目
+const boardOk=q=>boardMatch(REAL.boards||[],q).filter(b=>!chipOff(b));  // 能选的（芯片对得上），上下键和回车只在这里面走
 function boardRow(){if(!REAL||!REAL.boards||!REAL.boards.length)return '';
- const list=boardMatch(REAL.boards,hBoardQ),hi=Math.min(hBoardHi,Math.max(0,list.length-1));
- const drop=hBoardOpen?`<div class="bdrop" id="h-blist" role="listbox" aria-label="匹配的板子">${list.length?list.slice(0,50).map((b,k)=>`<div class="bopt${k===hi?' hi':''}" role="option" aria-selected="${REAL.board===b.id}" data-pickboard="${b.id}">${b.id}<span class="note">　${b.chip}</span></div>`).join('')+(list.length>50?`<div class="note" style="padding:6px 10px">还有 ${list.length-50} 块，多输几个字缩小范围</div>`:''):'<div class="note" style="padding:8px 10px">没有匹配的板子，换个说法试试（比如只输型号里的几个字）</div>'}</div>`:'';
+ const all=boardMatch(REAL.boards,hBoardQ),list=all.filter(b=>!chipOff(b)),off=all.filter(chipOff),hi=Math.min(hBoardHi,Math.max(0,list.length-1));
+ const rows=[...list.map((b,k)=>`<div class="bopt${k===hi?' hi':''}" role="option" aria-selected="${REAL.board===b.id}" data-pickboard="${b.id}">${b.id}<span class="note">　${b.chip}</span></div>`),
+  ...off.map(b=>`<div class="bopt off" role="option" aria-disabled="true" aria-selected="false">${b.id}<span class="note">　${b.chip}：设备上是 ${DEVCHIP.chip}，不能选</span></div>`)];
+ const drop=hBoardOpen?`<div class="bdrop" id="h-blist" role="listbox" aria-label="匹配的板子">${rows.length?(off.length?`<div class="note" style="padding:6px 10px;border-bottom:1px solid var(--line)">设备上的芯片是 ${DEVCHIP.chip}：另有 ${off.length} 块芯片不同的板子不能选，变灰排在最后</div>`:'')+rows.slice(0,50).join('')+(rows.length>50?`<div class="note" style="padding:6px 10px">还有 ${rows.length-50} 块${off.length?`（含 ${Math.min(off.length,rows.length-50)} 块不能选的）`:''}，多输几个字缩小范围</div>`:''):'<div class="note" style="padding:8px 10px">没有匹配的板子，换个说法试试（比如只输型号里的几个字）</div>'}</div>`:'';
+ const mis=REAL.chip&&DEVCHIP.chip&&chipN(REAL.chip)!==DEVCHIP.chip;
+ const chipNote=DEVCHIP.reading?'<p class="note" style="margin:6px 0 0"><span class="spin"></span>正在读设备上的芯片，设备会重启一下</p>':mis?`<p class="note" style="color:var(--bad);margin:6px 0 0">板子选错了：你选的 ${htmlEsc(REAL.board||'')} 用 ${htmlEsc(REAL.chip)}，设备上的芯片是 ${DEVCHIP.chip}。换一块芯片是 ${DEVCHIP.chip} 的板子。</p>`:DEVCHIP.chip&&off.length?`<p class="note" style="margin:6px 0 0">设备上的芯片是 ${DEVCHIP.chip}，芯片不同的板子列在后面、不能选。</p>`:'';
  return `<div class="field" style="margin-top:14px"><label for="h-boardq">这个项目支持 ${REAL.boards.length} 块板子，你用的是哪块？</label>
-  <div class="bpick${(hBoardLoad||REAL.board)&&hBoardQ===(hBoardLoad||REAL.board)&&!hBoardOpen?' picked':''}"><input type="text" id="h-boardq" role="combobox" aria-expanded="${hBoardOpen}" aria-controls="h-blist" autocomplete="off" placeholder="输入板子型号里的几个字，比如 core-s3" value="${htmlEsc(hBoardQ)}">${drop}</div>
-  ${hBoardLoad?`<p class="note" style="margin:6px 0 0"><span class="spin"></span>已选 ${htmlEsc(hBoardLoad)}，正在读这块板子的配置</p>`:REAL.chip?`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>已选 ${REAL.board||''}，芯片 ${REAL.chip}${REAL.board_from==='last'?'（按上次选的；想换就在框里重新输入）':''}</p>`:hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}</div>`}
+  <div class="bpick${(hBoardLoad||REAL.board)&&hBoardQ===(hBoardLoad||REAL.board)&&!hBoardOpen&&!mis?' picked':''}"><input type="text" id="h-boardq" role="combobox" aria-expanded="${hBoardOpen}" aria-controls="h-blist" autocomplete="off" placeholder="输入板子型号里的几个字，比如 core-s3" value="${htmlEsc(hBoardQ)}">${drop}</div>
+  ${hBoardLoad?`<p class="note" style="margin:6px 0 0"><span class="spin"></span>已选 ${htmlEsc(hBoardLoad)}，正在读这块板子的配置</p>`:REAL.chip?(mis?'':`<p class="note" style="margin:6px 0 0"><i class="dot" style="background:var(--ok)"></i>已选 ${REAL.board||''}，芯片 ${REAL.chip}${REAL.board_from==='last'?'（按上次选的；想换就在框里重新输入）':''}</p>`):hBoardNeed?'<p class="note" style="color:var(--warn);margin:6px 0 0">先选你用的板子：芯片跟着板子走，编译和烧录要用。</p>':'<p class="note" style="margin:6px 0 0">源码里没写用哪块板子（没编译过），芯片跟着板子走。</p>'}${chipNote}</div>`}
 function boardPick(id){const w=document.getElementById('h-what');hSay=w?w.value:hSay;hBoardQ=id;hBoardOpen=false;hBoardHi=0;hBoardLoad=id;hBoardNeed=false;const q=document.getElementById('h-boardq');if(q){q.value=id;q.blur()}render();realPick(REAL.body,REAL.label,id)}  // 点了马上收起列表、显示已选，不等后台读完（第 34 次走查：几秒不变，人以为没点上）
 async function uploadDrop(items){const tok=Math.random().toString(36).slice(2,12),files=[];
  const skip=new Set(['.git','build','managed_components','node_modules']);
@@ -501,7 +517,7 @@ m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件�
   :`<div class="field"><label for="h-path">固件源码位置</label><div class="inrow"><input type="text" id="h-path" value="${hSrc}" readonly><button class="btn" data-pick="reset">换一个</button></div></div>${boardRow()}
    <dl class="kv" style="margin-top:14px"><dt>测量范围</dt><dd>全程：从设备收到触发，到最后一个对外输出；起点和终点由 AI 读代码确定</dd></dl>
    ${estBox()}
-   <div class="acts" style="justify-content:flex-start;align-items:center"><button class="btn pri" data-autostart="1" ${hBoardLoad?blk('#h-boardq','正在读这块板子的配置'):REAL&&!REAL.chip?blk('#h-boardq','先选板子'):''}>开始测量</button><span class="note">点了以后自动执行，需要人工操作时页面提示并响一声</span></div>`}
+   <div class="acts" style="justify-content:flex-start;align-items:center"><button class="btn pri" data-autostart="1" ${hBoardLoad?blk('#h-boardq','正在读这块板子的配置'):REAL&&!REAL.chip?blk('#h-boardq','先选板子'):REAL&&DEVCHIP.chip&&chipN(REAL.chip)!==DEVCHIP.chip?blk('#h-boardq',`换成 ${DEVCHIP.chip} 的板子`):''}>开始测量</button><span class="note">点了以后自动执行，需要人工操作时页面提示并响一声</span></div>`}
   </section>
   <section class="panel"><h2>以前测过的</h2>${recentList()}</section></div>`}}
 };
@@ -989,6 +1005,7 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
   if(page==='flash')render()},350)}
 function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
  const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code>${fullLogBtn()}</div>${fullLog()}`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
+ if(E.wrong_chip)return box('板子选错了',htmlEsc(E.message),E.error,`<button class="btn pri" data-go="home">回首页换板子</button>`);  // 芯片对不上：重烧没用，要换板子
  if(E.cause)return box(TOOLT(E.cause),htmlEsc(toolSay(E.message)),E.error,`<button class="btn pri" data-flx="${E.kind==='orig'?'origretry':E.kind==='burn'?'reburn':'rebuild'}">重试</button>${E.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}`);
  if(E.kind==='insert')return box('计时点没插上',E.message,E.error||'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
  if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过（编译工具、依赖或板子配置的问题），和插的计时点无关，烧录前要先解决。码表不替你改代码。`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
@@ -1013,8 +1030,9 @@ function flList(from=0,to=4){const n=to-from+1;
 const stepLog=()=>`<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`;
 // 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
 const tryAct=()=>{if(realFlash()&&IDENT&&IDENT.page&&(IDENT.page.act||'').trim())return trySay();const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
+const USB_QUIET=40;  // 试一次这么多秒调试口一个字都没有：提示拔插 USB（口还在但卡住了，拔插就好，10-21 真测）
 function tryBox(got,N){const J=FSWJ||{},now=Date.now()/1000,up=J.dev_seen,since=up?Math.round(now-up):0,idle=up&&!got&&since>30;
- if(!up&&J.boot_quiet)return `<div class="bigask"><b>设备可能已经开机了：现在对设备${tryAct()}</b><span class="note">没看到它的开机输出（有的设备开机后不出声，或者开机那几行在码表连上之前就打完了）。看设备已经回到待命画面，就直接做一次；码表收到计时点就算通。</span>${fullLogBtn()}${fullLog()}</div>`;  // 不一直转圈等"开机"
+ if(!up&&J.boot_quiet)return `<div class="bigask"><b>设备可能已经开机了：${/^现在/.test(tryAct())?tryAct():'现在对设备'+tryAct()}</b><span class="note">没看到它的开机输出（有的设备开机后不出声，或者开机那几行在码表连上之前就打完了）。看设备已经回到待命画面，就直接做一次；码表收到计时点就算通。</span>${!J.heard&&J.try_started&&now-J.try_started>USB_QUIET?`<span class="note" style="color:var(--warn)">已经 ${Math.round(now-J.try_started)} 秒，调试口一个字都没收到。你已经做过一次、设备也有反应的话，多半是电脑上的 USB 口卡住了：拔下 USB 线，等 2 秒再插回去，码表会自己接上，不用点什么。</span>`:''}${fullLogBtn()}${fullLog()}</div>`;  // 不一直转圈等"开机"；口卡住（在但读不到东西，10-21 真测）提示拔插
  if(!up)return `<div class="bigask"><b><span class="spin"></span> 设备刚烧完，正在重启</b><span class="note">等它开机（有屏幕的会回到待命画面），码表会自己看到，不用点什么。开机后这里会告诉你做什么。</span></div>`;
  return `<div class="bigask"><b>${/^现在/.test(tryAct())?tryAct():'现在对设备：'+tryAct()}</b>
   <span class="note">设备已经开机了。只是确认计时点能收到，不算进数据。</span>
@@ -1450,6 +1468,7 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   document.getElementById('v-boss').setAttribute('aria-pressed',String(mode==='boss'));
   document.getElementById('v-dev').setAttribute('aria-pressed',String(mode==='dev'));
   syncFlow();syncHash();uiSave();autoTick();autoSave();
+  if(isHome&&!RV&&REAL)devChipCheck();
 }
 // 步骤条同步给后台：后台记下走到哪一步、哪步出错、哪些跳过（刷新网页、以后接真功能都靠它）
 let lastKind='',lastSync='';
@@ -1655,7 +1674,7 @@ document.addEventListener('input',e=>{if(e.target.id==='h-boardq'){hBoardQ=e.tar
 document.addEventListener('focusin',e=>{if(e.target.id==='h-boardq'&&!hBoardOpen){hBoardOpen=true;render()}});
 document.addEventListener('focusout',e=>{if(e.target.id==='h-boardq')setTimeout(()=>{if(hBoardOpen&&document.activeElement&&document.activeElement.id!=='h-boardq'){hBoardOpen=false;render()}},150)});
 document.addEventListener('mousedown',e=>{const o=e.target.closest&&e.target.closest('[data-pickboard]');if(o){e.preventDefault();boardPick(o.dataset.pickboard)}});
-document.addEventListener('keydown',e=>{if(e.target.id!=='h-boardq'||!REAL)return;const list=boardMatch(REAL.boards||[],hBoardQ);
+document.addEventListener('keydown',e=>{if(e.target.id!=='h-boardq'||!REAL)return;const list=boardOk(hBoardQ);
  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();hBoardOpen=true;hBoardHi=Math.max(0,Math.min(list.length-1,hBoardHi+(e.key==='ArrowDown'?1:-1)));render();const h=document.querySelector('#h-blist .hi');h&&h.scrollIntoView({block:'nearest'})}
  else if(e.key==='Enter'&&hBoardOpen&&list.length){e.preventDefault();boardPick(list[Math.min(hBoardHi,list.length-1)].id)}
  else if(e.key==='Escape'){hBoardOpen=false;render()}});
