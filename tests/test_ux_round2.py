@@ -301,6 +301,82 @@ def test_try_reopens_the_port_when_it_hears_nothing(tmp_path, monkeypatch):
     assert "if(!up&&J.boot_quiet)" in JS
 
 
+def test_try_with_a_stuck_port_says_replug_usb(tmp_path, monkeypatch):
+    """10-21 真测：烧完调试口还在，但一个字节都读不到（乐鑫烧录工具也连不上），拔插 USB 线才好。
+    码表一直重连、页面一直说"可能已经开机了"；现在页面过一会儿提示拔插，超时的报错也直接说拔插。"""
+    import time as _t
+    from fsw.web import app as A
+    from tests.test_fsw_api import FakeDevice, start_insert, wait as fwait, run_to_try, fake_build_output
+    from fastapi.testclient import TestClient
+    from fsw.llm import FakeLLM
+    from fsw.web.app import create_app
+    from tests.identify_fixtures import door_source
+    from tests.test_instrument import reply
+    monkeypatch.setattr(A, "REOPEN_SECS", 0.2)
+    monkeypatch.setattr(A, "TRY_SECONDS", 1)
+
+    class Stuck(FakeDevice):  # 每次打开都什么都收不到
+        def read(self, port, seconds, on_line, stop=None):
+            end = _t.time() + seconds
+            while _t.time() < end and not (stop and stop()):
+                _t.sleep(0.02)
+            return []
+
+    def builder(work, target, board, idf, progress):
+        fake_build_output(work)
+        return {"ok": True, "seconds": 0.1, "error": None}
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=lambda p, k: FakeLLM(reply()),
+                              idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
+                              cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.usbmodem1101"],
+                              bg_builder=builder, device=Stuck(), wait_step=0.01))
+    c.post("/api/settings", json={"llm_provider": "cc"})
+    r = c.post("/api/source/inspect", json={"path": str(door_source(tmp_path / "door"))}).json()
+    c.post("/api/bgbuild/start", json={"work": r["work"], "chip": "ESP32-S3"})
+    start_insert(c, r)
+    fwait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "failed" and j["heard"] is None
+    assert "拔下 USB 线" in j["err"]["why"]
+    assert "!J.heard&&J.try_started&&now-J.try_started>USB_QUIET" in JS and "拔下 USB 线" in grab("tryBox")
+
+
+def test_try_that_hears_the_device_does_not_blame_usb(tmp_path, monkeypatch):
+    """调试口有输出、只是没有计时点（没触发到）：照旧说"没触发到"，不叫人拔插。"""
+    import time as _t
+    from fsw.web import app as A
+    from tests.test_fsw_api import FakeDevice, start_insert, wait as fwait, run_to_try, fake_build_output
+    from fastapi.testclient import TestClient
+    from fsw.llm import FakeLLM
+    from fsw.web.app import create_app
+    from tests.identify_fixtures import door_source
+    from tests.test_instrument import reply
+    monkeypatch.setattr(A, "TRY_SECONDS", 1)
+
+    class Chatty(FakeDevice):  # 只有设备平常的日志，没有计时点
+        def read(self, port, seconds, on_line, stop=None):
+            end = _t.time() + seconds
+            while _t.time() < end and not (stop and stop()):
+                on_line("I (100) main: idle")
+                _t.sleep(0.05)
+            return ["I (100) main: idle"]
+
+    def builder(work, target, board, idf, progress):
+        fake_build_output(work)
+        return {"ok": True, "seconds": 0.1, "error": None}
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=lambda p, k: FakeLLM(reply()),
+                              idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
+                              cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.usbmodem1101"],
+                              bg_builder=builder, device=Chatty(), wait_step=0.01))
+    c.post("/api/settings", json={"llm_provider": "cc"})
+    r = c.post("/api/source/inspect", json={"path": str(door_source(tmp_path / "door"))}).json()
+    c.post("/api/bgbuild/start", json={"work": r["work"], "chip": "ESP32-S3"})
+    start_insert(c, r)
+    fwait(c, lambda j: j["status"] == "inserted")
+    j = run_to_try(c)
+    assert j["status"] == "failed" and j["heard"]
+    assert "拔下 USB 线" not in j["err"]["why"] and "没触发到" in j["err"]["why"]
+
+
 def test_unlock_plays_a_real_sound_for_safari():
     """决策 128：Safari 只认点击那一下放出的真声音；放一段无声的不算，声音一直没打开（用户记录：多轮实测时一直是 suspended）。"""
     u = grab("unlockAudio")

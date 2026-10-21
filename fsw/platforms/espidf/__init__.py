@@ -111,9 +111,60 @@ def flash_progress(line):
     return None
 
 
+# 乐鑫烧录工具连上芯片时报的型号（新版 "Connected to ESP32-S3 on …"，旧版 "Detecting chip type... ESP32-S3" / "Chip is ESP32-S3 (…)"）
+CHIP_SEEN = [re.compile(r"Connected to (ESP32[-\w]*) on"), re.compile(r"Detecting chip type\.*\s*(ESP32[-\w]*)"),
+             re.compile(r"Chip is (ESP32[-\w]*)")]
+# 烧录时芯片和板子对不上，乐鑫烧录工具的原话："This chip is ESP32-S3, not ESP32-C3. Wrong chip argument?"
+WRONG_CHIP = re.compile(r"This chip is (ESP32[-\w]*),? not (ESP32[-\w]*)")
+
+
+def chip_name(s):
+    """芯片名统一写法：ESP32-S3、esp32s3、ESP32S3 都当成 ESP32-S3。"""
+    t = re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
+    return (t[:5] + "-" + t[5:] if t.startswith("ESP32") and len(t) > 5 else t) or None
+
+
+def chip_in(lines):
+    """乐鑫烧录工具的输出里，连上的是哪种芯片；没连上返回 None。"""
+    for line in lines:
+        for rx in CHIP_SEEN:
+            m = rx.search(line)
+            if m:
+                return chip_name(m.group(1))
+    return None
+
+
+def wrong_chip(lines):
+    """烧录报芯片对不上：返回 (设备上的芯片, 固件要的芯片)；不是这个错返回 None。"""
+    for line in lines:
+        m = WRONG_CHIP.search(line)
+        if m:
+            return chip_name(m.group(1)), chip_name(m.group(2))
+    return None
+
+
+def _flash_failed(port, tail):
+    errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-6:]
+    out = {"ok": False, "port": port, "error": "\n".join(errs[-6:])}
+    bad = wrong_chip(tail)
+    if bad:  # 选错了板子（芯片不同）：乐鑫工具拒绝写入，设备里原来的东西没动
+        out["wrong_chip"] = {"device": bad[0], "firmware": bad[1]}
+    return out
+
+
 def _list_ports():
     from serial.tools import list_ports
-    return [{"device": p.device, "vid": p.vid, "description": p.description} for p in list_ports.comports()]
+    return [{"device": p.device, "vid": p.vid, "description": p.description, "serial": p.serial_number}
+            for p in list_ports.comports()]
+
+
+def port_key(port, list_ports=_list_ports):
+    """认出是哪台设备：USB 序列号（乐鑫自带 USB 口的就是芯片的 MAC 地址），没有序列号就用口的名字。"""
+    try:
+        p = next((x for x in list_ports() if x.get("device") == port), None)
+    except Exception:
+        p = None
+    return f"{p.get('vid')}:{p['serial']}" if p and p.get("serial") else port
 
 
 def find_ports(list_ports=_list_ports):
@@ -329,8 +380,7 @@ class EspIdf:
         if code == 0:
             on_progress(100, "烧录完成")
             return {"ok": True, "port": port, "seconds": round(time.time() - t, 1), "error": None}
-        errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-6:]
-        return {"ok": False, "port": port, "error": "\n".join(errs[-6:])}
+        return _flash_failed(port, tail)
 
     # ---- 任务 14：两份固件（原版、计时版）各存一份，随时烧哪个 ----
     @staticmethod
@@ -351,6 +401,17 @@ class EspIdf:
         (dest / "flasher_args.json").write_text(json.dumps(args, ensure_ascii=False, indent=1), encoding="utf-8")
         app = (args.get("app") or {}).get("file") or list(args["flash_files"].values())[-1]
         return {"files": len(args["flash_files"]), "app_bytes": (dest / app).stat().st_size}
+
+    def read_chip(self, port):
+        """读设备上是哪种芯片（乐鑫烧录工具连一下就断开）。设备会重启一下。
+        返回 {"chip": "ESP32-S3"}；连不上（口卡住、设备不能自动进下载模式）返回 {"chip": None, "error": 原话}。"""
+        cmd = [self._idf_py()[0], "-m", "esptool", "--port", port, "chip-id"]
+        code, tail = self._run(cmd, Path.home(), lambda line: None)
+        chip = chip_in(tail)
+        if chip:
+            return {"chip": chip}
+        errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-4:]
+        return {"chip": None, "error": "\n".join(errs[-4:])}
 
     def flash_saved(self, fw, port, on_progress=lambda pct, msg: None):
         """烧存下的那份固件（乐鑫官方 esptool，和 idf.py flash 用同样的参数）。"""
@@ -373,8 +434,7 @@ class EspIdf:
         if code == 0:
             on_progress(100, "烧录完成")
             return {"ok": True, "port": port, "seconds": round(time.time() - t, 1), "error": None}
-        errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-6:]
-        return {"ok": False, "port": port, "error": "\n".join(errs[-6:])}
+        return _flash_failed(port, tail)
 
     @staticmethod
     def read_for(ser, seconds, on_line=lambda line: None, stop=None):
