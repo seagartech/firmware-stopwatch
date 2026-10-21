@@ -245,3 +245,6 @@ def test_ask_and_done_go_to_outside_people_so_no_code_or_internal_words():
     _, bad = adv.check(data, j, d["scenario"])
     assert any("怎么算解决会发给对方" in b and "码表" in b for b in bad)
     assert any("方案 1 的请求会发给对方" in b for b in bad)
+    data["fixes"][0]["opts"][0]["who"] = "固件研发"   # 10-21 Mac 真测：找固件研发的请求写 application.cc 被卡住，自己人可以写代码位置
+    _, bad = adv.check(data, j, d["scenario"])
+    assert not any("方案 1 的请求会发给对方" in b for b in bad)
