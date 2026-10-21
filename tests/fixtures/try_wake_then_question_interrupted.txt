@@ -1,0 +1,30 @@
+I (573) StateMachine: State: unknown -> starting
+I (2563) StateMachine: State: starting -> activating
+I (4023) StateMachine: State: activating -> idle
+FSW,P10,5188152,18
+I (11073) StateMachine: State: idle -> connecting
+I (11413) StateMachine: State: connecting -> listening
+FSW,RESET,11317803,0
+FSW,P6,11341215,0
+I (11453) StateMachine: State: listening -> speaking
+FSW,P7,11342715,0
+FSW,P6,11481791,0
+FSW,P10,13718590,38
+FSW,P6,13719596,0
+I (13823) StateMachine: State: speaking -> listening
+FSW,RESET,13728434,0
+FSW,P1,17638140,2
+FSW,P2,17910101,0
+I (18013) Application: >> 1加1等于几？
+FSW,P3,17911206,0
+FSW,P6,17943602,0
+I (18053) StateMachine: State: listening -> speaking
+FSW,P7,17945985,0
+FSW,P4,18272281,0
+FSW,P5,18273567,0
+FSW,P8,18745515,0
+FSW,P9,18762498,0
+I (21843) Application: Abort speaking
+I (22123) StateMachine: State: speaking -> listening
+FSW,LATE,P10,22008159,55
+FSW,RESET,22021722,0
