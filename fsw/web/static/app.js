@@ -187,7 +187,8 @@ function spikyRounds(D){const m=new Map(),J=D.J;
  return m}
 function roundsChart(D){
   const T=niceT(Math.max(...D.rounds.flatMap(r=>r.ends))/1.2);const W=900,X0=70,X1=820,sx=t=>X0+(X1-X0)*t/T,rh=20,top=34,st=step(T);
-  const spk=spikyRounds(D),bad=new Set([...D.reversed,...D.slowRounds].map(r=>r.n).concat([...spk.keys()]));
+  const spk=spikyRounds(D),prob=new Map();(D.J?D.J.labels:[]).filter(x=>x.kind==='problem'&&!x.order).forEach(x=>(x.rounds||[]).forEach(n=>prob.set(n,x.name)));
+  const bad=new Set([...D.reversed.map(r=>r.n),...spk.keys(),...prob.keys()]);  // 红底只给「要你拍板」点名的轮；超标看红虚线
   let g='';
   for(let t=0;t<=T+1e-9;t+=st){g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="${top-8}" y2="${top+D.n*rh}" stroke="var(--soft)"/><text x="${sx(t)}" y="${top-14}" text-anchor="middle" font-size="12" fill="var(--muted)" class="num">${+t.toFixed(2)}</text>`}
   D.rounds.forEach((r,i)=>{const y=top+i*rh;const isBad=bad.has(r.n);
@@ -195,30 +196,28 @@ function roundsChart(D){
     g+=`<text x="${X0-12}" y="${y+14}" text-anchor="end" font-size="12" fill="${isBad?'var(--bad)':'var(--muted)'}" class="num">第 ${r.n} 轮</text>`;
     g+=`<line x1="${sx(0)}" x2="${sx(Math.max(...r.ends))}" y1="${y+10}" y2="${y+10}" stroke="var(--line)" stroke-width="2"/>`;
     r.ends.forEach((e,j)=>{if(e==null)return;g+=j===0?`<circle cx="${sx(e)}" cy="${y+10}" r="5" fill="${D.lines[j].col}"/>`:`<rect x="${sx(e)-5}" y="${y+5}" width="10" height="10" fill="${D.lines[j].col}"/>`});
-    const why=D.reversed.some(x=>x.n===r.n)?`${D.lines[0].end}比${D.lines[1].end}晚`:D.slowRounds.some(x=>x.n===r.n)?'超过体验标准':spk.has(r.n)?`“${spk.get(r.n)}”特别慢`:'';
-    if(why)g+=`<text x="${sx(Math.max(...r.ends))+10}" y="${y+14}" font-size="12" font-weight="700" fill="var(--bad)">${why}</text>`;});
+    const why=[prob.get(r.n),D.reversed.some(x=>x.n===r.n)?`${D.lines[0].end}比${D.lines[1].end}晚`:'',spk.has(r.n)?`${spk.get(r.n)}特别慢`:''].filter(Boolean).join('；');
+    const xe=sx(Math.max(...r.ends)),left=xe+10+why.length*12>W;  // 放不下就写在点的左边
+    if(why)g+=`<text x="${left?xe-10:xe+10}" y="${y+14}" text-anchor="${left?'end':'start'}" font-size="12" font-weight="700" fill="var(--bad)" class="halo">${why}</text>`;});
   D.lines.forEach(l=>{g+=`<line x1="${sx(l.med)}" x2="${sx(l.med)}" y1="${top-8}" y2="${top+D.n*rh}" stroke="${l.col}" stroke-dasharray="3 3"/>`});
+  const fairs=[...new Set((D.J?D.J.lines:[]).map(j=>j.exp_std&&j.exp_std.fair).filter(x=>x!=null&&x<=T))];
+  fairs.forEach(fa=>{g+=`<line x1="${sx(fa)}" x2="${sx(fa)}" y1="${top-8}" y2="${top+D.n*rh}" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="6 3"/>`});
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${top+D.n*rh+6}" style="min-width:640px;width:100%" role="img" aria-label="逐轮计时">${g}</svg></div>
-  <div class="legend">${D.lines.map((l,j)=>`<span><i class="sw" style="background:${l.col};width:10px;height:10px;${j===0?'border-radius:50%':''}"></i>${l.end}</span>`).join('')}<span>竖虚线是中位数</span>${bad.size?'<span style="color:var(--bad)">红底：有问题的轮</span>':''}</div>`;
+  <div class="legend">${D.lines.map((l,j)=>`<span><i class="sw" style="background:${l.col};width:10px;height:10px;${j===0?'border-radius:50%':''}"></i>${l.end}</span>`).join('')}<span>细虚线：中位数</span>${fairs.length?`<span style="color:var(--bad)">红粗虚线：体验标准 ${fairs.join('、')} 秒</span>`:''}${bad.size?'<span style="color:var(--bad)">红底：「要你拍板」点名的轮</span>':''}</div>`;
 }
 // 达标率（10-20 用户定，换掉自造的"10 次里最慢"）：没超过体验标准的轮次占几成；没有体验标准的线写「—」
 const passPct=l=>l.pass_rate==null?null:`${Math.round(l.pass_rate*100)}%`;
 const passTxt=l=>l.pass_rate==null?'':`达标率 ${passPct(l)}（${l.pass_n}/${l.count}）`;
-function tiers(D){  // 一般 ｜ 最差 ｜ 达标率：两列秒数挨着，百分比单独放最右
-  return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">最差</span><span class="h">达标率</span>
-  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.max)} 秒</span><span>${l.pass_rate==null?'—':`${passPct(l)}（${l.pass_n}/${l.count}）`}</span>`).join('')}</div>`;
+function tiers(D){  // 依据合成一张表（10-21 样子）：一般 ｜ 最差 ｜ 达标率 ｜ 体验标准 ｜ 和上次比；名字和「要你拍板」一样用线的终点
+  const jl=l=>D.J&&D.J.lines.find(x=>x.name===l.name);
+  const std=l=>{const j=jl(l),es=j&&j.exp_std;return es&&es.fair!=null?`超过 ${es.fair} 秒算差${es.good!=null?`，${es.good} 秒内算好`:''}`:'—'};
+  const vs=l=>{const j=jl(l),v=j&&j.vs;return v?`${f(v.prev)} → ${f(l.med)} 秒，<b class="${v.change==='慢了'?'up':'down'}">${v.change}</b>`:'第一次测'};
+  return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">最差</span><span class="h">达标率</span><span class="h">体验标准</span><span class="h">和上次比</span>
+  ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.max)} 秒</span><span>${l.pass_rate==null?'—':`${passPct(l)}（${l.pass_n}/${l.count}）`}</span><span style="font-family:var(--sans)">${std(l)}</span><span style="font-family:var(--sans)">${vs(l)}</span>`).join('')}</div>`;
 }
-// 两把尺子（10-19 去掉合理范围清单）：体验标准问"用户等得了吗"（按设备类别从标准库挑，挂在第一下感觉到结果的那条线上）；
-// 第二次起再看"和上次比"快了、慢了还是持平。每条线一张卡片，结论那句用后台算好的（judge.combo）
-function lineCards(D){
-  return D.lines.map(l=>{const [v,c]=D.verdict(l),isMain=l===D.main,jl=D.J&&D.J.lines.find(x=>x.name===l.name);
-    const ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):isMain&&D.exp?D.exp:null,es=jl?jl.exp_std:D.S.exp;  // 体验标准每条线一条：真测的按后台每条线的判定
-    const vs=jl&&jl.vs,concl=jl?(jl.combo==='取决于回答长短，不判快慢'?'长短主要看这次回答说了多少字，不判快慢；快慢看前面那条「到第一声」。':jl.combo+'。'):ex?`体验${ex[0]}。`:`${noExp(D)}，只记录用时。`;
-    const head=ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:`<span class="chip ${c}">${v}</span>`;
-    return `<div class="panel card"><h3>${l.name} ${head}</h3><p class="num" style="color:var(--fg)">一般 ${f(l.med)} 秒</p>
-     ${ex&&es?`<p>体验标准${es.category?`（按「${htmlEsc(es.category)}」类设备）`:''}：超过 ${es.fair} 秒算差${es.good!=null?`，${es.good} 秒以内算好`:'（这个标准只有及格线，没给"好"的档）'} → <b class="${ex[1]==='c-bad'?'up':'down'}">${ex[0]}</b></p>${es.source?`<p class="note" style="margin:2px 0 0">${srcHtml(es.source)}</p>`:''}`:jl&&!jl.exp?`<p class="note">体验标准：${expTarget(D)===l.name?htmlEsc(noExp(D)):'这条线不按体验标准判（体验标准只挂在第一下感觉到结果的那条线上）'}</p>`:''}
-     ${jl&&jl.verdict!=='看回答长短'?`<p>和上次比：${vs?`${f(vs.prev)} → ${f(l.med)} 秒，<b class="${vs.change==='慢了'?'up':'down'}">${VTXT[vs.change]}</b>`:'第一次测，没有上次可比'}</p>`:''}
-     <p style="margin-top:6px;color:var(--fg)">${concl}</p></div>`}).join('');
+function stdNote(D){  // 表下一行：达标率怎么算 + 标准出处（每条标准只写一次）
+  const seen=new Set(),src=[];(D.J?D.J.lines:[]).forEach(j=>{const es=j.exp_std;if(es&&es.source&&!seen.has(es.source)){seen.add(es.source);src.push(srcHtml(es.source)+(es.good==null?'（只有及格线）':''))}});
+  return `<p class="note" style="margin:8px 0 0">达标率：没超过体验标准的轮次占几成${D.n<10?`；只测了 ${D.n} 轮，只供参考`:''}。${src.length?`体验标准出处：${src.join('；')}。`:'这个场景没有对得上的体验标准。'}</p>`;
 }
 // 负责人版写短（决策 98）：越重要越靠前：出错、必须改、建议改、未判，都展开；达标的收起来（10-20 用户定）。内容不删，只是默认收起
 function bossSplit(ds){const by=lv=>ds.filter(x=>x.lv===lv);return {open:[...by(4),...by(0),...by(1),...by(2)],fold:by(3)}}  // 未判的不收进"不用改"：没判不等于没问题
@@ -728,9 +727,8 @@ function reportPage(D){
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
-  <h2 style="margin:12px 0 -6px">依据</h2><p class="note" style="margin:0 0 -6px">上面结论里的数，都能在下面找到。</p>
-  <section class="grid3" id="sec-lines">${lineCards(D)}</section>
-  <section class="panel" id="sec-tiers"><h2 style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline">用时和达标率<span class="tiernote">达标率：没超过体验标准的轮次占几成${D.n<10?`；只测了 ${D.n} 轮，只供参考`:''}</span></h2>${tiers(D)}</section>
+  <h2 style="margin:12px 0 -6px">依据</h2>
+  <section class="panel" id="sec-tiers"><h2>用时和达标率</h2>${tiers(D)}${stdNote(D)}</section>
   <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 

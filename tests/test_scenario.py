@@ -107,8 +107,9 @@ def test_demo_data_in_the_new_format_gives_the_page_exactly_what_it_had(sid):
     demo = read(DEMO / f"{sid}.json")
     before = read(HERE / "fixtures" / f"page_{sid}_before_task6.json")
     page = to_page(demo)
-    assert page["S"] == before["S"]
+    assert page["S"] == {**before["S"], "firstBeforeSecond": False}  # 10-21 演示数据删掉手写的先后规则：真测时码表认不出设备设计的先后
     changed = {"items", "per"} if sid == "voice" else set()  # 决策 95：20 句换成答得短的问题，一轮用时跟着改
+    before["C"]["probs"] = [p for p in before["C"].get("probs", []) if p["k"] != "rev"]  # 10-21 删掉的先后规则
     assert {k: v for k, v in page["C"].items() if k not in changed} == {k: v for k, v in before["C"].items() if k not in changed}
 
 

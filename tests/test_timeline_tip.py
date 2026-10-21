@@ -116,7 +116,7 @@ def test_headline_writes_the_same_median_as_the_chart_end():
 
 def test_report_names_category_start_gap_and_best_fix_without_scene_words_in_code():
     assert "function bestFix(" in JS and "const startGap=" in JS
-    assert "最值得优化的一段" in JS and "这个标准只有及格线" in JS
+    assert "最值得优化的一段" in JS and "只有及格线" in JS
 
 
 

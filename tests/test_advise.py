@@ -44,8 +44,8 @@ def judged(name):
 def test_problems_come_from_the_labels_not_from_ai():
     d, j = judged("voice")
     probs = adv.problems(j, d["scenario"])
-    assert [p["key"] for p in probs] == ["problem:sw", "reversed", "main"]   # 出错排前（轮次多的在前），再是必须改 / 建议改；偶发特别慢不再单独出（10-20）
-    assert probs[2]["seg"] == "think"
+    assert [p["key"] for p in probs] == ["problem:sw", "main"]   # 出错排前（轮次多的在前），再是必须改 / 建议改；偶发特别慢不再单独出（10-20）
+    assert probs[1]["seg"] == "think"
 
 
 def test_prompt_has_data_and_code_places_and_asks_for_json():

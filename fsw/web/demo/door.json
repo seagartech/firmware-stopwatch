@@ -117,10 +117,6 @@
    }
   ],
   "experience": null,
-  "expect_order": [
-   "反应线",
-   "开门线"
-  ],
   "per_round": {
    "dev": "设备",
    "act": "刷卡",
