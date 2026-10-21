@@ -251,3 +251,33 @@ def test_inserted_steps_survive_the_record_being_restored_away(make, door_page, 
     j = c.post("/api/collect/start", json={"page": door_page, "source": "device", "rounds": 3, "project_dir": str(proj)}).json()
     assert j["need"] == ["P1", "P2", "P3", "P4", "P5"]
     c.post("/api/collect/stop")
+
+
+def test_collect_done_restores_the_original_by_itself(setup, door_page):
+    """10 轮收齐：码表自己还原（源码放回、原版烧回），不靠人记得去点；计时版那次仍算试通了，报告照常。"""
+    dev = TryAndStream(None, rounds_log(["P1", "P2", "P5"], n=3))
+    c, r, *_ = setup(device=dev)
+    start_insert(c, r)
+    wait_fsw(c, lambda j: j["status"] == "inserted")
+    assert run_to_try(c)["status"] == "done"
+    c.post("/api/collect/start", json={"page": door_page, "source": "device", "rounds": 3, "project_dir": r["project_dir"]})
+    wait_col(c, lambda j: j["status"] == "done")
+    j = wait_fsw(c, lambda j: j.get("restore") and not j["restore"].get("running"))
+    assert j["status"] == "done" and j["restore"]["auto"] and j["restore"]["flashed"] and j["restore"]["same"]
+    assert dev.flashed[-1].endswith("firmware/orig")
+    assert not json.loads((Path(r["project_dir"]) / "on-device.json").read_text(encoding="utf-8"))["fsw"]
+
+
+def test_stopped_half_way_does_not_restore(setup, door_page):
+    """中途停下：可能还要接着测，不自己还原，留按钮。"""
+    dev = TryAndStream(None, rounds_log(["P1", "P2", "P5"], n=1))
+    c, r, *_ = setup(device=dev)
+    start_insert(c, r)
+    wait_fsw(c, lambda j: j["status"] == "inserted")
+    assert run_to_try(c)["status"] == "done"
+    c.post("/api/collect/start", json={"page": door_page, "source": "device", "rounds": 3, "project_dir": r["project_dir"]})
+    wait_col(c, lambda j: len(j["rounds"]) >= 1)
+    c.post("/api/collect/stop")
+    wait_col(c, lambda j: j["status"] == "stopped")
+    time.sleep(0.2)
+    assert "restore" not in c.get("/api/fsw").json() and not dev.flashed[-1].endswith("firmware/orig")

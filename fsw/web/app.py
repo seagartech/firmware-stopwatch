@@ -1380,10 +1380,23 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 with job["_lock"]:
                     take(coll.finish())
                 if job is col["job"]:
-                    job["status"] = "suspect" if job.get("suspect") else "done" if ok_count() >= job["target"] else "stopped"
+                    status = "suspect" if job.get("suspect") else "done" if ok_count() >= job["target"] else "stopped"
+                    auto = status == "done" and body.source == "device" and body.project_dir  # 10 轮收齐：自己还原成原版，不靠人记得去点
+                    if auto:  # 先记上"正在还原"再报测完：网页一看到测完就跟着看还原，不会读到上一次的还原结果
+                        fsw["job"] = fsw["job"] or {}
+                        fsw["job"]["restore"] = {"running": True, "auto": True}
+                    job["status"] = status
                     _keep_rounds(job)
                     if body.source == "device":
                         T().end("collect")
+                        if auto:
+                            threading.Thread(target=_guarded(lambda: fsw_restore(RestoreBody(project_dir=body.project_dir), auto=True),
+                                                             _auto_restore_crashed), daemon=True).start()
+
+        def _auto_restore_crashed(e):  # 自己还原时码表出错：别一直写"正在还原"，留按钮让人再点
+            if fsw["job"] is not None:
+                fsw["job"]["restore"] = {"auto": True, "flashed": False, "error": _detail(e), "detail": _plain(_detail(e)),
+                                         "say": "原版没烧上：还原时码表出错了，点「还原成原版」再试一次。"}
 
         def crashed(e):  # 上面已经停下（已测的留着）：说清楚为什么停了
             if job is col["job"]:
@@ -1830,9 +1843,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return fsw["job"] or {"status": "idle"}
 
     @app.post("/api/fsw/restore")
-    def fsw_restore(body: RestoreBody | None = None):
+    def fsw_restore(body: RestoreBody | None = None, auto: bool = False):
         """还原成原版：源码放回去（和你原来的源码逐字节比对），设备插着就把后台编好的原版烧回去。
-        码表重开过（内存里没有这次的记录）：按项目文件夹里存的插入记录还原。"""
+        码表重开过（内存里没有这次的记录）：按项目文件夹里存的插入记录还原。
+        auto：多轮实测收齐后码表自己还原（不算人点了一次）。"""
         a = fsw["args"]
         if body and body.project_dir and (not a or Path(a.project_dir).resolve() != Path(body.project_dir).resolve()):
             try:
@@ -1840,10 +1854,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             except (OSError, ValueError):
                 a = None
         if not a:
+            if auto:  # 没插过计时点（设备上本来就不是计时版）：不用还原，也不提示
+                (fsw["job"] or {}).pop("restore", None)
+                return {}
             raise HTTPException(409, "还没插过计时点，不用还原")
         backup, orig_fw, _ = _fsw_dirs(a)
         T().begin("restore")
-        T().count("clicks")
+        if not auto:
+            T().count("clicks")
         if fsw["job"]:
             fsw["job"]["cancel"] = True  # 还在等设备烧计时版的，不烧了
         ws.ensure_clean(a.project_dir)  # 插入记录和副本对不上（源码改过、副本重新复制过）就重新复制，不拿旧备份盖
@@ -1857,6 +1875,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         ports = port_finder()
         job = fsw["job"] or {}
         fsw["job"] = job
+        job["restore"] = {"running": True, "auto": auto}  # 网页据此显示"正在还原"，烧完换成结果
+
+        def done(o):  # 测完还原：计时版那次的状态还是"试通了"（网页按它认这次真测的报告），只记还原结果
+            job["restore"] = dict(o, auto=auto)
+            if job.get("status") != "done":
+                job["status"] = "restored"
         older = _orig_older(a.project_dir)
 
         def burn(port):
@@ -1884,14 +1908,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                               "源码已还原，原版没烧上：调试口被别的程序占着。关掉它（比如串口监视器）再点一次「还原成原版」。" if busy else
                               "源码已还原，原版没烧上：看看线插好没有，再点一次「还原成原版」。")
                 out["detail"] = _plain(r.get("error"))  # 原话放在详情里，不堆在提示里
-            job.update(status="restored", restore=dict(out))
+            done(out)
             T().end("restore")
 
         if ports and orig_fw.exists():
             burn(ports[0])
         elif orig_fw.exists():  # 拔了线：源码先还原，说清楚；插上线就自动把原版烧回去（决策 109）
             out.update(waiting=True, say="源码已还原。设备没插着，原版还没烧回去：插上设备就自动烧，不用再点。")
-            job.update(status="restored", restore=dict(out))
+            done(out)
 
             def wait_and_burn():
                 t_end = time.time() + 1800
@@ -1903,11 +1927,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
 
             def burn_crashed(e):
                 out.update(waiting=False, say="源码已还原，原版没烧上：烧录时码表出错了，再点一次「还原成原版」。", detail=_plain(_detail(e)))
-                job.update(status="restored", restore=dict(out))
+                done(out)
             threading.Thread(target=_guarded(wait_and_burn, burn_crashed), daemon=True).start()
         else:
             out["say"] = "源码已还原。没找到编好的原版固件，设备上的计时版要等下次编好原版再烧回去。"
-            job.update(status="restored", restore=dict(out))
+            done(out)
             T().end("restore")
         return out
 

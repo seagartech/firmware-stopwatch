@@ -1153,7 +1153,7 @@ function colApply(j){COLJ=j;if(realCol()&&RCT)RCT.probs=(j.problems||[]).map(x=>
  const [got,need]=j.progress||[0,1],n=PH().length-1;col.phase=got>=need?n:Math.min(n-1,Math.floor(got*n/need));col.have=got>=need?null:j.have||null;
  // 收好一轮不响，只有没收全才低响一声：测全程时一轮要等设备把回答整段放完才算收好，那时再"叮"一声人只会觉得提示音晚了
  for(const x of col.got.slice(before))if(x.bad)ding(true)
- if(j.status==='done'){colStop();col.st=2}else if(j.status==='suspect'){colStop();col.st=4}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
+ if(j.status==='done'){colStop();col.st=2;if(realCol())autoRestoreWatch()}else if(j.status==='suspect'){colStop();col.st=4}else if(j.status==='stopped'&&col.st!==3){colStop();col.st=3}
  if(page==='collect')render()}
 async function colStart(keep){colStop();if(keep){col.st=1;col.phase=0;col.rd=false}else col={st:1,att:0,got:[],phase:0,sc:scene};ADV=null;clearInterval(advT);advT=null;fixPick=null;
  const real=realFlash()&&FSWJ&&FSWJ.status==='done';
@@ -1375,7 +1375,18 @@ function flowBar(){if(!flow&&page!=='home')return '';let st;
 let RESTORE=null;
 // 拔了线还原：插上后后台自动烧回原版，这里跟着看结果
 let restoreT=null;
-function restoreWatch(){clearInterval(restoreT);restoreT=setInterval(async()=>{try{const j=await (await fetch('/api/fsw')).json();const R=j.restore;if(R&&!R.waiting){clearInterval(restoreT);restoreT=null;RESTORE=R;onDev=R.flashed?'orig':onDev;toast((R.flashed?'✓ ':'✕ ')+(R.say||''));render()}}catch(e){}},1500)}
+function restoreWatch(){clearInterval(restoreT);restoreT=setInterval(async()=>{try{const j=await (await fetch('/api/fsw')).json();const R=j.restore;if(R&&!R.waiting&&!R.running){clearInterval(restoreT);restoreT=null;RESTORE=R;onDev=R.flashed?'orig':onDev;if(R.auto)rsCard(R);else toast((R.flashed?'✓ ':'✕ ')+(R.say||''));render()}}catch(e){}},1500)}
+// 10 轮收齐后码表自己还原：正中一个提醒框（不挡报告），烧完停几秒自己消失；没烧上就一直在，报告底部留着按钮
+let rsHideT=null,rsAutoT=null,rsFor='';
+function rsCard(R){let el=document.getElementById('rsbox');if(!el){el=document.createElement('div');el.id='rsbox';el.setAttribute('role','status');document.body.appendChild(el)}clearTimeout(rsHideT);
+ const bad=!R.running&&!R.flashed&&!R.waiting;el.className='rsbox '+(bad?'t-bad':R.flashed?'t-ok':'t-warn');
+ el.innerHTML=R.running?'<span class="spin"></span> 正在还原固件，设备会重启一次，不用操作。':R.flashed?'✓ 已还原成原版，设备上跑的是你原来的程序。':R.waiting?'设备没插着，原版还没烧回去：插上设备就自动烧，不用再点。':
+  `<div>✕ ${htmlEsc(String(R.say||'原版没烧上').replace(/^源码已还原，/,''))}<br><span class="note">报告底部可以再点「还原成原版」。</span></div><button class="tclose" data-rsclose="1" aria-label="关掉这个提示">×</button>`;
+ el.hidden=false;if(R.flashed||R.waiting)rsHideT=setTimeout(()=>{el.hidden=true},R.flashed?3000:6000)}
+document.addEventListener('click',e=>{if(e.target.closest('[data-rsclose]'))document.getElementById('rsbox').hidden=true});
+function autoRestoreWatch(){const k=(COLJ&&COLJ.raw_log)||'';if(rsAutoT||(k&&k===rsFor))return;rsFor=k;const sc=scene;restoring=true;rsCard({running:true});
+ rsAutoT=setInterval(async()=>{try{const R=(await (await fetch('/api/fsw')).json()).restore;if(!R||R.running)return;
+  clearInterval(rsAutoT);rsAutoT=null;restoring=false;RESTORE=R;restored[sc]=true;onDev=R.flashed?'orig':onDev;rsCard(R);render();if(R.waiting)restoreWatch()}catch(e){}},1000)}
 let restoring=false;  // 还原中：写建议时页面会不停重画，按钮不能一重画就变回去（决策 139）
 function restoreBox(sc){const r=restored[sc];if(restoring&&!r)return `<section class="panel"><h2>设备上现在是：计时版</h2><p class="note" style="margin:0"><span class="spin"></span> 正在还原：先把源码放回原样，再把原版烧回设备，一般半分钟左右，不用再点。</p></section>`;if(r&&RESTORE&&realFlash()){const R=RESTORE;return `<section class="panel"><h2>设备上现在是：${R.flashed?'原版':'计时版（源码已还原）'}</h2><p class="note" style="margin:0">${R.same?`✓ 源码已还原，和你原来的源码逐字节比对一致（${R.files} 个文件）。`:R.same===false?`✕ 源码还原后和你原来的源码有 ${R.diff.length} 个文件不一样：${R.diff.map(htmlEsc).join('、')}。`:'源码已还原。'}${R.flashed?`<br>✓ 已把原版烧回设备（${htmlEsc(R.port)}）。`:R.waiting?'<br><span class="spin"></span> 设备没插着，原版还没烧回去：插上设备就自动烧，不用再点。':R.error?`<br><span style="color:var(--bad)">✕ ${htmlEsc((R.say||'原版没烧上').replace(/^源码已还原，/,''))}</span>${R.detail?`<details class="lvwhy"><summary>详情</summary><code>${htmlEsc(R.detail)}</code></details>`:''}`:'<br>原版还没烧回去。'}</p>${R.flashed||R.waiting?'':`<div class="acts" style="margin:8px 0 0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
  return `<section class="panel"><h2>设备上现在是：${r?'原版':'计时版'}</h2>${r?'<p class="note" style="margin:0">✓ 已还原成原版，和你的原版逐字节比对一致。</p>':`<p class="note" style="margin:0 0 8px">计时版每过一个计时点会多打印一行，交货、演示前请还原。<br>还原是直接烧读代码时编好的那份原版，烧完逐字节比对。还要接着测就先别还原。</p><div class="acts" style="margin:0"><button class="btn" data-restore="${sc}">还原成原版</button></div>`}</section>`}
@@ -1524,7 +1535,8 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
   if(ij&&ij.state&&ij.state!=='idle'&&ij.what===hSay){if(ij.state==='running'){stepsRead=1;identApply(ij);readT=setInterval(async()=>{try{identApply(await (await fetch('/api/identify')).json())}catch(e){}},1000)}else identApply(ij);if(ij.state==='done')keep()}
   else if(hStage>=3)hStage=1;  // 找关键步骤的进度没了：回到首页"下一步"那里重新开始
   if(IDENT&&IDENT.page&&flowMax>=2&&J.fsw===REAL.work){const fj=await get('/api/fsw');
-   if(fj&&fj.status&&fj.status!=='idle'){fswApply(fj);diffOk=fj.status==='inserted'?false:!!u.diffOk;if(['running','waiting_device','ready_try'].includes(fj.status))fswPoll();if(fj.status==='done'){onDev='fsw';await loadRCT()}}}
+   if(fj&&fj.status&&fj.status!=='idle'){fswApply(fj);diffOk=fj.status==='inserted'?false:!!u.diffOk;if(['running','waiting_device','ready_try'].includes(fj.status))fswPoll();if(fj.status==='done'){onDev='fsw';await loadRCT()}
+    const R=fj.restore;if(R&&R.running)autoRestoreWatch();else if(R){RESTORE=R;restored[scene]=true;onDev=R.flashed?'orig':onDev;if(R.waiting)restoreWatch()}}}
   if(realCol()&&flowMax>=3){const cj=await get('/api/collect');if(cj&&cj.status!=='idle'&&!cj.demo&&String(cj.raw_log||'').startsWith(REAL.project_dir)){COLJ=cj;await loadRCT();colResume(cj)}}
   if(u.adv&&okRounds().length){const aj=await get('/api/advise');if(aj&&aj.started===u.adv){ADV=aj;if(aj.status==='running')advWatch()}}}
  else{stepsRead=flow&&flowMax>=1?2:0;if(stepsRead===2)keep();if(hStage>=3)hStage=1;

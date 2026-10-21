@@ -281,3 +281,6 @@ pre.codectx i{font-style:normal;color:var(--muted);display:inline-block;width:3.
 pre.codectx .hit{display:inline-block;min-width:100%;background:color-mix(in srgb,var(--warn) 18%,transparent);font-weight:600}
 /* 10-21 用户：1848 那份出了横向滚动条。路径、函数名在 / 和 :: 处换行（app.js 的 brk），别的列不硬撑 */
 table.segtab td .code{white-space:normal}
+.rsbox{position:fixed;left:50%;top:42%;transform:translate(-50%,-50%);z-index:31;display:flex;gap:12px;align-items:flex-start;max-width:min(92vw,460px);padding:18px 26px;border-radius:12px;border:1px solid var(--warn);background:var(--panel);color:var(--fg);font-size:16px;line-height:1.6;box-shadow:0 10px 36px color-mix(in srgb,var(--fg) 28%,transparent)}
+.rsbox[hidden]{display:none}.rsbox.t-ok{border-color:var(--ok)}.rsbox.t-bad{border-color:var(--bad);border-width:2px;background:color-mix(in srgb,var(--bad) 7%,var(--panel))}
+.rsbox .tclose{border:0;background:none;font-size:20px;line-height:1;cursor:pointer;color:var(--muted);padding:0 2px}
