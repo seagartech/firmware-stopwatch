@@ -330,7 +330,7 @@ const PAGES=[
 const arrow=(now,prev)=>{const d=now-prev;if(Math.abs(d)<.03||Math.abs(d)<prev*.05)return '<span class="note">持平</span>';return d<0?`<span class="down">↓ 快了 ${f(-d)} 秒</span>`:`<span class="up">↑ 慢了 ${f(d)} 秒</span>`};  // 变化不到 0.03 秒或 5% 算持平，不报假进步（决策 156）
 // 已保存的设置（/api/state 读设置文件夹；密钥只知道有没有，不回传）、本机 Claude Code 登没登录、插着的设备（/api/env、/api/ports 真查）
 let SAVED={llm_provider:null,has_key:{},data_dir:'',idf_path:''},CCST=null,PORTS=[],dataDraft=null,idfErr='',portT=null;
-const P2UI={'claude-api':'claude','claude-code':'cc',deepseek:'deepseek'},UI2P={claude:'claude-api',cc:'claude-code',deepseek:'deepseek'};
+const P2UI={'claude-api':'claude','claude-code':'cc'},UI2P={claude:'claude-api',cc:'claude-code',deepseek:'deepseek'};
 const ccOK=()=>!!(CCST&&CCST.logged_in),hasKey=ui=>!!SAVED.has_key[UI2P[ui]];
 const keyOK=()=>setLLM==='cc'?ccOK():keyTested||hasKey(setLLM);
 const tilde=p=>String(p||'').replace(/^\/Users\/[^/]+|^\/home\/[^/]+/,'~');
@@ -348,12 +348,12 @@ const vt=v=>String(v||'0').split('.').map(Number).concat([0,0,0]).slice(0,3),vge
 const realIdf=()=>{const min=REAL?REAL.idf_min:null;const ok=IDFS.filter(i=>!min||vge(i.version,min));return ok.sort((a,b)=>vge(a.version,b.version)?-1:1)[0]||null};
 const shortV=v=>String(v).replace(/\.0$/,'');
 // 首页灯和"用到时再检查"都按已保存的设置和真查的结果：没保存就回首页，缺的灯仍是红的
-const envKey=()=>{const p=SAVED.llm_provider;return p==='claude-code'?ccOK():!!(p&&SAVED.has_key[p])},envComp=()=>!!realIdf();
+const envKey=()=>{const p=SAVED.llm_provider;return p==='claude-code'?ccOK():p==='claude-api'&&!!SAVED.has_key[p]},envComp=()=>!!realIdf();
 function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm',SAVED.llm_provider==='claude-code'?'大模型：本机 Claude Code 登录':'大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${IDF()}`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
 let envBack='home',compPending=false;
 function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="background:var(--${c})"></i>${t}</span>`;
  const sp=P2UI[SAVED.llm_provider],llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[sp];
- const a=[envKey()?L('ok',`大模型：${llmName}，${sp==='cc'?'已登录':'密钥已填'}`):L('bad',sp==='cc'?(CCST&&!CCST.found?'大模型：没找到本机 Claude Code':'大模型：本机 Claude Code 还没登录'):'大模型：还没填密钥'),PORTS.length?L('ok',`设备：已插上 ${PORTS[0]}`):L('muted','设备：没插上（烧录前插上就行）')];
+ const a=[envKey()?L('ok',`大模型：${llmName}，${sp==='cc'?'已登录':'密钥已填'}`):L('bad',SAVED.llm_provider==='deepseek'?'大模型：DeepSeek 支持修复中，请到设置改用 Claude':sp==='cc'?(CCST&&!CCST.found?'大模型：没找到本机 Claude Code':'大模型：本机 Claude Code 还没登录'):'大模型：还没填密钥'),PORTS.length?L('ok',`设备：已插上 ${PORTS[0]}`):L('muted','设备：没插上（烧录前插上就行）')];
  if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装 ${Math.round(((inst.step||0)+(inst.pct||0)/100)/5*100)}%`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v${realIdf()?shortV(realIdf().version):'6.1'}`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
  return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
 // 提示（决策 129）：成功（✓）绿色、自己消失；出错（✕）红色、一直在，点 × 才关；其他黄色，按字数多留一会儿
@@ -581,13 +581,13 @@ function settingsPage(){
   return `<div class="stack">${head}
   <section class="panel ${page==='settings'&&envMark&&!keyOK()?'miss':''}" id="set-llm"><h2>${first?(done[0]?'✓ ':'① '):''}大模型（找关键步骤、写报告建议时用）</h2>
    <div class="radio">${opt('claude','Claude','识别准确率最高（验证期 9 个对 8 个）。需要你自己的 Claude API 密钥，按用量付费。',' <span class="chip c-ok">推荐</span>')}
-   ${opt('deepseek','DeepSeek','便宜，国内访问快。验证期识别 9 个只对 4 个，选它时找关键步骤那页会提醒你仔细核对。')}
    ${opt('cc','本机已登录的 Claude Code','不用填密钥，用你自己 Claude 会员的额度。属于可选用法，以官方条款为准。')}</div>
+   <p class="note">码表对 DeepSeek 的支持尚不完善，正在修复，暂时隐藏入口。${SAVED.llm_provider==='deepseek'?'此前选择了 DeepSeek，请改选 Claude 并保存；原密钥保留。':''}</p>
    ${setLLM==='cc'?(!CCST?`<p class="note" style="margin:10px 0 0">正在本机找 Claude Code……</p>`:ccOK()?`<p class="note" style="margin:10px 0 0">${first?'正在本机找 Claude Code……找到了，已登录。':'已找到本机的 Claude Code，已登录。'}</p>`:`<p class="note" style="color:var(--bad);margin:10px 0 0">✕ ${CCST.found?'找到了 Claude Code，但还没登录：在终端里运行 claude，按提示登录一次，再点「重新检查」。':'这台电脑上没找到 Claude Code。装好并登录后点「重新检查」，或者改用填密钥的方式。'} <button class="pill" data-cc="1">重新检查</button></p>`):`<div class="field" style="margin-top:12px"><label for="set-key">${setLLM==='claude'?'Claude':'DeepSeek'} API 密钥</label><div class="inrow"><input type="text" id="set-key" value="${keyDraft?keyDraft.replace(/"/g,'&quot;'):hasKey(setLLM)?'••••••••••••••••':''}" placeholder="粘贴你的密钥" autocomplete="off"><button class="btn" data-test="1">测试密钥</button></div>${keyErr?`<p class="note" style="color:var(--bad);margin:6px 0 0">✕ ${keyErr}</p>`:''}
    ${keyTested?'':`<details class="manual" style="margin-top:10px" ${hasKey(setLLM)?'':'open'}><summary>密钥是什么、去哪拿</summary>
    <p style="margin:6px 0;font-size:14px">密钥是大模型公司给你的一串字符，码表用它替你调用大模型读代码，按用量从你的账户扣钱。一次找关键步骤约几毛钱到一两块钱（估算）。</p>
    ${setLLM==='claude'?`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 Claude 开发者平台 console.anthropic.com，用邮箱注册登录</li><li>先在"账单"里充值（最少 5 美元）</li><li>左边点"API Keys"→"Create Key"，起个名字比如"码表"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`:`<ol class="notes" style="font-size:14px;color:var(--fg);margin:0"><li>打开 DeepSeek 开放平台 platform.deepseek.com，用手机号注册登录</li><li>先在"充值"里充一点（10 元就够试用）</li><li>左边点"API keys"→"创建 API key"，复制出现的那一串（只显示一次）</li><li>回到这里粘贴进上面的框</li></ol>`}
-   <p class="note" style="margin:6px 0 0">已经有 Claude 会员、电脑上装了 Claude Code？选上面第三项"本机已登录的 Claude Code"，不用密钥。</p></details>`}
+   <p class="note" style="margin:6px 0 0">已经有 Claude 会员、电脑上装了 Claude Code？选上面的"本机已登录的 Claude Code"，不用密钥。</p></details>`}
    <span class="note">${keyTested?'<span style="color:var(--ok)">✓ 能用</span>　':''}只存在这台电脑的 <span class="code">~/.config/firmware-stopwatch/</span>，不上传、不进代码。</span></div>`}
    <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px"><input type="checkbox" id="set-reuse" ${reuseLast?'checked':''}>源码没变时，直接用上次的识别结果，不再调用大模型（省钱、省时间）</label>
   </section>
