@@ -110,10 +110,17 @@ def test_identify_prompt_states_the_purpose_and_is_sent_to_the_model(door, what)
     assert p == idf.build_prompt(what) and what in p
     for key in ["每一轮正常使用时，每个计时点恰好记到一次", "这一轮输入结束", "不含人操作、等人开口的时间",
                 "不写 every", "出错、失败、重试的那一支不要放", "没有依据就不要把它们串成前后相连的段",
-                "点记到的是它真正执行的时刻", "先从配置和初始化代码确认这台设备实际走哪条", "sdkconfig"]:
+                "点记到的是它真正执行的时刻", "先从配置和初始化代码确认这台设备实际走哪条", "sdkconfig",
+                # 第二轮：一条触发路径、每轮都经过的起点、终点到最后一个结果、条件下的 always、首包放在确实会用上之后、顺带线用自己的点
+                "主线上的点都必须在这一条路径上，不同触发方式的点不能串成一条线",
+                "必须有一个点的 line_of 写 start", "人开始输入到输入结束之间的事", "要覆盖一轮的最后一个结果",
+                "always 写 false，除非在 why 里说明正常每轮都会满足这个条件", "判断出\"这个包确实会被用上\"之后",
+                "用的点都要属于这条线本身"]:
         assert key in p, key
     assert "被丢掉的也要能记到" not in p  # 旧规则会把点推到逐帧经过的判断之前
-    assert "小智" not in p and "DeepSeek" not in p
+    assert "选它们汇合后每轮都经过的那一步" not in p  # 旧规则会把不同触发方式混在一条线上
+    for bad in ["小智", "DeepSeek", "application.cc", "main/"]:  # 提示词模板不点名任何固件或文件
+        assert bad not in idf.PROMPT, bad
 
 
 # ---------- 整个识别：边找边报、出错留着已找到的 ----------
