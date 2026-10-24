@@ -100,7 +100,7 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
 6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。链写到最后一个结果为止，下一轮的事不写。
 7. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道），以及注册回调、初始化这类不在这一轮运行时执行的代码，不进链。
-
+{hint}
 ## 最后输出
 只输出一个 ```json 代码块（中文）：
 ```json
@@ -133,9 +133,75 @@ def _chip(chip):
     return f"芯片和板子：{chip}\n" if chip else ""
 
 
-def build_chain_prompt(what, chip=""):
-    """第一次调用：只理清一轮的流程。"""
-    return CHAIN_PROMPT.format(what=what, chip=_chip(chip))
+# 按设备类别给第一步的提醒（类别来自标准库的类别名；认不出类别就不加）
+VOICE_HINT = """
+## 这一类设备（语音对话）要注意
+- 要量的是连续对话的第二轮。自动聆听（自动停止）模式下，回复播完后设备自己回到聆听，第二轮从输入结束检测（静音、说话结束）开始，不从触摸或按键开始；只有代码表明只能手动聆听时，才从按键或触摸开始。
+- 链里要有：上传的首包和末包、收到识别出的文字、回复开始和回复结束这一对消息、第一段和最后一段声音播出、播放全部放完。
+- "最后"一类的步骤，优先用表示整段结束的信号（比如结束消息、播放队列放空），不用逐包、逐帧执行的那一行。
+"""
+CARD_HINT = """
+## 这一类设备（刷卡、门禁、门锁）要注意
+- 要量的是第二次刷卡（第一次可能还在初始化、建连接）。
+- 链按这个顺序找：察觉有卡、读出卡号、校验（本地比对或发给服务器）、继电器或门锁动作、声音或指示灯反馈；找不到的在 doubts 里写明。
+"""
+HINTS = {"语音对话": VOICE_HINT, "门禁": CARD_HINT, "智能门锁": CARD_HINT, "刷卡终端": CARD_HINT}
+
+
+def build_chain_prompt(what, chip="", category=""):
+    """第一次调用：只理清一轮的流程。category 是认出的设备类别，有对应提醒就加上。"""
+    return CHAIN_PROMPT.format(what=what, chip=_chip(chip), hint=HINTS.get(str(category or "").strip(), ""))
+
+
+# 第一步之前认设备类别（不调用大模型）：先用这个项目上次识别时 AI 填的类别，没有再按源码里的词粗猜，拿不准就不猜
+_VOICE_WORDS = ("opus", "vad", "tts", "stt", "asr", "wake_?word", "wakenet", "speech", "microphone|mic_")
+_CARD_WORDS = ("rfid", "nfc", "rc522|mfrc522|pn532|pn5180", "wiegand", "mifare|iso14443", "card_?uid|uid_ok|read_uid", "relay|lock_")
+
+
+def _saved_category(project_dir):
+    best = None
+    for f in sorted((Path(project_dir) / "identify").glob("*.json"), key=lambda x: x.stat().st_mtime):
+        try:
+            c = str(json.loads(f.read_text(encoding="utf-8")).get("category") or "").strip()
+        except (OSError, ValueError, AttributeError):
+            continue
+        if c in HINTS or c in {x["key"] for x in _cats()}:
+            best = c
+    return best
+
+
+def _cats():
+    from fsw import standards as stds
+    return stds.categories()
+
+
+def guess_category(root, project_dir=None):
+    """返回 (类别, 依据)；认不出返回 ("", "")。"""
+    if project_dir:
+        c = _saved_category(project_dir)
+        if c:
+            return c, "上次识别的结果"
+    hits = {"v": set(), "c": set()}
+    pats = {"v": [re.compile(rf"(?<![a-z])(?:{w})", re.I) for w in _VOICE_WORDS], "c": [re.compile(rf"(?:{w})", re.I) for w in _CARD_WORDS]}
+    try:
+        files = structure.Project(root).sources()[:3000]
+    except OSError:
+        return "", ""
+    for rel in files:
+        try:
+            text = (Path(root) / rel).read_text(encoding="utf-8", errors="replace")[:200000]
+        except OSError:
+            continue
+        for k in pats:
+            for i, pt in enumerate(pats[k]):
+                if i not in hits[k] and pt.search(text):
+                    hits[k].add(i)
+    v, c = len(hits["v"]), len(hits["c"])
+    if v >= 4 and v > c + 1:
+        return "语音对话", "源码里的词"
+    if c >= 3 and c > v + 1:
+        return "刷卡终端", "源码里的词"
+    return "", ""
 
 
 def _flow_text(flow):
@@ -304,8 +370,11 @@ def check_chain(root, data):
         seen.add(n)
         miss = [label for k, label in (("what", "做了什么"), ("file", "文件"), ("line", "行号"), ("code", "原文"), ("func", "所在的函数"))
                 if c.get(k) in (None, "")]
-        rep = str(c.get("repeat") or "").strip().lower()
-        rep = "repeat" if rep in ("repeat", "反复", "反复执行", "every") else "once" if rep in ("once", "一次", "只执行一次") else ""
+        rep = str(c.get("repeat") or "").strip().lower()  # 只看开头：允许后面带说明，比如「once（每次翻转）」
+        rep = ("repeat" if rep.startswith(("repeat", "反复", "every")) else
+               "once" if rep.startswith(("once", "一次", "只执行一次", "一轮一次", "只一次")) else "")
+        role = [r for r in ROLES if r in str(c.get("role") or "")]
+        roles.update(role)  # 先记下角色：这一步别处有问题，也不会被误报成"没标出"
         if not rep:
             miss.append("是否反复执行")
         if i and not str(c.get("after") or "").strip():
@@ -324,8 +393,6 @@ def check_chain(root, data):
             continue
         if got:
             tips.append(f"{tag}：{got[1]}")
-        role = [r for r in ROLES if r in str(c.get("role") or "")]
-        roles.update(role)
         chain.append({"n": n, "what": str(c["what"]).strip(), "file": _rel(root, c["file"]), "line": line,
                       "code": check_location(root, c["file"], line)[0], "func": str(c["func"]).strip(), "role": role,
                       "branch": str(c.get("branch") or "").strip(), "repeat": rep, "after": str(c.get("after") or "").strip()})
@@ -456,7 +523,7 @@ def to_page(r, what):
     return page
 
 
-def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None):
+def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, category=""):
     """真识别：第一次调用理清流程（flow 给了就跳过），码表检查过再第二次调用选计时点。
     on_progress 收到 {stage, seconds, found, read, last}；出错时已找到的留着，重试时告诉大模型接着找。
     返回里带 flow（理清的流程，没通过检查的不带）和 calls（这次真调用了几次大模型）。"""
@@ -493,7 +560,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None):
     if flow is None:
         report()
         try:
-            chain_reply = llm.investigate(build_chain_prompt(what, chip), root, on_text=on_text, on_tool=on_tool)
+            chain_reply = llm.investigate(build_chain_prompt(what, chip, category), root, on_text=on_text, on_tool=on_tool)
         except LLMError as e:
             calls += 1
             return failed(e, "chain")
@@ -514,7 +581,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None):
         return failed(e, "pick")
     calls += 1
     r = parse(reply, root, chain=flow["chain"], strict=True)
-    r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick")
+    r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick", chain_category=category or "")
     if chain_reply is not None:
         r["chain_reply"] = chain_reply
     if r["ok"]:
@@ -534,9 +601,9 @@ def _cache_file(project_dir, fingerprint, what, provider):
     return Path(project_dir) / "identify" / f"{_key(fingerprint, what.strip(), provider, CHAIN_PROMPT, PICK_PROMPT, _categories())}.json"
 
 
-def _flow_file(project_dir, fingerprint, what, provider, chip=""):
+def _flow_file(project_dir, fingerprint, what, provider, chip="", category=""):
     """第一次调用（理清流程）单独存：第二次失败了重试，不用再理一遍。放在子目录里，不和整份结果混在一起。"""
-    return Path(project_dir) / "identify" / "flow" / f"{_key(fingerprint, what.strip(), provider, chip, CHAIN_PROMPT)}.json"
+    return Path(project_dir) / "identify" / "flow" / f"{_key(fingerprint, what.strip(), provider, chip, CHAIN_PROMPT, HINTS.get(category, ""))}.json"
 
 
 def _load_flow(f, root):
@@ -563,7 +630,9 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
             return {**r, "page": to_page(r, what), "reused": True, "seconds": 0, "calls": 0}
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             pass
-    ff = _flow_file(project_dir, fingerprint, what, provider, kw.get("chip", "")) if project_dir and fingerprint else None
+    if "category" not in kw:
+        kw["category"] = guess_category(root, project_dir if project_dir and fingerprint else None)[0]
+    ff = _flow_file(project_dir, fingerprint, what, provider, kw.get("chip", ""), kw["category"]) if project_dir and fingerprint else None
     use = reuse if reuse_flow is None else reuse_flow
     if flow is not None and (not use or check_chain(root, flow)[1]):
         flow = None  # 带过来的流程按现在的源码对不上：不用

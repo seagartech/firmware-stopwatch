@@ -281,3 +281,55 @@ def test_strict_flag_survives_the_cache_and_old_cache_stays_loose(tmp_path, door
     f.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
     r = idf.identify_cached(None, door, "从刷卡到开门", proj, "fp", "deepseek")
     assert r["reused"] and r["steps"][1]["struct_ok"]
+
+
+# ---------- 第一步按设备类别加提醒；类别在第一步之前就要有（不调用大模型） ----------
+def test_category_hint_goes_into_the_first_prompt_only_for_known_categories():
+    voice = idf.build_chain_prompt("全程", "", "语音对话")
+    card = idf.build_chain_prompt("全程", "", "门禁")
+    plain = idf.build_chain_prompt("全程", "")
+    assert idf.VOICE_HINT in voice and idf.CARD_HINT not in voice
+    assert idf.CARD_HINT in card and idf.VOICE_HINT not in card
+    assert plain == idf.build_chain_prompt("全程", "", "其他") == idf.build_chain_prompt("全程", "", "报警")
+    for key in ["连续对话的第二轮", "第二轮从输入结束检测（静音、说话结束）开始，不从触摸或按键开始", "只有代码表明只能手动聆听时",
+                "上传的首包和末包", "收到识别出的文字", "回复开始和回复结束这一对消息", "第一段和最后一段声音播出", "播放全部放完",
+                "不用逐包、逐帧执行的那一行"]:
+        assert key in voice, key
+    for key in ["第二次刷卡", "察觉有卡、读出卡号、校验（本地比对或发给服务器）、继电器或门锁动作、声音或指示灯反馈"]:
+        assert key in card, key
+    for h in (idf.VOICE_HINT, idf.CARD_HINT):
+        for bad in ["小智", "xiaozhi", ".cc", ".c ", "main/", "Application", "rc522"]:
+            assert bad not in h, bad
+
+
+def test_category_is_guessed_before_the_first_call(tmp_path, door, voice):
+    assert idf.guess_category(door) == ("刷卡终端", "源码里的词")
+    assert idf.guess_category(voice) == ("", "")  # 词太少：拿不准就不猜
+    talk = write(tmp_path / "talk", {"main/a.cc": "void f() { opus_encode(); vad_on(); send_tts(); on_stt(); wake_word(); }\n"}, "")
+    assert idf.guess_category(talk)[0] == "语音对话"
+    proj = tmp_path / "proj"
+    (proj / "identify").mkdir(parents=True)
+    (proj / "identify" / "x.json").write_text(json.dumps({"category": "门禁"}), encoding="utf-8")
+    assert idf.guess_category(talk, proj) == ("门禁", "上次识别的结果")  # 上次 AI 认出的类别优先
+    (proj / "identify" / "x.json").write_text("坏了", encoding="utf-8")
+    assert idf.guess_category(talk, proj)[0] == "语音对话"  # 坏文件不崩
+
+
+def test_identify_cached_puts_the_hint_into_the_first_prompt(tmp_path, door):
+    m = FakeLLM(DOOR_REPLY)
+    r = idf.identify_cached(m, door, "从刷卡到开门", tmp_path / "proj", "fp", "deepseek")
+    assert r["ok"] and r["chain_category"] == "刷卡终端"
+    assert idf.CARD_HINT in m.prompts[0] and idf.CARD_HINT not in m.prompts[1]
+
+
+# ---------- 中间检查：「once（每次翻转）」这种带说明的写法认得；有问题的步骤上标的角色照样算 ----------
+def test_repeat_with_a_note_and_roles_on_bad_steps(door):
+    f = door_flow()
+    f["chain"][0]["repeat"] = "repeat（每 0.1 秒轮询）"
+    f["chain"][1]["repeat"] = "once（每次刷卡一次）"
+    f["chain"][2]["repeat"] = "反复执行"
+    got, bad = idf.check_chain(door, f)
+    assert bad == [] and [c["repeat"] for c in got["chain"][:3]] == ["repeat", "once", "repeat"]
+    f["chain"][3]["repeat"] = "看情况"  # 标了上传首末包的这一步没写清：只报这一处，不误报角色没标
+    _, bad = idf.check_chain(door, f)
+    assert any("第 4 步没写：是否反复执行" in b for b in bad) and not any("没标出" in b for b in bad), bad
