@@ -552,7 +552,11 @@ def test_parse_keeps_chain_and_passes_it_to_the_check(tmp_path):
     assert r["chain"] == res["chain"]
     assert [x["chain_step"] for x in r["steps"]] == [1, 2, None, None, None]
     assert r["steps"][0]["struct_ok"] is True and kinds(r["steps"][0], "tip") == ["branch"]
-    old = idf.parse(door_reply_with("after"), door)
+    res = copy.deepcopy(DOOR_RESULT)
+    res["steps"][0]["where"] = "after"
+    for k in ("chain", "trigger", "mode", "detect"):  # 旧回答：没有事件链
+        res.pop(k)
+    old = idf.parse(reply_for(res), door)
     assert "chain" not in old and all(x["chain_step"] is None for x in old["steps"])
     assert old["steps"][0]["struct_ok"] is False
 

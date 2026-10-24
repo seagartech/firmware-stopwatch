@@ -17,30 +17,28 @@ from pathlib import Path
 from fsw import structure
 from fsw.llm import LLMError
 
-PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写代码的硬件负责人。
+PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写代码的硬件负责人。
 
 ## 用户的要求
 固件源码就在当前目录（源码根目录）。
 用户想测：{what}
 {chip}
 ## 你的任务
-只读源码，不改任何文件。找出"{what}"这条线在固件里经过的关键步骤，每一步建议一个"计时点"（插一句记录当前时间的语句，不改原有逻辑）。
+只读源码，不改任何文件。上一步已经理清了一轮的流程（下面的事件链），这一步只从链里选计时点、写插入位置（插一句记录当前时间的语句，不改原有逻辑）。需要时可以再打开源码核对。
 
 ## 计时点拿来做什么
 码表把计时点插进固件，让人连续操作很多轮（比如连续对话、连续刷卡），每轮用相邻计时点的时间差算出每一段用了多久。所以：每一轮每个点恰好记到一次；点记到的先后就是真实发生的先后；只量设备和服务器在忙的时间，不含人操作、等人的时间。
 
-## 先写一轮事件链（chain），再从里面选点
-1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡）。运行时才决定的路径（比如按配置选通信协议、不同板子用不同驱动），先从配置和初始化代码确认实际走哪条；确认不了，就用各条都经过的公共位置，并写明。
-2. 写 chain：连续使用时的第二轮里，从设备察觉人做完输入，到最后一个结果（比如回复全部播完、门完全打开），设备依次做了哪些事。
-   - 第一步必须是设备自己能察觉人做完输入的地方。先在源码里找这类检测（比如静音或语音活动检测的回调、读卡完成、按键松开）；确实找不到，在第一步的 why 里写明找过哪里，再用最早能知道的时刻（比如服务器或手机回话），并把 start.late 写 true。
-   - 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道）不进事件链。
-   - 每一步写代码依据：文件、行号，是哪一支分支或哪个条件成立时才走（被 #if 包住的，先查 sdkconfig、sdkconfig.defaults* 或 Kconfig 确认会编进去）；标出一轮里只执行一次还是反复执行（逐帧、逐包、轮询）。
-   - 交给队列、Schedule、回调、lambda 之后才执行的，按真正执行的时刻排。服务器、手机发来的不同消息谁先到，要有协议说明、注释或代码依据，没有就在这一步写明不确定。
-3. 计时点只从 chain 里选，chain_step 写对应第几步；起点是第 1 步（line_of 写 start），终点要覆盖最后一个结果，第一下感觉到的结果也列上。
-   - 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。只有 {{ 或 }} 的行、else 行、条件或循环头（if/while/for/switch/case）、#if/#else/#endif 不能写；只有放在块里最后一句之后才写 after；同一句只放一个点。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。
-   - 点放在 chain 写明的那一支里，出错、失败、重试那一支不放。反复执行的代码里只有某一支才是"就是这一次"的，放进那一支、once 写 once；分不出的才写 first 或 last，不写 every。首包、首个结果这类，放在判断出"确实会被用上"之后。外面套着条件、可能不走的，always 写 false，除非在 why 里说明正常每轮都满足。
-   - 先后没有依据的外部消息，不要串成前后相连的段，写进 doubts。
-4. 顺带发现的线（比如播放回复前先切换表情、开门前先亮灯）也列出来；它的分段除了从主线分出的那个点，用的点都要属于这条线本身（line_of 写 side）。同一件事有"收到"和"真正生效"两个时刻的，两个都列。
+## 已理清的流程
+{flow}
+## 怎么选点
+1. 计时点只从事件链里选，chain_step 写对应第几步；起点是第 1 步（line_of 写 start），终点要覆盖最后一个结果。
+2. 这几样都要覆盖到：设备往外发数据的首包和末包（有上传的话）、收到的第一个结果、最后一个结果、第一下感觉到的结果。
+3. 反复执行的步骤（逐帧、逐包、轮询），点要放进判断出"就是这一次"的那一支，once 写 once；不能直接写在循环体里又标成 once。分不出哪一次的才写 first 或 last，不写 every。首包、首个结果这类，放在判断出"确实会被用上"之后。
+4. 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。只有 {{ 或 }} 的行、else 行、条件或循环头（if/while/for/switch/case）、#if/#else/#endif 不能写；只有放在块里最后一句之后才写 after；同一句只放一个点。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。
+5. 点放在链写明的那一支里，出错、失败、重试那一支不放。外面套着条件、可能不走的，always 写 false，除非在 why 里说明正常每轮都满足。
+6. 链里先后写着"不确定"的，不要串成前后相连的段，写进 doubts。
+7. 顺带发现的线（比如播放回复前先切换表情、开门前先亮灯）也列出来；它的分段除了从主线分出的那个点，用的点都要属于这条线本身（line_of 写 side）。同一件事有"收到"和"真正生效"两个时刻的，两个都列。
 {known}
 ## 边找边报
 每确认一个关键步骤，单独输出一行：找到：<中文名>（<文件>:<行号>）
@@ -56,7 +54,6 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
  "start": {{"name": "起点的短名字，6 个字以内，比如：说话结束、读到卡号", "note": "起点之前设备看不见的那段，没有就空", "late": "true / false（人做完到起点之间是否隔着上传、服务器或手机处理；只差几十毫秒的写 false）"}},
  "main": {{"name": "要测的这条线的名字，比如：播放这条、开锁这条", "end": "终点的短名字，6 个字以内，比如：开始播放、门锁打开"}},
  "side": null 或 {{"name": "顺带发现的线，比如：表情这条", "end": "比如：换上表情", "found": "发现了什么，一句话", "why": "为什么推荐也测，一句话"}},
- "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "路径", "line": 123, "branch": "哪一支或哪个条件成立时才走，没有就空", "repeat": "once / repeat", "why": "代码依据或不确定的地方"}}],
  "steps": [
   {{"id": "P1", "chain_step": 1, "name": "中文名，8 个字以内，比如：收到识别结果、读到卡号", "file": "相对源码根目录的路径", "line": 123,
     "func": "函数名", "where": "before / after（见插点写法）", "once": "once / first / last（见上）",
@@ -74,7 +71,7 @@ PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写
  "doubts": [{{"text": "读代码时发现的可能变慢或出错的地方", "sure": "高 / 中 / 低"}}]
 }}
 ```
-chain 先写；steps 按发生的先后顺序排；segments 是要测的这条线从起点到终点的每一段，outside=true 表示这段在设备外面（服务器、网络）。
+steps 按发生的先后顺序排；segments 是要测的这条线从起点到终点的每一段，outside=true 表示这段在设备外面（服务器、网络）。
 
 ## 设备类别（填 category 用）
 {categories}
@@ -86,6 +83,33 @@ chain 先写；steps 按发生的先后顺序排；segments 是要测的这条�
 - 说明文字里不要写 P1、P2 这样的编号，写步骤的中文名。
 - 起点、终点、线、计时点、段的名字和 outside_note 用业内通行术语（比如语音识别、首包音频、扬声器、权限校验），不用口语（比如听写、想回答、喇叭出声）。
 - 起点或终点找不到，start_found / end_found 写 false。
+"""
+
+CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步只理清流程，不选计时点。
+
+## 用户想测
+{what}
+{chip}固件源码就在当前目录（源码根目录）。只读源码，不改任何文件。
+
+## 要做的事
+理清连续使用时的第二轮里，从设备察觉人做完输入，到最后一个结果（比如回复全部播完、门完全打开），设备依次做了哪些事。
+1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。
+2. 第一步用设备自己能察觉人做完输入的检测（比如静音或语音活动检测翻转、读卡完成、按键松开）。哪怕它只用来切换显示、指示灯，不上报，也算设备察觉到了，第一步就用它。确实找不到，在 detect 里写明找过哪里。
+3. 运行时走哪种模式、哪种协议：找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode。
+4. 每一步写文件、行号、这一行的原文、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面。
+5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
+6. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道）不进链。
+
+## 最后输出
+只输出一个 ```json 代码块（中文）：
+```json
+{{"trigger": "选定的触发路径",
+ "mode": {{"what": "运行时走哪种模式、哪种协议；不用选的写：无", "file": "决定它的那一行所在文件", "line": 123, "code": "那一行的原文", "config": "相关配置和取值"}},
+ "detect": {{"kind": "第一步用的是哪种输入结束检测，比如：静音检测翻转、读卡完成、按键松开", "found": true, "looked": "找不到时写找过哪里"}},
+ "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "相对源码根目录的路径", "line": 123, "code": "这一行的原文", "branch": "走哪一支或哪个条件成立才走，没有就空", "repeat": "once / repeat", "after": "为什么排在上一步后面：哪段代码、文档或注释；没有就写 不确定（第 1 步空着）"}}],
+ "doubts": ["拿不准的地方"]}}
+```
+行号必须是你亲自打开文件核对过的，code 照抄那一行。
 """
 
 KNOWN = "\n上次读到一半断了，已经找到这些步骤：{names}。请核对它们，然后接着找剩下的，最后照样给出完整结果。\n"
@@ -100,9 +124,42 @@ def _categories():
     return "\n".join(f"- {c['key']}：{c['hint']}" for c in stds.categories()) or "- 其他"
 
 
-def build_prompt(what, chip="", known=None):
-    return PROMPT.format(what=what, categories=_categories(), chip=f"芯片和板子：{chip}\n" if chip else "",
-                         known=KNOWN.format(names="、".join(known)) if known else "")
+PROMPT = PICK_PROMPT  # 旧名字：第二次调用（选计时点）的提示词
+STAGES = {"chain": "理清流程", "pick": "选计时点"}
+
+
+def _chip(chip):
+    return f"芯片和板子：{chip}\n" if chip else ""
+
+
+def build_chain_prompt(what, chip=""):
+    """第一次调用：只理清一轮的流程。"""
+    return CHAIN_PROMPT.format(what=what, chip=_chip(chip))
+
+
+def _flow_text(flow):
+    """把理清的流程写成给第二次调用看的几行字。"""
+    if not flow:
+        return "（没有）\n"
+    mode, det = flow.get("mode") or {}, flow.get("detect") or {}
+    at = f"（{mode.get('file')}:{mode.get('line')} `{mode.get('code') or ''}`）" if mode.get("file") else ""
+    rows = [f"触发路径：{flow.get('trigger') or ''}",
+            f"模式和协议：{mode.get('what') or ''}{at}{'；配置：' + str(mode['config']) if mode.get('config') else ''}",
+            f"输入结束检测：{det.get('kind') or ''}{'' if det.get('found', True) not in (False, 'false') else '（没找到，找过：' + str(det.get('looked') or '') + '）'}",
+            "事件链："]
+    for c in flow.get("chain") or []:
+        rows.append(f"{c['n']}. {c['what']}｜{c['file']}:{c['line']} `{c['code']}`"
+                    f"｜{'分支：' + c['branch'] if c.get('branch') else '不在分支里'}｜{'反复执行' if c.get('repeat') == 'repeat' else '一轮一次'}"
+                    + (f"｜排在上一步后面：{c['after']}" if c.get("after") else ""))
+    for d in flow.get("doubts") or []:
+        rows.append(f"拿不准：{d}")
+    return "\n".join(rows) + "\n"
+
+
+def build_prompt(what, chip="", known=None, flow=None):
+    """第二次调用：拿着理清的流程只选计时点。"""
+    return PICK_PROMPT.format(what=what, categories=_categories(), chip=_chip(chip), flow=_flow_text(flow),
+                              known=KNOWN.format(names="、".join(known)) if known else "")
 
 
 def found_names(text, with_at=False):
@@ -175,6 +232,94 @@ def check_location(root, file, line):
     return lines[n - 1].strip(), None
 
 
+_NONE = ("无", "没有", "不用", "不需要", "none", "-")
+
+
+def _same_code(said, real):
+    """模型抄的原文和文件里那一行对不对得上：去掉空白比较，允许抄掉行尾或只抄一部分（至少 6 个字符）。"""
+    a, b = re.sub(r"\s+", "", str(said or "")), re.sub(r"\s+", "", str(real or ""))
+    return bool(a) and (a == b or (len(a) >= 6 and a in b) or (len(b) >= 6 and b in a))
+
+
+def _where_code(root, file, line, code):
+    """核对一处 文件/行号/原文：返回 (行号, 问题)。行号差几行但原文就在附近的，按原文所在行算。"""
+    n, note = line_no(line)
+    if n is None:
+        return None, note or "没写行号"
+    real, problem = check_location(root, file, n)
+    if problem:
+        return None, problem
+    if not str(code or "").strip():
+        return None, "没抄这一行的原文"
+    if _same_code(code, real):
+        return n, None
+    p = (Path(root) / _rel(root, file))
+    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    for k in (1, -1, 2, -2, 3, -3):
+        if 1 <= n + k <= len(lines) and _same_code(code, lines[n + k - 1]):
+            return n + k, None
+    return None, f"{_rel(root, file)} 第 {n} 行是「{real[:40]}」，和它抄的原文「{str(code).strip()[:40]}」对不上"
+
+
+def check_chain(root, data):
+    """两次调用之间码表检查理清的流程（只做做得可靠的）：
+    文件、行号、原文对不对得上；必填项有没有写；第一步有没有写明是哪种输入结束检测。
+    返回 (整理好的流程, 问题列表)；问题列表不空就是不合格。"""
+    if not isinstance(data, dict):
+        return None, ["回答的格式不对，码表看不懂"]
+    bad = []
+    trigger = str(data.get("trigger") or "").strip()
+    if not trigger:
+        bad.append("没写选定的触发路径")
+    mode = data.get("mode") if isinstance(data.get("mode"), dict) else {}
+    mwhat = str(mode.get("what") or "").strip()
+    if not mwhat:
+        bad.append("没写运行时走哪种模式、哪种协议")
+    elif mode.get("file") or mode.get("line"):
+        n, why = _where_code(root, mode.get("file"), mode.get("line"), mode.get("code"))
+        if why:
+            bad.append(f"决定模式和协议的那一行：{why}")
+        else:
+            mode = {**mode, "file": _rel(root, mode.get("file")), "line": n}
+    elif not mwhat.lower().startswith(_NONE):
+        bad.append("写了运行时走哪种模式、哪种协议，但没写真正决定它的那一行代码")
+    det = data.get("detect") if isinstance(data.get("detect"), dict) else {}
+    if not str(det.get("kind") or "").strip():
+        bad.append("第一步没写明用的是哪种输入结束检测")
+    if det.get("found") in (False, "false", "否") and not str(det.get("looked") or "").strip():
+        bad.append("说找不到输入结束检测，但没写找过哪里")
+    raw = [c for c in data.get("chain") or [] if isinstance(c, dict)] if isinstance(data.get("chain"), list) else []
+    if len(raw) < 2:
+        bad.append("事件链不到 2 步")
+    chain, seen = [], set()
+    for i, c in enumerate(raw):
+        n = chain_no(c.get("n")) or i + 1
+        tag = f"第 {n} 步"
+        if n in seen:
+            bad.append(f"{tag}的序号重复了")
+        seen.add(n)
+        miss = [label for k, label in (("what", "做了什么"), ("file", "文件"), ("line", "行号"), ("code", "原文")) if c.get(k) in (None, "")]
+        rep = str(c.get("repeat") or "").strip().lower()
+        rep = "repeat" if rep in ("repeat", "反复", "反复执行", "every") else "once" if rep in ("once", "一次", "只执行一次") else ""
+        if not rep:
+            miss.append("是否反复执行")
+        if i and not str(c.get("after") or "").strip():
+            miss.append("为什么排在上一步后面")
+        if miss:
+            bad.append(f"{tag}没写：{'、'.join(miss)}")
+            continue
+        line, why = _where_code(root, c.get("file"), c.get("line"), c.get("code"))
+        if why:
+            bad.append(f"{tag}：{why}")
+            continue
+        chain.append({"n": n, "what": str(c["what"]).strip(), "file": _rel(root, c["file"]), "line": line,
+                      "code": check_location(root, c["file"], line)[0], "branch": str(c.get("branch") or "").strip(),
+                      "repeat": rep, "after": str(c.get("after") or "").strip()})
+    flow = {"trigger": trigger, "mode": mode, "detect": det, "chain": chain,
+            "doubts": [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else []}
+    return flow, bad
+
+
 def chain_no(v):
     """计时点对应事件链的第几步：正整数，没写或看不懂就是 None。"""
     try:
@@ -184,11 +329,13 @@ def chain_no(v):
     return n if n > 0 else None
 
 
-def parse(text, root):
-    """读大模型的回答：取最后的 json，逐个核对位置。"""
+def parse(text, root, chain=None):
+    """读大模型的回答：取最后的 json，逐个核对位置。chain 是第一次调用理清的事件链（点只能从里面选）。"""
     data = _json_block(text)
     if not isinstance(data, dict):
         return _fail("bad_reply", "大模型读完了代码，但回答的格式不对，码表看不懂。点\"重试\"再找一次。", found=found_names(text))
+    if chain:
+        data["chain"] = chain
     warn = None
     if data.get("start_found") is False or data.get("end_found") is False:
         which = "起点" if data.get("start_found") is False else "终点"
@@ -219,6 +366,8 @@ def parse(text, root):
                 "felt": s.get("felt") if s.get("felt") in ("first", "last") else "",
                 "kind": str(s.get("kind") or "") if s.get("felt") in ("first", "last") else "",
                 "chain_step": chain_no(s.get("chain_step"))}  # 对应事件链第几步；旧结果没有这一项
+        if chain and step["chain_step"] is not None and step["chain_step"] not in {c["n"] for c in chain}:
+            problem = "；".join(x for x in (problem, f"理清的流程里没有第 {step['chain_step']} 步，这个点不是从流程里选的") if x)
         if problem:
             step["sure"], step["doubt"] = "低", problem + (("；" + step["doubt"]) if step["doubt"] else "")
         twin = next((x for x in steps if x["file"] and (x["file"], x["line"], x["where"]) == (step["file"], step["line"], step["where"])), None)
@@ -286,9 +435,13 @@ def to_page(r, what):
     return page
 
 
-def identify(llm, root, what, chip="", known=None, on_progress=None):
-    """真识别一次。on_progress 收到 {seconds, found, read, last}；出错时已找到的留着，重试时告诉大模型接着找。"""
-    t0, text, state = time.time(), [], {"found": list(known or []), "at": [""] * len(known or []), "read": 0, "last": ""}
+def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None):
+    """真识别：第一次调用理清流程（flow 给了就跳过），码表检查过再第二次调用选计时点。
+    on_progress 收到 {stage, seconds, found, read, last}；出错时已找到的留着，重试时告诉大模型接着找。
+    返回里带 flow（理清的流程，没通过检查的不带）和 calls（这次真调用了几次大模型）。"""
+    t0, text = time.time(), []
+    state = {"stage": "chain" if flow is None else "pick", "found": list(known or []), "at": [""] * len(known or []), "read": 0, "last": ""}
+    calls, chain_reply = 0, None
 
     def report():
         on_progress and on_progress({"seconds": round(time.time() - t0, 1), **state,
@@ -296,6 +449,8 @@ def identify(llm, root, what, chip="", known=None, on_progress=None):
 
     def on_text(piece):
         text.append(piece)
+        if state["stage"] != "pick":
+            return
         for n, a in zip(*found_names("".join(text), with_at=True)):
             if n not in state["found"]:
                 state["found"].append(n)
@@ -307,14 +462,40 @@ def identify(llm, root, what, chip="", known=None, on_progress=None):
         state["last"] = desc
         report()
 
+    def failed(e, stage):
+        tail = (f"已找到的 {len(state['found'])} 个留着，点\"重试\"接着找" if stage == "pick"
+                else "点\"重试\"再试一次") + "，也可以到设置页换一个大模型。"
+        return _fail(e.kind, f"{STAGES[stage]}时出错：{e.message}<br>{tail}", found=state["found"], stage=stage,
+                     seconds=round(time.time() - t0, 1), calls=calls,
+                     **({"flow": flow} if flow else {}), **({"chain_reply": chain_reply} if chain_reply else {}))
+
+    if flow is None:
+        report()
+        try:
+            chain_reply = llm.investigate(build_chain_prompt(what, chip), root, on_text=on_text, on_tool=on_tool)
+        except LLMError as e:
+            calls += 1
+            return failed(e, "chain")
+        calls += 1
+        got, bad = check_chain(root, _json_block(chain_reply))
+        if bad:  # 不合格就停下说明原因，不自动重试
+            more = f"等 {len(bad)} 处" if len(bad) > 3 else ""
+            return _fail("bad_chain", f"理清流程这一步的结果没通过码表检查：{'；'.join(bad[:3])}{more}。点\"重试\"再理一次，也可以到设置页换一个大模型。",
+                         found=[], stage="chain", problems=bad, chain_reply=chain_reply,
+                         seconds=round(time.time() - t0, 1), calls=calls)
+        flow = got
+        state["stage"], text = "pick", []
+        report()
     try:
-        reply = llm.investigate(build_prompt(what, chip, known), root, on_text=on_text, on_tool=on_tool)
+        reply = llm.investigate(build_prompt(what, chip, known, flow), root, on_text=on_text, on_tool=on_tool)
     except LLMError as e:
-        return _fail(e.kind, f"{e.message}<br>已找到的 {len(state['found'])} 个留着，点\"重试\"接着找，也可以到设置页换一个大模型。",
-                     found=state["found"], seconds=round(time.time() - t0, 1))
-    r = parse(reply, root)
-    r["seconds"] = round(time.time() - t0, 1)
-    r["reply"] = reply
+        calls += 1
+        return failed(e, "pick")
+    calls += 1
+    r = parse(reply, root, chain=flow["chain"])
+    r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick")
+    if chain_reply is not None:
+        r["chain_reply"] = chain_reply
     if r["ok"]:
         r["page"] = to_page(r, what)
         r["found"] = [s["name"] for s in r["steps"]]
@@ -323,14 +504,33 @@ def identify(llm, root, what, chip="", known=None, on_progress=None):
     return r
 
 
+def _key(*parts):
+    return hashlib.sha1("\0".join(str(p) for p in parts).encode()).hexdigest()[:12]
+
+
 def _cache_file(project_dir, fingerprint, what, provider):
-    # 找步骤的要求（PROMPT）改了，旧结果按旧要求找的：不沿用
-    key = hashlib.sha1(f"{fingerprint}\0{what.strip()}\0{provider}\0{PROMPT}\0{_categories()}".encode()).hexdigest()[:12]
-    return Path(project_dir) / "identify" / f"{key}.json"
+    # 找步骤的要求（两份提示词）改了，旧结果按旧要求找的：不沿用（旧文件留着，名字对不上就不会被读到）
+    return Path(project_dir) / "identify" / f"{_key(fingerprint, what.strip(), provider, CHAIN_PROMPT, PICK_PROMPT, _categories())}.json"
 
 
-def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=True, **kw):
-    """源码没变、要测的也没变时，直接用上次的识别结果（设置页的勾选），不再调用大模型。"""
+def _flow_file(project_dir, fingerprint, what, provider, chip=""):
+    """第一次调用（理清流程）单独存：第二次失败了重试，不用再理一遍。放在子目录里，不和整份结果混在一起。"""
+    return Path(project_dir) / "identify" / "flow" / f"{_key(fingerprint, what.strip(), provider, chip, CHAIN_PROMPT)}.json"
+
+
+def _load_flow(f, root):
+    try:
+        saved = json.loads(f.read_text(encoding="utf-8"))
+        flow, bad = check_chain(root, saved.get("raw"))  # 按现在的源码重新核对一遍，对不上就当没有
+        return None if bad else flow
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+
+
+def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=True, reuse_flow=None, flow=None, **kw):
+    """源码没变、要测的也没变时，直接用上次的识别结果（设置页的勾选），不再调用大模型。
+    两次调用分别存：整份结果；理清的流程（reuse_flow，默认跟 reuse 一样；重试时码表传 True，第二次失败不用重跑第一次）。
+    flow：调用方手里已有的理清的流程（没有项目目录、存不了文件时，网页重试把上次的带过来）。"""
     f = _cache_file(project_dir, fingerprint, what, provider) if project_dir and fingerprint else None
     if reuse and f and f.exists():
         try:
@@ -338,14 +538,25 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
             # 沿用的结果也按现在的源码重新做一遍结构检查（存下时可能还没有这层检查，或者是改完再测挪过行号的）
             structure.check(root, r.get("steps") or [], r.get("segments"), r.get("side_segments"), r.get("chain"))
             # 页面数据按存下的步骤重新算一遍：码表升级后页面要的新字段（比如"一轮记哪一次"）也有
-            return {**r, "page": to_page(r, what), "reused": True, "seconds": 0}
-        except (OSError, ValueError):
+            return {**r, "page": to_page(r, what), "reused": True, "seconds": 0, "calls": 0}
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
             pass
-    r = identify(llm, root, what, **kw)
+    ff = _flow_file(project_dir, fingerprint, what, provider, kw.get("chip", "")) if project_dir and fingerprint else None
+    use = reuse if reuse_flow is None else reuse_flow
+    if flow is not None and (not use or check_chain(root, flow)[1]):
+        flow = None  # 带过来的流程按现在的源码对不上：不用
+    if flow is None and ff and ff.exists() and use:
+        flow = _load_flow(ff, root)
+    r = identify(llm, root, what, flow=flow, **kw)
+    if ff and not flow and r.get("flow"):
+        raw = _json_block(r.get("chain_reply") or "")
+        if isinstance(raw, dict):
+            ff.parent.mkdir(parents=True, exist_ok=True)
+            ff.write_text(json.dumps({"raw": raw, "what": what, "provider": provider}, ensure_ascii=False, indent=1), encoding="utf-8")
     if r["ok"] and f:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps({**r, "what": what, "provider": provider}, ensure_ascii=False, indent=1), encoding="utf-8")
-    return {**r, "reused": False}
+    return {**r, "reused": False, "flow_reused": bool(flow)}
 
 
 SUGGEST = """你是"固件码表"工具里的助手。下面是一个单片机固件项目的概况。请推荐 3 个用户最可能想测的"从什么到什么"（用户感受得到的一段等待），

@@ -57,6 +57,22 @@ DOOR_RESULT = {
         {"from": "P2", "to": "P3", "name": "亮灯响一声", "who": "固件", "outside": False},
     ],
     "outside_note": "服务器：核对这张卡",
+    # 第一次调用（理清流程）要的几项：和步骤写在同一个 json 里，假模型一份回复两次调用都能用
+    "trigger": "刷卡",
+    "mode": {"what": "无", "config": ""},
+    "detect": {"kind": "读卡完成", "found": True, "looked": ""},
+    "chain": [
+        {"n": 1, "what": "读卡芯片报告有卡靠近", "file": "main/rfid_task.c", "line": 88, "code": "if (rc522_card_present(dev)) {",
+         "branch": "", "repeat": "repeat", "after": ""},
+        {"n": 2, "what": "卡号读完", "file": "main/rfid_task.c", "line": 131, "code": "uid_ok = rc522_read_uid(dev, &uid);",
+         "branch": "", "repeat": "once", "after": "同一个任务里读到有卡之后接着读卡号"},
+        {"n": 3, "what": "亮灯响一声", "file": "main/ui_led.c", "line": 42, "code": "led_set(LED_GREEN); buzzer_beep(80);",
+         "branch": "", "repeat": "once", "after": "卡号读完后调用"},
+        {"n": 4, "what": "收到服务器校验结果", "file": "main/net_auth.c", "line": 207, "code": "auth_result = parse_auth_reply(resp);",
+         "branch": "", "repeat": "once", "after": "卡号发给服务器后，等它的回复"},
+        {"n": 5, "what": "发出开锁", "file": "main/lock_ctrl.c", "line": 55, "code": "gpio_set_level(LOCK_PIN, 0);",
+         "branch": "", "repeat": "once", "after": "校验通过后才开锁"},
+    ],
     "doubts": [{"text": "门磁信号没接，开门只能量到\"发出开锁\"", "sure": "中"}],
 }
 

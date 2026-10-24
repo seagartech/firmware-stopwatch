@@ -103,33 +103,37 @@ def test_prompt_says_read_only_and_asks_for_markers():
 
 @pytest.mark.parametrize("what", ["从刷卡到开门", "从说完话到开始播放回复"])
 def test_identify_prompt_states_the_purpose_and_is_sent_to_the_model(door, what):
-    """门禁、语音两类都发同一份通用提示词：目的（多轮重复、每轮每点一次、只量设备忙的时间）和由此来的选点要求。"""
+    """门禁、语音两类都发同一套通用提示词，分两次调用：第一次只理清流程，第二次拿着流程只选计时点。"""
     m = FakeLLM(DOOR_REPLY)
-    idf.identify(m, door, what)
-    p = m.prompts[0]
-    assert p == idf.build_prompt(what) and what in p
-    for key in ["每一轮每个点恰好记到一次", "不含人操作、等人的时间",
-                # 第三轮：先写一轮事件链，再只从链里选点
-                "先写一轮事件链（chain），再从里面选点", "连续使用时的第二轮里", "第一步必须是设备自己能察觉人做完输入的地方",
-                "先在源码里找这类检测", "写明找过哪里", "只在第一轮才走的步骤", "不进事件链",
-                "每一步写代码依据：文件、行号，是哪一支分支或哪个条件成立时才走", "只执行一次还是反复执行",
-                "没有就在这一步写明不确定", "计时点只从 chain 里选，chain_step 写对应第几步",
-                "终点要覆盖最后一个结果", "不写 every", "确实会被用上", "点放在 chain 写明的那一支里",
-                "出错、失败、重试那一支不放", "always 写 false，除非在 why 里说明正常每轮都满足",
-                "不要串成前后相连的段", "按真正执行的时刻排", "先从配置和初始化代码确认实际走哪条", "sdkconfig",
-                "用的点都要属于这条线本身", '"chain": [', '"chain_step": 1',
-                # 第四轮：插点以"插在哪一句之前"为主
+    r = idf.identify(m, door, what, chip="芯片 ESP32-S3")
+    assert r["ok"] and r["calls"] == 2 and len(m.prompts) == 2
+    first, second = m.prompts
+    assert first == idf.build_chain_prompt(what, "芯片 ESP32-S3") and what in first
+    for key in ["这一步只理清流程，不选计时点", "连续使用时的第二轮里", "设备自己能察觉人做完输入的检测",
+                "哪怕它只用来切换显示、指示灯，不上报，也算设备察觉到了，第一步就用它", "写明找过哪里",
+                "找到真正决定它的那一行代码", "sdkconfig", "这一行的原文", "走的是哪一支", "只执行一次还是反复执行",
+                "为什么排在上一步后面", "先读触发它的那一行代码或协议文档", "不能按名字猜", "按真正执行的时刻排",
+                "依据只能是代码、协议文档或注释，没有就写\"不确定\"", "只在第一轮才走的步骤", "不进链",
+                '"trigger"', '"mode"', '"detect"', '"chain"', '"code"', '"after"']:
+        assert key in first, key
+    for bad in ["计时点只从", '"steps"', "插点写法", "category"]:  # 第一次不选点
+        assert bad not in first, bad
+    assert second == idf.build_prompt(what, "芯片 ESP32-S3", flow=r["flow"]) and what in second
+    for key in ["每一轮每个点恰好记到一次", "不含人操作、等人的时间", "上一步已经理清了一轮的流程",
+                "## 已理清的流程", "触发路径：刷卡", "输入结束检测：读卡完成", "1. 读卡芯片报告有卡靠近｜main/rfid_task.c:88",
+                "计时点只从事件链里选，chain_step 写对应第几步", "终点要覆盖最后一个结果",
+                "设备往外发数据的首包和末包", "收到的第一个结果、最后一个结果",
+                "不能直接写在循环体里又标成 once", "不写 every", "确实会被用上",
                 "插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）",
                 "要放进某一支，就写这一支大括号里的第一句", "只有放在块里最后一句之后才写 after",
-                "条件或循环头（if/while/for/switch/case）", "#if/#else/#endif 不能写", "`stop();`、before",
-                "放进那一支、once 写 once", '"once": "once / first / last']:
-        assert key in p, key
-    assert "被丢掉的也要能记到" not in p  # 旧规则会把点推到逐帧经过的判断之前
-    assert "选它们汇合后每轮都经过的那一步" not in p  # 旧规则会把不同触发方式混在一条线上
-    assert "人开始输入到输入结束之间的事" not in p  # 已并进事件链：链从输入结束开始
-    assert "插在这行之前还是之后" not in p and "同一行代码只放一个计时点" not in p  # 旧的 before/after 说明已换成插点写法
-    for bad in ["小智", "DeepSeek", "application.cc", "main/"]:  # 提示词模板不点名任何固件或文件
-        assert bad not in idf.PROMPT, bad
+                "#if/#else/#endif 不能写", "`stop();`、before", "点放在链写明的那一支里", "出错、失败、重试那一支不放",
+                "always 写 false，除非在 why 里说明正常每轮都满足", "不要串成前后相连的段", "用的点都要属于这条线本身",
+                '"chain_step": 1', '"once": "once / first / last']:
+        assert key in second, key
+    assert '"chain": [{' not in second  # 链是给它的输入，不用再写一遍
+    for p in (idf.CHAIN_PROMPT, idf.PICK_PROMPT):
+        for bad in ["小智", "DeepSeek", "application.cc", "main/"]:  # 提示词模板不点名任何固件或文件
+            assert bad not in p, bad
 
 
 # ---------- 整个识别：边找边报、出错留着已找到的 ----------
@@ -142,14 +146,18 @@ def test_identify_reports_progress_and_result(door):
 
 
 def test_identify_failure_keeps_what_was_found(door):
+    """第二次（选计时点）断了：已找到的留着，理清的流程也带回来（重试时不用再理一遍）。"""
     class Half(FakeLLM):
         def investigate(self, prompt, root, on_text=None, on_tool=None):
+            if "这一步只理清流程" in prompt:
+                return super().investigate(prompt, root, on_text, on_tool)
             on_text and on_text("找到：读到卡（main/rfid_task.c:88）\n")
             raise self.fail("offline")
     seen = []
-    r = idf.identify(Half(""), door, "从刷卡到开门", on_progress=seen.append)
-    assert not r["ok"] and r["kind"] == "offline" and r["found"] == ["读到卡"]
-    assert "重试" in r["message"]
+    r = idf.identify(Half(DOOR_REPLY), door, "从刷卡到开门", on_progress=seen.append)
+    assert not r["ok"] and r["kind"] == "offline" and r["found"] == ["读到卡"] and r["stage"] == "pick"
+    assert "重试" in r["message"] and "选计时点" in r["message"] and r["flow"]["chain"]
+    assert [x["stage"] for x in seen][0] == "chain" and seen[-1]["stage"] == "pick"
 
 
 # ---------- 存上次的结果：源码和要测的都没变，直接用 ----------
@@ -164,10 +172,10 @@ def test_cache_by_fingerprint_and_what(tmp_path, door):
     m = Count(DOOR_REPLY)
     r1 = idf.identify_cached(m, door, "从刷卡到开门", proj, fingerprint="abc", provider="deepseek", reuse=True)
     r2 = idf.identify_cached(m, door, "从刷卡到开门", proj, fingerprint="abc", provider="deepseek", reuse=True)
-    assert r1["ok"] and r2["ok"] and r2["reused"] and len(calls) == 1
+    assert r1["ok"] and r2["ok"] and r2["reused"] and len(calls) == 2  # 理清流程 + 选计时点，两次
     idf.identify_cached(m, door, "从刷卡到亮灯", proj, fingerprint="abc", provider="deepseek", reuse=True)
     idf.identify_cached(m, door, "从刷卡到开门", proj, fingerprint="abc", provider="deepseek", reuse=False)
-    assert len(calls) == 3
+    assert len(calls) == 6
 
 
 # ---------- AI 推荐常用语、添加步骤 ----------

@@ -82,7 +82,7 @@ def test_identify_uses_carry_and_does_not_call_llm(tmp_path, monkeypatch):
     class Once(FakeLLM):
         def investigate(self, *a, **k):
             calls.append(1)
-            assert len(calls) == 1, "改完再测不该再调用大模型"
+            assert len(calls) <= 2, "改完再测不该再调用大模型"  # 第一次找：理清流程 + 选计时点
             return super().investigate(*a, **k)
     llm = Once(DOOR_REPLY)
     c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=lambda p, k: llm,
@@ -93,7 +93,7 @@ def test_identify_uses_carry_and_does_not_call_llm(tmp_path, monkeypatch):
     body = {"work": r["work"], "project_dir": r["project_dir"], "fingerprint": r["fingerprint"], "what": WHAT, "reuse": True}
     c.post("/api/identify/start", json=body)
     first = iwait(c)
-    assert first["state"] == "done" and len(calls) == 1
+    assert first["state"] == "done" and len(calls) == 2
     old = next(f for f in (Path(r["project_dir"]) / "identify").glob("*.json"))
     res = _j.loads(old.read_text(encoding="utf-8"))
     res["steps"] = [{**x, "line": x["line"] + 2} for x in res["steps"]]
@@ -105,7 +105,7 @@ def test_identify_uses_carry_and_does_not_call_llm(tmp_path, monkeypatch):
     c.post("/api/identify/start", json={**body, "work": r2["work"], "fingerprint": r2["fingerprint"]})
     j = iwait(c)
     assert j["state"] == "done", (j.get("message"), j.get("kind"))
-    assert j["reused"] and j["carried"]["moved"] == 2 and len(calls) == 1
+    assert j["reused"] and j["carried"]["moved"] == 2 and len(calls) == 2  # 只有第一次找时的两次调用
     plan = _j.loads((Path(r["project_dir"]) / "fsw-plan.json").read_text(encoding="utf-8"))
     assert plan["fingerprint"] == r2["fingerprint"] and cy.sig(plan["steps"])[0] == ("P1", "main/rfid_task.c", 90)
 

@@ -190,7 +190,7 @@ def test_found_list_ignores_half_written_last_line():
             for piece in ["找到：听", "到唤醒词（a.cc:1）\n找到：设", "备听到你停了（b.cc:2）\n"]:
                 on_text(piece)
             return "```json\n{}\n```"
-    identify.identify(LLM(), ".", "全程", on_progress=lambda p: got.append(p["found"]))
+    identify.identify(LLM(), ".", "全程", on_progress=lambda p: got.append(p["found"]), flow={"chain": []})  # 已理清流程：只看选点这次
     assert got[-1] == ["听到唤醒词", "设备听到你停了"]
 
 
@@ -252,7 +252,7 @@ def test_experience_standard_follows_the_device_category_else_nielsen():
 def test_start_later_than_the_person_skips_the_experience_standard():
     # 第 25 次：AI 把起点放在"收到服务器听写文字"，少算了上传和听写，拿"语音输入结束起算"的标准比会判轻
     from fsw import standards as stds
-    from fsw.identify import PROMPT
+    from fsw.identify import CHAIN_PROMPT, PROMPT
     sc = {"lines": [{"name": "回答这条", "segments": ["s"]}], "segments": {"s": {"from": "P1", "to": "P2", "name": "x"}},
           "point_names": {"P1": "起点", "P2": "终点"}, "point_kinds": {"P2": "声音"}, "experiences": [], "category": "语音对话",
           "start_late": True, "start_note": "上传录音、服务器听写"}
@@ -261,7 +261,7 @@ def test_start_later_than_the_person_skips_the_experience_standard():
     page = {"steps": _talk([("P1", "收到听写"), ("P2", "喇叭出声")]), "segs": [{"a": "P1", "b": "P2", "t": "等"}], "fsegs": [],
             "ln": {"talk": "回答这条"}, "startLate": True, "startNote": "上传录音"}
     assert stds.real_scenario(page, None)["start_late"] is True
-    assert '"late"' in PROMPT and "设备自己能察觉人做完" in PROMPT  # 有设备自己察觉的点时优先拿它当起点（通用说法，不点名任何设备）
+    assert '"late"' in PROMPT and "设备自己能察觉人做完" in CHAIN_PROMPT  # 有设备自己察觉的点时优先拿它当起点（通用说法，不点名任何设备）
 
 
 def test_touch_category_uses_google_inp():

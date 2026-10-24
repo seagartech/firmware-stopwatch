@@ -67,7 +67,7 @@ def test_failure_then_retry_keeps_found(make, tmp_path):
     class Flaky(FakeLLM):
         def investigate(self, prompt, root, on_text=None, on_tool=None):
             tries.append(prompt)
-            if len(tries) == 1:
+            if len(tries) == 2:  # 第二次（选计时点）断了
                 on_text("找到：读到卡（main/rfid_task.c:88）\n")
                 raise self.fail("offline")
             return super().investigate(prompt, root, on_text, on_tool)
@@ -76,10 +76,12 @@ def test_failure_then_retry_keeps_found(make, tmp_path):
     src = prepared(c, tmp_path)
     c.post("/api/identify/start", json={"work": src["work"], "what": "从刷卡到开门"})
     j = wait(c)
-    assert j["state"] == "failed" and j["kind"] == "offline" and j["found"] == ["读到卡"]
+    assert j["state"] == "failed" and j["kind"] == "offline" and j["found"] == ["读到卡"] and j["stage"] == "pick"
+    assert "flow" not in j and "chain_reply" not in j  # 内部数据不给网页
     j = c.post("/api/identify/retry").json()
     j = wait(c)
-    assert j["state"] == "done" and "读到卡" in tries[1] and "接着找" in tries[1]
+    assert j["state"] == "done" and len(tries) == 3 and "读到卡" in tries[2] and "接着找" in tries[2]  # 重试不再理一遍流程
+    assert "这一步只理清流程" in tries[0] and "这一步只理清流程" not in tries[2]
 
 
 def test_reuse_last_result_when_nothing_changed(make, tmp_path):
@@ -97,7 +99,7 @@ def test_reuse_last_result_when_nothing_changed(make, tmp_path):
     wait(c)
     c.post("/api/identify/start", json=body)
     j = wait(c)
-    assert j["state"] == "done" and j["reused"] and len(calls) == 1
+    assert j["state"] == "done" and j["reused"] and len(calls) == 2
 
 
 def test_suggest_and_add_step(make, tmp_path):

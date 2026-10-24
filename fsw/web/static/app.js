@@ -830,14 +830,15 @@ function readBox(){const llm=usedLLM();
   <p class="note">只发了代码，没发任何"标准答案"；结果先存在本机，源码没变下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}`}
 // 没法知道真实进度的等待（大模型读代码）：按一般用时估一个进度，最多到 95%，等完了才满（决策 105）
 const estPct=(sec,typ)=>Math.min(95,Math.round(100*(1-Math.exp(-sec/typ))));
-function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,found=J.found||[];
- const st=done?3:fail?(found.length?2:1):!found.length&&readSec<6?0:found.length?2:1;
+function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,found=J.found||[],pick=J.stage==='pick';
+ const st=done?4:fail?(pick?(found.length?3:2):1):!pick&&readSec<6?0:pick?(found.length?3:2):1;
  const row=(i,t,d)=>`<li class="istep ${i<st?'ok':i===st?(fail?'bad':'cur'):''}"><b>${i<st?'✓':fail&&i===st?'!':i+1}</b><span>${t}<small>${d}</small></span></li>`;
  if(J.reused)return `<ol class="isteps">${row(0,'挑出要读的代码','码表自己做，不用大模型')}${row(1,J.carried?'代码改过，但计时点那几处和上次一样：直接用上次的结果':'源码和要测的都没变，直接用上次的结果','没有调用大模型，不花钱（设置页可以关掉这个）')}${row(2,'列出找到的步骤',`共 ${STEPS.length} 个`)}</ol>${foundList()}`;
  return `${(J.carry_changed||[]).length?`<p class="note" style="margin:0 0 8px;color:var(--warn)">代码改过，而且这几处和上次不一样，所以重新找：${J.carry_changed.map(htmlEsc).join('、')}</p>`:''}<ol class="isteps">
   ${row(0,'挑出要读的代码',`码表自己做，不用大模型：${htmlEsc(REAL.name)} 复制好的那份源码，大模型只能读、改不了任何文件`)}
-  ${row(1,`交给 ${llm}，等它读完`,`${st===1?`已等 ${mmss(readSec)}，`:''}一般 1～3 分钟。${st===1?`<span class="pbar"><i style="width:${estPct(readSec,150)}%"></i></span>进度条是按一般用时估的，不是真实进度`:''}`)}
-  ${row(2,'AI 读完后，在这里列出找到的步骤',`${done?'找完了，共':'已找到'} ${done?STEPS.length:found.length} 个`)}</ol>
+  ${row(1,`${llm} 理清流程`,`先理清一轮里设备依次做了什么，码表核对过行号再往下。${st===1?`已等 ${mmss(readSec)}，`:''}${st===1?`<span class="pbar"><i style="width:${estPct(readSec,90)}%"></i></span>进度条是按一般用时估的，不是真实进度`:''}`)}
+  ${row(2,`${llm} 选计时点`,`从理清的流程里选位置。${st===2?`已等 ${mmss(readSec)}，两步合计一般 2～5 分钟。`:''}`)}
+  ${row(3,'在这里列出找到的步骤',`${done?'找完了，共':'已找到'} ${done?STEPS.length:found.length} 个`)}</ol>
   ${done?foundList():`${found.length?`<div class="list">${found.map((n,k)=>{const at=((J.at||[])[k]||'').match(/([^/\s]+):(\d+)$/);return `<div class="srow"><b>${htmlEsc(n)}</b>${at?`<span class="note">${htmlEsc(at[1])} 第 ${at[2]} 行</span>`:''}</div>`}).join('')}</div>`:''}`}
   ${fail?`<p class="note" style="color:var(--bad)">✕ ${J.message||'没找完'}</p><div class="acts" style="justify-content:flex-start;margin:6px 0"><button class="btn pri" data-idretry="1">重试</button><button class="btn" data-go="settings">到设置页换大模型</button>${/no_start|no_end/.test(J.kind||'')?'<button class="btn" data-mclose="1">换个说法写</button>':''}</div>`:''}
   <p class="note">只给它读代码，没给任何"标准答案"；结果存在本机，源码和要测的都没变，下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}

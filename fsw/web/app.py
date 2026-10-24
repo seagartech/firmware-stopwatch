@@ -2002,15 +2002,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         except llms.LLMError as e:
             raise HTTPException(409, e.message)
 
-    def _identify(body, known=None):
+    def _identify(body, known=None, flow=None):
         provider, model = _model()
         job = {"state": "running", "what": body.what, "provider": provider, "found": list(known or []), "read": 0,
-               "last": "", "seconds": 0, "started": time.time()}
+               "last": "", "seconds": 0, "started": time.time(), "stage": "chain"}
         with ident["lock"]:
             ident["job"], ident["args"] = job, body
 
         def progress(p):
-            job.update(found=p["found"], at=p["at"], read=p["read"], last=p["last"], seconds=p["seconds"])
+            job.update(found=p["found"], at=p["at"], read=p["read"], last=p["last"], seconds=p["seconds"],
+                       stage=p.get("stage", job.get("stage")))  # 理清流程 / 选计时点
 
         def carry_over():
             """改完再测（任务 22）：源码变了、但计时点那几处代码没动：把上次的步骤和插法挪到新行号上存好，下面直接用，不调用大模型。"""
@@ -2035,15 +2036,18 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             try:
                 r = idf.identify_cached(model, body.work, body.what, body.project_dir, body.fingerprint, provider,
                                         reuse=body.reuse and not known, chip=body.chip or "", known=known,
-                                        on_progress=progress)
+                                        reuse_flow=body.reuse or known is not None,  # 重试：理清的流程已存下，只重跑选计时点
+                                        flow=flow, on_progress=progress)
             except Exception as e:  # 码表自己出错也要说清楚，不能一直转圈
                 r = {"ok": False, "kind": "other", "message": f"找关键步骤时码表出错了：{e}", "found": job["found"]}
             r.pop("reply", None)
-            job.update({k: v for k, v in r.items() if k in ("page", "found", "kind", "message", "reused", "summary", "doubts")})
+            r.pop("chain_reply", None)
+            ident["flow"] = r.pop("flow", None) if not r.get("ok") else None  # 第二次失败：重试时带上理清的流程
+            job.update({k: v for k, v in r.items() if k in ("page", "found", "kind", "message", "reused", "summary", "doubts", "stage")})
             job["seconds"] = r.get("seconds", round(time.time() - job["started"], 1))
             job["state"] = "done" if r.get("ok") else "failed"
-            if not r.get("reused"):
-                T().count("llm_calls")
+            if not r.get("reused") and r.get("calls", 1):
+                T().count("llm_calls", r.get("calls", 1))  # 一次识别最多调用两次：理清流程、选计时点
             if r.get("ok"):
                 T().end("identify", reused=bool(r.get("reused")))
                 T().begin("check")
@@ -2075,7 +2079,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             raise HTTPException(409, "还没开始找")
         if job["state"] == "running":
             return job
-        return _identify(ident["args"], known=job.get("found"))  # 已找到的告诉大模型，接着找
+        return _identify(ident["args"], known=job.get("found"), flow=ident.get("flow"))  # 已找到的告诉大模型，接着找；理清的流程不再重理
 
     @app.get("/api/identify")
     def identify_status():
