@@ -87,7 +87,7 @@ def test_flow_api_refuses_invalid_moves_in_plain_words(client):
     assert "还没做到" in r.json()["detail"]
 
 
-SCENE_WORDS = re.compile(r"小灵|小智|xiaozhi|CoreS3|门禁|刷卡|door|voice|语音对话|scene==='")
+SCENE_WORDS = re.compile(r"DemoDisplay|小智|xiaozhi|CoreS3|门禁|刷卡|door|voice|语音对话|scene==='")
 
 
 def test_code_has_no_scenario_specific_names():
