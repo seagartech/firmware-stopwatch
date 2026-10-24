@@ -333,3 +333,38 @@ def test_repeat_with_a_note_and_roles_on_bad_steps(door):
     f["chain"][3]["repeat"] = "看情况"  # 标了上传首末包的这一步没写清：只报这一处，不误报角色没标
     _, bad = idf.check_chain(door, f)
     assert any("第 4 步没写：是否反复执行" in b for b in bad) and not any("没标出" in b for b in bad), bad
+
+
+# ---------- 误拦修正：顺带的线不要求在链里；链里那一步在延后执行的回调里时，登记回调的那一支也算 ----------
+def test_side_line_points_need_not_be_in_the_chain(voice):
+    mk = lambda **k: {"id": "S", "file": "main/chat.cc", "where": "before", "once": "once", **k}
+    got = _pick(voice, [mk(line=24, line_of="side"), mk(line=24, line_of="side", chain_step=1), mk(line=24, line_of="main")])
+    assert got == [[], [], ["chain"]]
+
+
+def test_registering_branch_of_a_deferred_callback_counts_as_the_same_branch(voice):
+    mk = lambda **k: {"id": "P", "file": "main/chat.cc", "where": "before", "once": "once", "chain_step": 2, **k}
+    # 第 2 步（第 21 行）在交给 Schedule 的 lambda 里；第 20 行登记它，在同一个 tts 分支里：算同一支
+    # 第 24 行在另一个分支（sentence）里：照旧算不在
+    assert _pick(voice, [mk(line=20), mk(line=21), mk(line=24)]) == [[], [], ["chain"]]
+
+
+def test_no_lambda_no_change(tmp_path):
+    from fsw import structure
+    root = write(tmp_path / "k", C_FILES, "")
+    src = structure.Project(root).file("main/key.c")
+    assert structure.in_step_area(src, 6, src.pos(6, "before"))
+    assert not structure.in_step_area(src, 6, src.pos(14, "before"))  # 链那一步在函数 on_release 的分支里，点在另一个函数
+
+
+def test_new_hint_and_pick_lines():
+    v = idf.build_chain_prompt("全程", "", "语音对话")
+    for key in ["协议里有回复开始和回复结束这一对消息的，两条都要进链（本地合成、一次性返回的没有就不写）",
+                "上传末包写真正发出最后一包的那一句，不写循环头、不写判断行", "不要把两步都标成末包",
+                "声音全部播完，这一轮就结束；之后恢复聆听、开始下一轮都不进链"]:
+        assert key in v, key
+    p = idf.build_prompt("全程", "", flow={"chain": []})
+    assert "条件成立才执行的那一句（比如调用回调、发出数据），点写在 if 大括号里的第一句，不写在 if 那一行" in p
+    assert "这条线的点可以不在事件链里" in p
+    for bad in ["小智", "xiaozhi", "Application", "afe", "Schedule", "OnIncoming", "websocket"]:
+        assert bad not in idf.VOICE_HINT and bad not in idf.CARD_HINT, bad

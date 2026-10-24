@@ -611,9 +611,13 @@ def check_func(src, line, func):
 
 
 def in_step_area(src, chain_line, pos):
-    """计时点（位置 pos）是不是落在链里那一步那一行所在的那一支里（含这一行自己打开的块）。判断不了算在。"""
+    """计时点（位置 pos）是不是落在链里那一步那一行所在的那一支里（含这一行自己打开的块）。判断不了算在。
+    链里那一步写在延后执行的回调里（lambda：交给队列、调度、回调登记的），登记这个回调的那一支也算同一支。"""
     inner = src.chain(_line_at(src, chain_line))
     areas = inner[:1] + _opened_on(src, chain_line)
+    lam = next((i for i in inner if src.blocks[i]["kind"] == "lambda"), None)
+    if lam is not None and src.blocks[lam]["parent"] is not None:
+        areas.append(src.blocks[lam]["parent"])
     if not areas:
         return True
     return any(src.blocks[i]["open"] < pos <= src.blocks[i]["close"] for i in areas)
@@ -675,6 +679,8 @@ def _chain_branches(chain):
 
 def _check_chain_step(proj, s, steps_by_n):
     """两步识别的新结果：点必须对应链里的一步，并且插在那一步那一行或它所在的那一支里。返回说明或 None。"""
+    if s.get("line_of") == "side":
+        return None  # 顺带发现的线：本来就不在事件链里，不要求
     n = s.get("chain_step")
     if n is None:
         return "没写对应理清的流程里第几步（chain_step）。两步识别里计时点只能从流程里选"
