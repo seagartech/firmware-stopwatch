@@ -184,9 +184,9 @@ def step(root, rel, text, where="", once="", sid="P1", name="某一步", **kw):
             "loc_ok": True, "sure": "高", **kw}
 
 
-def run(root, *steps, segments=None):
+def run(root, *steps, segments=None, chain=None):
     steps = [copy.deepcopy(s) for s in steps]
-    st.check(root, steps, segments)
+    st.check(root, steps, segments, None, chain)
     return steps
 
 
@@ -217,6 +217,37 @@ def test_door_after_control_line_is_hard_fail(door, rel, text):
 def test_voice_after_control_line_is_hard_fail(voice, rel, text):
     s, = run(voice, step(voice, rel, text, where="after"))
     assert kinds(s, "fail") == ["branch"] and not s["struct_ok"]
+
+
+# ---------- 事件链写明了是哪一支：有意放进正常分支的点不硬判失败，只提醒核对 ----------
+@pytest.mark.parametrize("fx,rel,text,branch", [
+    ("door", "main/rfid_task.c", "if (rc522_card_present(dev)) {", "有卡靠近"),
+    ("door", "main/rfid_task.c", "} else if (rc522_error(dev)) {", "读卡芯片报错"),
+    ("voice", "main/chat.cc", "} else if (is(type, \"sentence\")) {", "收到一句回复文字"),
+])
+def test_branch_named_in_chain_is_tip_not_fail(request, fx, rel, text, branch):
+    root = request.getfixturevalue(fx)
+    s, = run(root, step(root, rel, text, where="after", chain_step=2),
+             chain=[{"n": 1, "branch": ""}, {"n": 2, "branch": branch}])
+    assert kinds(s, "fail") == [] and kinds(s, "tip") == ["branch"]
+    assert s["struct_ok"] is True and s["sure"] == "高"
+    assert f"事件链写明放在「{branch}」这一支" in s["chk"][0]["text"] and "没有说明是有意" not in s["chk"][0]["text"]
+
+
+@pytest.mark.parametrize("fx,rel,text,chain_step,chain", [
+    ("door", "main/rfid_task.c", "for (;;) {", 1, [{"n": 1, "branch": "一直循环"}]),          # 循环体：照旧失败
+    ("door", "main/rfid_task.c", "switch (mode) {", 1, [{"n": 1, "branch": "case 1"}]),        # 第一个 case 之前执行不到
+    ("door", "main/rfid_task.c", "if (!rc522_init(dev))", 1, [{"n": 1, "branch": "初始化失败"}]),  # 没大括号会改逻辑
+    ("voice", "main/chat.cc", "if (!protocol_->OpenAudioChannel()) {", 1, [{"n": 1, "branch": "打开失败"}]),  # 像失败分支
+    ("door", "main/rfid_task.c", "if (rc522_card_present(dev)) {", 1, [{"n": 1, "branch": ""}]),  # 事件链没写分支
+    ("door", "main/rfid_task.c", "if (rc522_card_present(dev)) {", 3, [{"n": 1, "branch": "有卡"}]),  # 对不上第几步
+    ("door", "main/rfid_task.c", "if (rc522_card_present(dev)) {", None, [{"n": 1, "branch": "有卡"}]),  # 旧结果没有 chain_step
+    ("door", "main/rfid_task.c", "if (rc522_card_present(dev)) {", 1, None),                       # 旧结果没有事件链
+])
+def test_branch_still_fails_without_usable_chain_branch(request, fx, rel, text, chain_step, chain):
+    root = request.getfixturevalue(fx)
+    s, = run(root, step(root, rel, text, where="after", chain_step=chain_step), chain=chain)
+    assert kinds(s, "fail") == ["branch"] and s["struct_ok"] is False
 
 
 def test_failure_condition_is_called_out(voice, door):
@@ -359,6 +390,38 @@ def test_parse_runs_structure_check_for_any_model(tmp_path):
     page = idf.to_page(r, what="从刷卡到开门")
     assert page["steps"][0]["struct_ok"] is False and page["steps"][0]["chk"][0]["level"] == "fail"
     assert page["steps"][1]["chk"] == [] and page["steps"][1]["struct_ok"] is True
+
+
+def test_parse_keeps_chain_and_passes_it_to_the_check(tmp_path):
+    """新回答带事件链和 chain_step：存下来，分支写明了的点只提醒；旧回答没有这两项也照常解析。"""
+    door = door_source(tmp_path / "door")
+    res = copy.deepcopy(DOOR_RESULT)
+    res["steps"][0]["where"] = "after"
+    res["chain"] = [{"n": 1, "what": "读卡芯片报告有卡", "file": "main/rfid_task.c", "line": 88, "branch": "有卡靠近",
+                     "repeat": "repeat", "why": "轮询里判断有卡"}]
+    for i, x in enumerate(res["steps"]):
+        x["chain_step"] = [1, "2", "x", 0, None][i]
+    r = idf.parse(reply_for(res), door)
+    assert r["chain"] == res["chain"]
+    assert [x["chain_step"] for x in r["steps"]] == [1, 2, None, None, None]
+    assert r["steps"][0]["struct_ok"] is True and kinds(r["steps"][0], "tip") == ["branch"]
+    old = idf.parse(door_reply_with("after"), door)
+    assert "chain" not in old and all(x["chain_step"] is None for x in old["steps"])
+    assert old["steps"][0]["struct_ok"] is False
+
+
+def test_reused_cache_uses_saved_chain(tmp_path):
+    door = door_source(tmp_path / "door")
+    proj = tmp_path / "proj"
+    res = copy.deepcopy(DOOR_RESULT)
+    res["steps"][0].update(where="after", chain_step=1)
+    res["chain"] = [{"n": 1, "branch": "有卡靠近"}]
+    saved = idf.parse(reply_for(res), door)
+    f = idf._cache_file(proj, "fp", "从刷卡到开门", "deepseek")
+    f.parent.mkdir(parents=True)
+    f.write_text(json.dumps({**saved, "what": "从刷卡到开门", "provider": "deepseek"}, ensure_ascii=False), encoding="utf-8")
+    r = idf.identify_cached(None, door, "从刷卡到开门", proj, "fp", "deepseek")
+    assert r["reused"] and r["steps"][0]["struct_ok"] is True and r["page"]["steps"][0]["chk"][0]["level"] == "tip"
 
 
 def test_page_text_has_no_internal_step_ids(voice):

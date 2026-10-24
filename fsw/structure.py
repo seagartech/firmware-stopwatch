@@ -505,7 +505,7 @@ def check_segments(proj, steps, segments):
     return out
 
 
-def _check_one(proj, s):
+def _check_one(proj, s, branch=""):
     if not s.get("loc_ok", True) or not s.get("file") or not s.get("line"):
         return
     src = proj.file(s["file"])
@@ -516,7 +516,14 @@ def _check_one(proj, s):
     once = str(s.get("once") or "").strip().lower()
     t = check_branch(src, line, where)
     if t:
-        s["chk"].append({"level": "fail", "kind": "branch", "text": t})
+        kw = _CTRL_AFTER.match(src.clines[line - 1].strip()).group(1).split()[0]
+        head = t.split("。识别结果没有说明")[0]
+        # 事件链写明了是哪一支：按有意放进这一支处理，只提醒核对。循环、switch、没大括号、看着像失败分支的照旧算失败
+        if branch and kw in ("if", "else") and "失败或出错" not in t and "改掉原来的逻辑" not in t:
+            s["chk"].append({"level": "tip", "kind": "branch",
+                             "text": f"{head}。事件链写明放在「{branch}」这一支，码表按有意放入处理，请核对这一支是不是每轮正常要走的"})
+        else:
+            s["chk"].append({"level": "fail", "kind": "branch", "text": t})
     t = check_repeat(proj, s["file"], src, line, where, once)
     if t:
         s["chk"].append({"level": "tip", "kind": "repeat", "text": t})
@@ -525,14 +532,31 @@ def _check_one(proj, s):
         s["chk"].append({"level": "tip", "kind": "ifdef", "text": t})
 
 
-def check(root, steps, segments=None, side_segments=None):
+def _chain_branches(chain):
+    """事件链里每一步写的分支：{第几步: 分支说明}。旧结果没有事件链就是空的。"""
+    out = {}
+    for i, c in enumerate(chain if isinstance(chain, list) else []):
+        if not isinstance(c, dict):
+            continue
+        try:
+            n = int(str(c.get("n", i + 1)).strip())
+        except (TypeError, ValueError):
+            continue
+        b = str(c.get("branch") or "").strip()
+        if b and b not in ("空", "无", "没有", "-"):
+            out[n] = b
+    return out
+
+
+def check(root, steps, segments=None, side_segments=None, chain=None):
     """逐个计时点做结构检查，结果写进 step["chk"]（[{level: fail/tip, kind, text}]）和 step["struct_ok"]。
     有硬失败的点可信度降成"低"。可以重复调用（缓存、沿用的结果也再查一遍），每次重新算，不会叠加。"""
     proj = Project(root)
+    branches = _chain_branches(chain)
     for s in steps:
         s["chk"] = []
         try:
-            _check_one(proj, s)
+            _check_one(proj, s, branches.get(s.get("chain_step"), ""))
         except Exception as e:  # 检查自己出错不能挡住识别：说清楚这一步没查完
             s["chk"].append({"level": "tip", "kind": "error", "text": f"码表结构检查这一步没做完（{type(e).__name__}），请自己核对"})
     by = {s.get("id"): s for s in steps}
