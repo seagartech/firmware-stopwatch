@@ -457,7 +457,7 @@ function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),RE
 function autoTick(){if(!AUTO||pop)return;
  const go=(key,fn)=>{if(autoBusy===key)return;autoBusy=key;setTimeout(fn,0)};
  if(page==='home'&&hStage===3&&stepsRead===2){
-  const P=REAL&&IDENT&&IDENT.page,bad=P?(P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(IDENT.provider==='deepseek'?'这次用的是 DeepSeek，准确率较低，请核对关键步骤':'')):'';
+  const P=REAL&&IDENT&&IDENT.page,bad=P?(P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(P.steps||[]).some(x=>x.struct_ok===false)?'有计时点插下去会落进条件分支或循环里（只在条件成立时才记到），码表结构检查没通过，请核对':(IDENT.provider==='deepseek'?'这次用的是 DeepSeek，准确率较低，请核对关键步骤':'')):'';
   return go('steps',()=>{hStage=1;mode='boss';if(bad){AUTO=false;autoHold=bad;page='steps';render();window.scrollTo(0,0);return}
    page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)})}
  if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){AUTO=false;envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
@@ -870,6 +870,10 @@ function faceAsk(){const A=FF[scene].sideAsk;
   <p style="margin:0 0 10px">现在只测「${A.main}」。${A.why}要不要把「${A.side}」也测上？</p>
   <div class="acts" style="justify-content:flex-start"><button class="btn pri" data-face="yes">也测这条（推荐）</button><button class="btn" data-face="no">${A.no}</button></div>
   <p class="note">也测：多插 ${A.k} 个计时点，报告里多一条线；不影响「${A.main}」那条的结果。</p></section>`}
+// 识别后的结构检查（所有模型共用）：没过的标红，拿不准的只提示；你改过位置的，原来的检查结果不再适用，不显示
+const chkTxt=x=>edits[x.p]?'':(x.chk||[]).map(c=>`<br><span style="color:var(${c.level==='fail'?'--bad':'--warn'})">${c.level==='fail'?'结构检查没通过':'结构提示'}：${htmlEsc(c.text)}</span>`).join('');
+const chkBox=()=>{if(!(REAL&&IDENT&&IDENT.page))return '';const st=(IDENT.page.steps||[]).filter(x=>!edits[x.p]&&!dropped.has(x.p)),f=st.filter(x=>x.struct_ok===false).length,t=st.reduce((a,x)=>a+(x.chk||[]).filter(c=>c.level!=='fail').length,0);
+ return f||t?`<div class="why" style="border-left-color:var(${f?'--bad':'--warn'})">码表结构检查：${f?`<b>${f} 个计时点插下去会落进条件分支或循环里</b>（只在条件成立时才记到），请核对或修改位置；`:''}${t?`另有 ${t} 条提示（可能一轮记很多次、在编译开关里、或一段两头执行时机不同），`:''}见下面各步骤的说明。</div>`:''};
 const sureChip=x=>x.sure==='高'?'<span class="chip c-ok">可信度高</span>':x.sure==='你加'?'<span class="chip c-gray">你加的</span>':'<span class="chip c-warn">需核对</span>';
 function editBox(x){return `<div class="edit"><div class="inrow"><label for="ed-f">文件</label><input type="text" id="ed-f" value="${x.f}"><label for="ed-l">行号</label><input type="text" id="ed-l" value="${x.l}" style="max-width:6em"></div>
  <p class="note" style="margin:4px 0">在你的代码编辑器里找到要计时的那一行，把文件名和行号填这里。改动会记下来：谁、什么时候、从哪改到哪。</p>
@@ -895,7 +899,7 @@ function stepsA(){const rows=allRows(),all=[...STEPS.filter(x=>x.line==='face'&&
   if(off)return `<div class="srow2 off"><span class="num">${i+1}</span><div><s>${x.n}</s> <span class="note">已删除，这里不插计时点</span></div><button class="pill" data-undel="${x.p}">恢复</button></div>`;
   return `<div class="srow2"><span class="num">${i+1}</span>
   <div><b>${x.n}</b> <span class="chip ${x.line==='face'?'c-face':x.line==='start'?'c-gray':'c-speak'}">${lineName[x.line]}</span> ${sureChip(x)}${edits[x.p]?' <span class="chip c-gray">你改过位置</span>':''}
-   <div class="note"><span class="code">${x.f}</span> ${lnTxt(x.l)} · ${x.why}${x.note?`<br><span style="color:var(--warn)">要留意：${x.note}</span>`:''}</div></div>
+   <div class="note"><span class="code">${x.f}</span> ${lnTxt(x.l)} · ${x.why}${x.note?`<br><span style="color:var(--warn)">要留意：${x.note}</span>`:''}${chkTxt(x)}</div></div>
   <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="pill" data-editp="${x.p}">修改位置</button><button class="pill" data-del="${x.p}">删除</button></span></div>${editP===x.p?editBox(x):''}`};
  return `<section class="panel"><h2>找到 ${STEPS.length} 个关键步骤${fc.length?`<span class="note" style="font-weight:400">　你要测的这条 ${STEPS.length-fc.length} 个，顺带发现的 ${fc.length} 个</span>`:''}</h2><p class="note" style="margin-top:0">每个关键步骤插一个计时点，量出每一段用了多久。序号是发生的先后顺序。</p>
  <ul class="notes" style="margin:0 0 8px"><li>位置不对：点「修改位置」，改文件和行号。</li><li>不需要：点「删除」，这里就不插计时点，删了能恢复。</li><li>漏了：点最下面的「添加步骤」。</li></ul>
@@ -924,7 +928,7 @@ function stepsB(){const F=FF[scene],W=760,H=250,main=F.main,n=main.length;
  ${useFace()&&F.branch.nodes.length?`<text x="${pos[F.branch.from][0]-14}" y="195" text-anchor="end" font-size="12" fill="var(--face)">${F.sideLbl}</text>`:''}
  </svg></div>
  <div class="pills" style="margin:4px 0 10px">${Object.entries(fileCol).map(([f,c])=>`<span class="note"><i class="dot" style="background:${c}"></i>${f}</span>`).join('')}</div>
- <div class="detail"><b>${sel.n}</b> ${sureChip(sel)}<div class="note"><span class="code">${sel.f}</span> ${lnTxt(sel.l)} · ${sel.why}${sel.note?`<br><span style="color:var(--warn)">要留意：${sel.note}</span>`:''}</div>
+ <div class="detail"><b>${sel.n}</b> ${sureChip(sel)}<div class="note"><span class="code">${sel.f}</span> ${lnTxt(sel.l)} · ${sel.why}${sel.note?`<br><span style="color:var(--warn)">要留意：${sel.note}</span>`:''}${chkTxt(sel)}</div>
   <div class="pills" style="margin-top:6px">${dropped.has(sel.p)?`<span class="note">已删除</span><button class="pill" data-undel="${sel.p}">恢复</button>`:`<button class="pill" data-editp="${sel.p}">修改位置</button><button class="pill" data-del="${sel.p}">删除</button>`}</div></div></details>`}
 function stepsC(){const segRow=(sg,c)=>{const off=dropped.has(sg.a)||dropped.has(sg.b);return `<div class="cseg ${off?'off':''}"><span class="cbar" style="background:${sg.out?'var(--est)':c}"></span><div><b>${sg.t}</b> <span class="note">${sg.who}${sg.out?' · 设备外':''}</span><div class="note">从"${S_N[sg.a].n}"到"${S_N[sg.b].n}"</div></div></div>`};
  return `<section class="panel"><h2>按这些步骤，用时会切成这几段</h2><p class="note" style="margin-top:0">报告里就按这几段算用时、判快慢。段切得不对，说明步骤找得不对。灰色是设备以外的段，码表只能量、改不了。</p>
@@ -949,7 +953,7 @@ function stepsPage(){
  const warn=(REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad)">${htmlEsc(IDENT.page.warn)}</div>`:'')+((REAL&&IDENT?IDENT.provider:setLLM)==='deepseek'?`<div class="why" style="border-left-color:var(--warn)">这次用的是 DeepSeek，验证期它 9 个只找对 4 个，请每条都仔细核对。</div>`:'');
  const body=stepsB()+stepsA();
  const n=live().length,ch=dropped.size;
- return `<div class="stack">${hold}${warn}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${REAL&&IDENT?(IDENT.reused?reuseTxt():`读完了，用了 ${mmss(IDENT.seconds)}，调用 1 次 ${usedLLM()}`):`读完了，用了 1 分 10 秒，调用 1 次 ${usedLLM()}`}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${REAL?`${htmlEsc(REAL.name)}，${CHIP()}`:FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
+ return `<div class="stack">${hold}${warn}${chkBox()}<div class="status"><span><i class="dot" style="background:var(--ok)"></i>${REAL&&IDENT?(IDENT.reused?reuseTxt():`读完了，用了 ${mmss(IDENT.seconds)}，调用 1 次 ${usedLLM()}`):`读完了，用了 1 分 10 秒，调用 1 次 ${usedLLM()}`}</span><span><i class="dot" style="background:var(--ok)"></i>读代码认出来：${REAL?`${htmlEsc(REAL.name)}，${CHIP()}`:FF[scene].kind}</span><button class="pill" data-reread="1">重看读取过程</button></div>
  ${body}
  ${flow==='first'&&flowMax>=2?`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">回到插计时点和烧录</button></div></section></div>`:`<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0"><span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch||Object.keys(edits).length||added.length?'；你的删除、修改、添加都会记下来':''}。${prepNote()}</span><button class="btn pri" data-goins="1" >确认，插入计时点</button></div></section></div>`}`}
 

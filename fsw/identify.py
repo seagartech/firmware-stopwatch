@@ -14,6 +14,7 @@ import re
 import time
 from pathlib import Path
 
+from fsw import structure
 from fsw.llm import LLMError
 
 PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写代码的硬件负责人。
@@ -211,6 +212,7 @@ def parse(text, root):
     if len(steps) < 2:
         return _fail("bad_reply", "大模型只给出了不到 2 个步骤，量不出用时。点\"重试\"再找一次，或者换个说法写\"测从什么到什么\"。",
                      found=[s["name"] for s in steps])
+    structure.check(root, steps, data.get("segments"), data.get("side_segments"))  # 位置在不在之外，再看插下去落在什么结构里
     return {"ok": True, **data, "steps": steps, "warn": warn}
 
 
@@ -230,6 +232,7 @@ def to_page(r, what):
     steps = [{"p": s["id"], "n": s["name"], "f": Path(s["file"]).name or s["file"], "path": s["file"], "l": s["line"],
               "line": LINE_OF[s["line_of"]], "why": s["why"], "sure": s["sure"], "code": s["code"], "loc_ok": s["loc_ok"],
               "where": s["where"], "once": s["once"], "func": s["func"],
+              "struct_ok": s.get("struct_ok", True), "chk": [{"level": c["level"], "text": c["text"]} for c in s.get("chk") or []],
               **({"note": s["doubt"]} if s["doubt"] else {}), **({} if s.get("always", True) else {"opt": True}),
               **({"felt": s["felt"], "kind": s.get("kind") or ""} if s.get("felt") else {})} for s in r["steps"]]
     ids = {s["p"] for s in steps}
@@ -315,6 +318,8 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
     if reuse and f and f.exists():
         try:
             r = json.loads(f.read_text(encoding="utf-8"))
+            # 沿用的结果也按现在的源码重新做一遍结构检查（存下时可能还没有这层检查，或者是改完再测挪过行号的）
+            structure.check(root, r.get("steps") or [], r.get("segments"), r.get("side_segments"))
             # 页面数据按存下的步骤重新算一遍：码表升级后页面要的新字段（比如"一轮记哪一次"）也有
             return {**r, "page": to_page(r, what), "reused": True, "seconds": 0}
         except (OSError, ValueError):
