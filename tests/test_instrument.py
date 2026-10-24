@@ -262,3 +262,14 @@ def test_mark_once_after_ignores_leftovers_before_the_step(tmp_path):
 def test_prompt_tells_ai_to_use_after_for_points_that_leftovers_can_trigger():
     assert "FSW_MARK_ONCE_AFTER(编号, 前一步编号, 附加值)" in ins.PROMPT
     assert ins._marks(["        FSW_MARK_ONCE_AFTER(7, 5, static_cast<int>(GetDeviceState()));"]) == [(7, "static_cast<int>(GetDeviceState())")]
+
+
+# ---------- 插点写法：以"插在哪一句之前"为主，once 一轮只经过一次 ----------
+def test_prompt_says_before_this_statement_and_once():
+    steps = [{"p": "P1", "n": "说完", "path": "main/vad.cc", "l": 7, "where": "before", "once": "once", "line": "start"},
+             {"p": "P2", "n": "播完", "path": "main/out.cc", "l": 9, "where": "after", "once": "last", "line": "talk"}]
+    t = ins.build_prompt(steps, "main/fw_stopwatch.h")
+    assert "main/vad.cc 第 7 行这一句之前，一轮只经过一次（只记第一次）" in t
+    assert "main/out.cc 第 9 行这一句之后，一轮里记最后一次" in t
+    assert "插在那一句的紧前面、和它同一层" in t and "不要跨过 }、else 或判断那一行" in t
+    assert ins.PLAN_VER == 3  # 插入提示词改了：旧的插入方案不再沿用

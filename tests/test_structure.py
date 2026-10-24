@@ -250,6 +250,153 @@ def test_branch_still_fails_without_usable_chain_branch(request, fx, rel, text, 
     assert kinds(s, "fail") == ["branch"] and s["struct_ok"] is False
 
 
+# ---------- 插点写法：参照句必须是一句真正的语句，点插在它前面、和它同一层 ----------
+# 逐帧判断"开始说 / 说完"、"卡到了 / 卡走了"的两支：上次复测两个起点插歪的样子，门禁、语音各一份
+EXTRA = {
+    "door": ("main/card_poll.c", """\
+static void on_poll(const poll_t *f)
+{
+    if (f->state == CARD_NEW && !present) {
+        present = true;
+        card_arrived();
+    } else if (f->state == CARD_GONE && present) {
+        present = false;
+        card_left();
+    }
+    poll_count++;
+}
+
+static void poll_loop(void)
+{
+    while (running) {
+        poll_t *r = fetch_poll();
+        if (r->state == CARD_GONE) {
+            mark_gone(r);
+        }
+        feed_poll(r);
+    }
+}
+"""),
+    "voice": ("main/vad.cc", """\
+void Engine::HandleVoice(const frame_t* result) {
+    if (vad_cb_) {
+        if (result->vad == VAD_SPEECH && !speaking_) {
+            speaking_ = true;
+            vad_cb_(true);
+        } else if (result->vad == VAD_SILENCE && speaking_) {
+            speaking_ = false;
+            vad_cb_(false);
+        }
+    }
+    send_frame(result,
+               frame_len_);
+}
+
+void Engine::Loop() {
+    while (running_) {
+        auto* r = fetch();
+        if (r->vad == VAD_SILENCE) {
+            mark_quiet(r);
+        }
+        feed(r);
+    }
+}
+"""),
+}
+SECOND = {"door": ("present = false;", "card_left();"), "voice": ("speaking_ = false;", "vad_cb_(false);")}
+
+
+@pytest.fixture(params=["door", "voice"])
+def two(request):
+    root = request.getfixturevalue(request.param)
+    rel, text = EXTRA[request.param]
+    write(root, {rel: text})
+    return request.param, root, rel
+
+
+def at(root, rel, n):
+    return {"id": "P1", "name": "某一步", "file": rel, "line": n, "loc_ok": True, "sure": "高"}
+
+
+def test_closing_brace_after_and_else_line_before_are_hard_fails(two):
+    """上次两个起点：插在那一支的 } 之后（出了分支，每帧都走），插在 } else if 这一行之前（落进上一支）。"""
+    fx, root, rel = two
+    else_line = line_of(root, rel, "} else if")
+    brace = else_line + 3  # 这一支收尾的 }
+    a, = run(root, {**at(root, rel, brace), "where": "after", "once": "last"})
+    b, = run(root, {**at(root, rel, else_line), "where": "before", "once": "first"})
+    assert kinds(a, "fail") == ["anchor"] and not a["struct_ok"] and a["sure"] == "低" and "只有大括号" in a["chk"][0]["text"]
+    assert kinds(b, "fail") == ["anchor"] and not b["struct_ok"] and "落进上一支的末尾" in b["chk"][0]["text"]
+    assert "这一支大括号里的第一句" in b["chk"][0]["text"]
+
+
+def test_first_statement_in_branch_with_once_passes(two):
+    """新写法：参照句是这一支里的第一句、before，once 写 once：不拦、不提醒。最后一句之后写 after 也行。"""
+    fx, root, rel = two
+    first, last = SECOND[fx]
+    a, = run(root, step(root, rel, first, where="before", once="once"))
+    b, = run(root, step(root, rel, last, where="after", once="once"))
+    assert a["struct_ok"] and a["chk"] == [] and b["struct_ok"] and b["chk"] == []
+
+
+def test_once_directly_in_loop_body_is_a_tip_but_inside_a_branch_is_not(two):
+    fx, root, rel = two
+    inner, body = ("mark_gone(r);", "feed_poll(r);") if fx == "door" else ("mark_quiet(r);", "feed(r);")
+    a, = run(root, step(root, rel, inner, where="before", once="once"))
+    b, = run(root, step(root, rel, body, where="before", once="once"))
+    assert a["chk"] == [] and kinds(b) == ["repeat"] and b["struct_ok"] and "放进那一支" in b["chk"][0]["text"]
+
+
+@pytest.mark.parametrize("fx,rel,text,where,why", [
+    ("door", "main/rfid_task.c", "#ifdef CONFIG_DOOR_BEEP", "before", "预处理"),
+    ("door", "main/rfid_task.c", "#endif", "after", "预处理"),
+    ("voice", "main/chat.cc", "#if CONFIG_SEND_WAKE_DATA", "before", "预处理"),
+    ("door", "main/rfid_task.c", "case 1:", "before", "上一个 case"),
+    ("door", "main/rfid_task.c", "} else if (rc522_error(dev)) {", "before", "上一支"),
+    ("voice", "main/chat.cc", "} else if (is(type, \"sentence\")) {", "", "上一支"),  # 旧结果没写 where：按之前
+])
+def test_forbidden_reference_lines_are_hard_fails(request, fx, rel, text, where, why):
+    root = request.getfixturevalue(fx)
+    s, = run(root, step(root, rel, text, where=where))
+    assert kinds(s, "fail") == ["anchor"] and why in s["chk"][0]["text"]
+
+
+def test_lone_open_brace_and_half_statement_are_hard_fails(door, voice):
+    n = line_of(door, "main/rfid_task.c", "while (rc522_busy(dev))") + 1  # 下一行只有 {
+    a, = run(door, {**at(door, "main/rfid_task.c", n), "where": "before"})
+    assert kinds(a, "fail") == ["anchor"] and "只有大括号" in a["chk"][0]["text"]
+    write(voice, {EXTRA["voice"][0]: EXTRA["voice"][1]})
+    b, = run(voice, step(voice, "main/vad.cc", "send_frame(result,", where="after"))
+    c, = run(voice, step(voice, "main/vad.cc", "frame_len_);", where="before"))
+    assert kinds(b, "fail") == ["anchor"] and "还没写完" in b["chk"][0]["text"]
+    assert kinds(c, "fail") == ["anchor"] and "接续" in c["chk"][0]["text"]
+
+
+def test_before_plain_condition_head_is_only_a_tip(door, voice):
+    """旧写法插在判断开头之前：位置清楚（整个判断前面），兼容旧结果，只提醒；没写 where 的不提醒。"""
+    a, = run(door, step(door, "main/rfid_task.c", "if (rc522_card_present(dev)) {", where="before"))
+    b, = run(voice, step(voice, "main/chat.cc", "if (!protocol_->OpenAudioChannel()) {", where="before"))
+    c, = run(door, step(door, "main/rfid_task.c", "if (rc522_card_present(dev)) {", where=""))
+    for s in (a, b):
+        assert s["struct_ok"] and kinds(s) == ["anchor"] and kinds(s, "tip") == ["anchor"] and "第一句" in s["chk"][0]["text"]
+    assert c["chk"] == []
+
+
+def test_after_branch_head_points_to_the_first_statement(door, voice):
+    """事件链写明分支的旧写法（插在 if 这一行之后）：说清等于插在这一支第一句之前；没写明的失败说明里教新写法。"""
+    a, = run(door, step(door, "main/rfid_task.c", "if (rc522_card_present(dev)) {", where="after", chain_step=1),
+             chain=[{"n": 1, "branch": "有卡"}])
+    assert "等于插在这一支第一句「led_set(LED_GREEN);」之前" in a["chk"][0]["text"] and a["struct_ok"]
+    b, = run(voice, step(voice, "main/chat.cc", "} else if (is(type, \"sentence\")) {", where="after"))
+    assert not b["struct_ok"] and "参照句写这一支大括号里的第一句、where 写 before" in b["chk"][0]["text"]
+
+
+@pytest.mark.parametrize("where", [None, "middle", 3, "AFTER "])
+def test_odd_where_values_do_not_crash(door, where):
+    s, = run(door, step(door, "main/rfid_task.c", "}", where=where))
+    assert isinstance(s["chk"], list) and "struct_ok" in s
+
+
 def test_failure_condition_is_called_out(voice, door):
     s, = run(voice, step(voice, "main/chat.cc", "if (!protocol_->OpenAudioChannel()) {", where="after"))
     assert "失败或出错" in s["chk"][0]["text"]

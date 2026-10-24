@@ -117,11 +117,17 @@ def test_identify_prompt_states_the_purpose_and_is_sent_to_the_model(door, what)
                 "终点要覆盖最后一个结果", "不写 every", "确实会被用上", "点放在 chain 写明的那一支里",
                 "出错、失败、重试那一支不放", "always 写 false，除非在 why 里说明正常每轮都满足",
                 "不要串成前后相连的段", "按真正执行的时刻排", "先从配置和初始化代码确认实际走哪条", "sdkconfig",
-                "用的点都要属于这条线本身", '"chain": [', '"chain_step": 1']:
+                "用的点都要属于这条线本身", '"chain": [', '"chain_step": 1',
+                # 第四轮：插点以"插在哪一句之前"为主
+                "插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）",
+                "要放进某一支，就写这一支大括号里的第一句", "只有放在块里最后一句之后才写 after",
+                "条件或循环头（if/while/for/switch/case）", "#if/#else/#endif 不能写", "`stop();`、before",
+                "放进那一支、once 写 once", '"once": "once / first / last']:
         assert key in p, key
     assert "被丢掉的也要能记到" not in p  # 旧规则会把点推到逐帧经过的判断之前
     assert "选它们汇合后每轮都经过的那一步" not in p  # 旧规则会把不同触发方式混在一条线上
     assert "人开始输入到输入结束之间的事" not in p  # 已并进事件链：链从输入结束开始
+    assert "插在这行之前还是之后" not in p and "同一行代码只放一个计时点" not in p  # 旧的 before/after 说明已换成插点写法
     for bad in ["小智", "DeepSeek", "application.cc", "main/"]:  # 提示词模板不点名任何固件或文件
         assert bad not in idf.PROMPT, bad
 

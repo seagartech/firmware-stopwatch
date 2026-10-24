@@ -161,10 +161,10 @@ def header_text(start=None):
     return HEADER if start is None else HEADER.replace("#define FSW_START_ID -1", f"#define FSW_START_ID {int(start)}", 1)
 
 
-PLAN_VER = 2  # 插入提示词改过（决策 118 加了 FSW_MARK_ONCE_AFTER）：之前存的插入方案不再沿用
+PLAN_VER = 3  # 插入提示词改过（决策 118 加了 FSW_MARK_ONCE_AFTER；插点改成以"插在哪一句之前"为主）：之前存的插入方案不再沿用
 HELPERS = {"include", "reset", "arm", "flush"}
 LINE_OK = re.compile(r'^\s*(//[^\n]*|#include\s+["<][^"<>\n]*fw_stopwatch\.h[">]\s*(//[^\n]*)?|FSW_[A-Z_]+\([^;\n]*\);\s*(//[^\n]*)?)?$')
-ONCE = {"first": "一轮只记第一次", "last": "一轮里记最后一次", "every": "每次都记"}
+ONCE = {"once": "一轮只经过一次（只记第一次）", "first": "一轮只记第一次", "last": "一轮里记最后一次", "every": "每次都记"}
 EXTRA_GENERATED = {"sdkconfig.fsw-board"}
 
 PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码就在当前目录，只能读，不能改；真正插入由码表来做。
@@ -189,6 +189,7 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
 - 每个用到计时点的文件，在开头的 #include 附近加一行 #include，路径要让编译器能找到 {header}。这一行只写 #include，说明另起一行写注释。
 - 只能插注释、#include 和 FSW_ 开头的计时点语句，不能加别的代码，不能改、不能删已有的行。
 - 不要插在宏定义、多行语句、if 条件、初始化列表的中间；插在 return / break 之后的执行不到。
+- 表里写"这一句之前"的，插在那一句的紧前面、和它同一层（after_line 就是它上一行）；写"这一句之后"的，插在那一句（块里最后一句）的紧后面、同一层。不要跨过 }}、else 或判断那一行，跨过就到了别的分支或块外。
 - 每个位置都要亲自打开文件核对行号。
 
 ## 最后输出
@@ -244,7 +245,7 @@ def build_prompt(steps, header, needs=None):
                       f"{'；' + v['how'] if v.get('how') else ''}；用来查：{'、'.join(v.get('for') or [])}" for k, v in nb.items())
     rows = "\n".join(
         f"- P{number(s['p'], steps)}（编号 {number(s['p'], steps)}）{s['n']}：{s.get('path') or s.get('f')} 第 {s['l']} 行"
-        f"{'之前' if s.get('where') == 'before' else '之后' if s.get('where') == 'after' else ''}，"
+        f"{'这一句之前' if s.get('where') == 'before' else '这一句之后' if s.get('where') == 'after' else ''}，"
         f"{ONCE.get(s.get('once'), '一轮只记第一次')}" + (f"；为什么在这：{s['why']}" if s.get("why") else "")
         for s in steps)
     return PROMPT.format(table=rows, header=header, values=VALUES.format(rows=vrows) if nb else "",

@@ -1,10 +1,14 @@
 """识别后的结构检查：所有大模型共用，只看源码结构，不看是哪个模型、哪个固件。
 
 大模型给的位置先由 identify.check_location 核对"这一行在不在"；这里再看这一行插下去以后落在什么结构里：
-- 硬失败：插在 if / else if / else / while / for / do / switch 这一行"之后"，点会落进分支或循环体，
-  只在条件成立（或每循环一次）时才记到。识别结果没有字段能说明"有意放进分支"，一律按位置不对处理。
+- 硬失败：参照行不是一句真正的语句——只有 { 或 } 的行、else / } else … 行、条件或循环头
+  （if / while / for / switch / case）之前、预处理行（#if / #else / #endif），或者落在一句没写完的话中间；
+  插在 if / else if / else / while / for / do / switch 这一行"之后"，点会落进分支或循环体，只在条件成立
+  （或每循环一次）时才记到——事件链写明了是哪一支的 if / else 例外，按有意放进这一支第一句之前处理，只提醒。
 - 提示（判断不一定准，只提醒、不拦）：
   · 一轮记每一次（once=every）的点在循环里，或所在函数在别处的循环里被反复调用（比如逐帧处理）；
+  · 写成一轮只经过一次（once=once）的点直接在循环体里（不在里面某一支里）；
+  · 旧写法插在判断或循环开头之前：点在整个判断前面、不在任何一支里；
   · 点在 #if / #ifdef 编译开关里：对照 sdkconfig、sdkconfig.defaults*、Kconfig 默认值标出开关取值；
   · 同一段的两头写在同一个函数里，一头当场执行，另一头在 lambda 里（交给 Schedule 之类排队、登记成回调，之后另外执行）。
 
@@ -341,6 +345,52 @@ def check_branch(src, line, where):
     return f"插在「{code}」这一行之后，会落进{what}{bare}。识别结果没有说明是有意放进这里，码表按位置不对处理，请核对"
 
 
+_ELSE = re.compile(r"^(?:\}\s*)?else\b")
+_UNFINISHED = re.compile(r"(?:,|\(|&&|\|\||[^=!<>]=)$")  # 这一句还没写完，下一行接着写
+
+
+def _next_code(src, line):
+    """第 line 行后面第一行有代码的（行号, 去掉注释的代码），没有就 (None, "")。"""
+    for k in range(line, len(src.clines)):
+        if src.clines[k].strip():
+            return k + 1, src.clines[k].strip()
+    return None, ""
+
+
+def _prev_code(src, line):
+    for k in range(line - 2, -1, -1):
+        if src.clines[k].strip():
+            return src.clines[k].strip()
+    return ""
+
+
+def check_anchor(src, line, where):
+    """参照句是不是一句真正的语句：插点以"插在这一句之前、和它同一层"为主。返回说明（硬失败）或 None。
+    插在 if / else 这一行之后的不在这里判，交给 check_branch（事件链写明分支时按有意放入处理）。"""
+    raw = src.lines[line - 1].strip()
+    c = src.clines[line - 1].strip()
+    code = _cond_text(raw)
+    if raw.startswith("#"):
+        return (f"参照的第 {line} 行「{code}」是编译开关（预处理）行，不是一句语句，点落在开关哪一边说不清。"
+                "请把参照句改成开关里面或外面那一句真正的语句")
+    if not c:
+        return None  # 空行、注释：插在哪儿都一样，不拦
+    if re.fullmatch(r"[{}]+;?", c):
+        return (f"参照的第 {line} 行「{code}」只有大括号，插在它{'之后会出了这个代码块（比如出了某一支或循环）' if where == 'after' else '之前落在块的末尾'}，"
+                "想放在哪一层说不清。要放在块里，参照句写块里最后一句、where 写 after；要放在块外，参照句写块后面那一句、where 写 before")
+    if _ELSE.match(c) and where != "after":
+        return (f"插在「{code}」这一行之前，会落进上一支的末尾，不是这一支，分支容易读反。"
+                "要放进这一支，参照句写这一支大括号里的第一句、where 写 before")
+    if re.match(r"(?:case\b|default\s*:)", c) and where != "after":
+        return (f"插在「{code}」这一行之前，会落进上一个 case 的末尾，不是这个 case。"
+                "要放进这个 case，参照句写它下面的第一句、where 写 before")
+    if where == "after" and _UNFINISHED.search(c) and not _CTRL_AFTER.match(c):
+        return f"第 {line} 行「{code}」这一句还没写完（下一行接着写），插在它后面会把一句话拆开。请换成这一整句的第一行、where 写 before"
+    if where != "after" and _UNFINISHED.search(_prev_code(src, line)):
+        return f"第 {line} 行「{code}」是上一行那句话的接续，插在它前面会把一句话拆开。请换成这一整句的第一行"
+    return None
+
+
 def _callers_in_loop(proj, name, skip):
     """本工程里在循环体内调用 name(…) 的地方：[(文件, 行号)]（最多 3 处）。skip=(文件, 函数块) 是定义本身。"""
     out, pat = [], re.compile(rf"(?<!\w){re.escape(name)}\s*\(")
@@ -393,10 +443,16 @@ def _param_guard(src, inner, at):
 
 def check_repeat(proj, rel, src, line, where, once):
     """一轮记每一次的点：在循环里，或所在函数在循环里被反复调用。返回说明或 None。"""
-    if once != "every":
+    if once not in ("every", "once"):
         return None
     at = src.pos(line, where)
     loops, inner, _ = src.context(at)
+    if once == "once":  # 一轮只经过一次：直接写在循环体里（不在里面某一支里）才提醒
+        if loops and src.chain(at)[:1] == loops[:1]:
+            b = src.blocks[loops[0]]
+            return (f"这一步写成一轮只经过一次，但它直接在第 {src.line_of(b['open'])} 行「{_cond_text(b['head'])}」这个循环体里，"
+                    "每循环一次都会走到；如果只有某一支才是这一次，请放进那一支")
+        return None
     if loops:
         b = src.blocks[loops[0]]
         head = _cond_text(b["head"])
@@ -514,16 +570,27 @@ def _check_one(proj, s, branch=""):
         return
     where = str(s.get("where") or "").strip().lower()
     once = str(s.get("once") or "").strip().lower()
-    t = check_branch(src, line, where)
+    t = check_anchor(src, line, where)
+    if t:
+        s["chk"].append({"level": "fail", "kind": "anchor", "text": t})
+    elif where == "before" and re.match(r"(?:if|while|for|switch|do)\b", src.clines[line - 1].strip()):
+        # 旧写法：插在判断或循环开头之前。位置是清楚的（整个判断前面、不在任何一支里），兼容旧结果，只提醒
+        s["chk"].append({"level": "tip", "kind": "anchor",
+                         "text": f"参照的第 {line} 行「{_cond_text(src.lines[line - 1].strip())}」是条件或循环的开头：点放在整个判断前面，"
+                                 "不在任何一支里。要放进某一支，参照句应写那一支大括号里的第一句"})
+    t = None if t else check_branch(src, line, where)
     if t:
         kw = _CTRL_AFTER.match(src.clines[line - 1].strip()).group(1).split()[0]
         head = t.split("。识别结果没有说明")[0]
-        # 事件链写明了是哪一支：按有意放进这一支处理，只提醒核对。循环、switch、没大括号、看着像失败分支的照旧算失败
+        n, first = _next_code(src, line)
+        first = f"这一支第一句「{_cond_text(src.lines[n - 1].strip())}」之前" if n and first != "}" else "这一支里（这一支是空的）"
+        # 事件链写明了是哪一支：等于插在这一支第一句之前，按有意放入处理，只提醒核对。循环、switch、没大括号、看着像失败分支的照旧算失败
         if branch and kw in ("if", "else") and "失败或出错" not in t and "改掉原来的逻辑" not in t:
             s["chk"].append({"level": "tip", "kind": "branch",
-                             "text": f"{head}。事件链写明放在「{branch}」这一支，码表按有意放入处理，请核对这一支是不是每轮正常要走的"})
+                             "text": f"{head}，等于插在{first}。事件链写明放在「{branch}」这一支，码表按有意放入处理，请核对这一支是不是每轮正常要走的"})
         else:
-            s["chk"].append({"level": "fail", "kind": "branch", "text": t})
+            s["chk"].append({"level": "fail", "kind": "branch",
+                             "text": t + "。要放进这一支，参照句写这一支大括号里的第一句、where 写 before"})
     t = check_repeat(proj, s["file"], src, line, where, once)
     if t:
         s["chk"].append({"level": "tip", "kind": "repeat", "text": t})
