@@ -101,6 +101,21 @@ def test_prompt_says_read_only_and_asks_for_markers():
     assert "读到卡" in retry and "接着找" in retry
 
 
+@pytest.mark.parametrize("what", ["从刷卡到开门", "从说完话到开始播放回复"])
+def test_identify_prompt_states_the_purpose_and_is_sent_to_the_model(door, what):
+    """门禁、语音两类都发同一份通用提示词：目的（多轮重复、每轮每点一次、只量设备忙的时间）和由此来的选点要求。"""
+    m = FakeLLM(DOOR_REPLY)
+    idf.identify(m, door, what)
+    p = m.prompts[0]
+    assert p == idf.build_prompt(what) and what in p
+    for key in ["每一轮正常使用时，每个计时点恰好记到一次", "这一轮输入结束", "不含人操作、等人开口的时间",
+                "不写 every", "出错、失败、重试的那一支不要放", "没有依据就不要把它们串成前后相连的段",
+                "点记到的是它真正执行的时刻", "先从配置和初始化代码确认这台设备实际走哪条", "sdkconfig"]:
+        assert key in p, key
+    assert "被丢掉的也要能记到" not in p  # 旧规则会把点推到逐帧经过的判断之前
+    assert "小智" not in p and "DeepSeek" not in p
+
+
 # ---------- 整个识别：边找边报、出错留着已找到的 ----------
 def test_identify_reports_progress_and_result(door):
     seen = []
