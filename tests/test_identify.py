@@ -114,19 +114,22 @@ def test_identify_prompt_states_the_purpose_and_is_sent_to_the_model(door, what)
                 "找到真正决定它的那一行代码", "sdkconfig", "这一行的原文", "走的是哪一支", "只执行一次还是反复执行",
                 "为什么排在上一步后面", "先读触发它的那一行代码或协议文档", "不能按名字猜", "按真正执行的时刻排",
                 "依据只能是代码、协议文档或注释，没有就写\"不确定\"", "只在第一轮才走的步骤", "不进链",
-                '"trigger"', '"mode"', '"detect"', '"chain"', '"code"', '"after"']:
+                "沿真实的调用关系往下追", "不能挑一个名字像的函数就用", "所在的函数名", "设备往外发数据的第一包和最后一包",
+                "收到的第一个结果、最后一个结果", "链写到最后一个结果为止，下一轮的事不写", "注册回调、初始化这类",
+                '"trigger"', '"upload"', '"mode"', '"detect"', '"chain"', '"code"', '"func"', '"role"', '"after"']:
         assert key in first, key
     for bad in ["计时点只从", '"steps"', "插点写法", "category"]:  # 第一次不选点
         assert bad not in first, bad
     assert second == idf.build_prompt(what, "芯片 ESP32-S3", flow=r["flow"]) and what in second
     for key in ["每一轮每个点恰好记到一次", "不含人操作、等人的时间", "上一步已经理清了一轮的流程",
                 "## 已理清的流程", "触发路径：刷卡", "输入结束检测：读卡完成", "1. 读卡芯片报告有卡靠近｜main/rfid_task.c:88",
-                "计时点只从事件链里选，chain_step 写对应第几步", "终点要覆盖最后一个结果",
-                "设备往外发数据的首包和末包", "收到的第一个结果、最后一个结果",
-                "不能直接写在循环体里又标成 once", "不写 every", "确实会被用上",
+                "计时点只能从事件链里选：每个点都写 chain_step", "链里标了上传首包、上传末包、首个结果、最后结果的步骤都要有点",
+                "链外不加点", "那一行所在的那一支里",
+                "它每圈都执行，不能写 once", "不写 every", "确实会被用上",
+                "if、while、for、switch、else、case 那一行不能当 line", "函数 rfid_task", "标为：最后结果", "往外发的数据：卡号发给服务器校验",
                 "插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）",
                 "要放进某一支，就写这一支大括号里的第一句", "只有放在块里最后一句之后才写 after",
-                "#if/#else/#endif 不能写", "`stop();`、before", "点放在链写明的那一支里", "出错、失败、重试那一支不放",
+                "#if/#else/#endif 也不能写", "`stop();`、before", "点放在链写明的那一支里", "出错、失败、重试那一支不放",
                 "always 写 false，除非在 why 里说明正常每轮都满足", "不要串成前后相连的段", "用的点都要属于这条线本身",
                 '"chain_step": 1', '"once": "once / first / last']:
         assert key in second, key

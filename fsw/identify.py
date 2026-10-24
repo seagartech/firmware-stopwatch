@@ -32,10 +32,10 @@ PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是�
 ## 已理清的流程
 {flow}
 ## 怎么选点
-1. 计时点只从事件链里选，chain_step 写对应第几步；起点是第 1 步（line_of 写 start），终点要覆盖最后一个结果。
-2. 这几样都要覆盖到：设备往外发数据的首包和末包（有上传的话）、收到的第一个结果、最后一个结果、第一下感觉到的结果。
-3. 反复执行的步骤（逐帧、逐包、轮询），点要放进判断出"就是这一次"的那一支，once 写 once；不能直接写在循环体里又标成 once。分不出哪一次的才写 first 或 last，不写 every。首包、首个结果这类，放在判断出"确实会被用上"之后。
-4. 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。只有 {{ 或 }} 的行、else 行、条件或循环头（if/while/for/switch/case）、#if/#else/#endif 不能写；只有放在块里最后一句之后才写 after；同一句只放一个点。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。
+1. 计时点只能从事件链里选：每个点都写 chain_step（第几步），点就插在那一步那一行，或那一行所在的那一支里；链外不加点。起点是第 1 步（line_of 写 start）。
+2. 链里标了上传首包、上传末包、首个结果、最后结果的步骤都要有点；第一下感觉到的结果也要有。
+3. 点所在那一层是循环体（或逐帧、逐包反复调用的函数）时，它每圈都执行，不能写 once：要么放进循环里判断出"就是这一次"的那一支（这时写 once），要么写 first 或 last。不写 every。首包、首个结果这类，放在判断出"确实会被用上"之后。
+4. 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。if、while、for、switch、else、case 那一行不能当 line：点会落在整个判断或循环外面，不在你想要的那一支里。只有 {{ 或 }} 的行、#if/#else/#endif 也不能写；只有放在块里最后一句之后才写 after；同一句只放一个点。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。
 5. 点放在链写明的那一支里，出错、失败、重试那一支不放。外面套着条件、可能不走的，always 写 false，除非在 why 里说明正常每轮都满足。
 6. 链里先后写着"不确定"的，不要串成前后相连的段，写进 doubts。
 7. 顺带发现的线（比如播放回复前先切换表情、开门前先亮灯）也列出来；它的分段除了从主线分出的那个点，用的点都要属于这条线本身（line_of 写 side）。同一件事有"收到"和"真正生效"两个时刻的，两个都列。
@@ -93,20 +93,21 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 
 ## 要做的事
 理清连续使用时的第二轮里，从设备察觉人做完输入，到最后一个结果（比如回复全部播完、门完全打开），设备依次做了哪些事。
-1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。
+1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。从处理这个输入事件的函数开始，沿真实的调用关系往下追（谁调用了谁、事件交给了谁），不能挑一个名字像的函数就用。
 2. 第一步用设备自己能察觉人做完输入的检测（比如静音或语音活动检测翻转、读卡完成、按键松开）。哪怕它只用来切换显示、指示灯，不上报，也算设备察觉到了，第一步就用它。确实找不到，在 detect 里写明找过哪里。
 3. 运行时走哪种模式、哪种协议：找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode。
-4. 每一步写文件、行号、这一行的原文、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面。
+4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面。
 5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
-6. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道）不进链。
+6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。链写到最后一个结果为止，下一轮的事不写。
+7. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道），以及注册回调、初始化这类不在这一轮运行时执行的代码，不进链。
 
 ## 最后输出
 只输出一个 ```json 代码块（中文）：
 ```json
-{{"trigger": "选定的触发路径",
+{{"trigger": "选定的触发路径", "upload": "设备往外发什么数据；不往外发写：无",
  "mode": {{"what": "运行时走哪种模式、哪种协议；不用选的写：无", "file": "决定它的那一行所在文件", "line": 123, "code": "那一行的原文", "config": "相关配置和取值"}},
  "detect": {{"kind": "第一步用的是哪种输入结束检测，比如：静音检测翻转、读卡完成、按键松开", "found": true, "looked": "找不到时写找过哪里"}},
- "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "相对源码根目录的路径", "line": 123, "code": "这一行的原文", "branch": "走哪一支或哪个条件成立才走，没有就空", "repeat": "once / repeat", "after": "为什么排在上一步后面：哪段代码、文档或注释；没有就写 不确定（第 1 步空着）"}}],
+ "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "相对源码根目录的路径", "line": 123, "code": "这一行的原文", "func": "这一行所在的函数名", "role": "上传首包 / 上传末包 / 首个结果 / 最后结果，可写几个，用、隔开；其余空", "branch": "走哪一支或哪个条件成立才走，没有就空", "repeat": "once / repeat", "after": "为什么排在上一步后面：哪段代码、文档或注释；没有就写 不确定（第 1 步空着）"}}],
  "doubts": ["拿不准的地方"]}}
 ```
 行号必须是你亲自打开文件核对过的，code 照抄那一行。
@@ -146,10 +147,12 @@ def _flow_text(flow):
     rows = [f"触发路径：{flow.get('trigger') or ''}",
             f"模式和协议：{mode.get('what') or ''}{at}{'；配置：' + str(mode['config']) if mode.get('config') else ''}",
             f"输入结束检测：{det.get('kind') or ''}{'' if det.get('found', True) not in (False, 'false') else '（没找到，找过：' + str(det.get('looked') or '') + '）'}",
+            *([f"往外发的数据：{flow['upload']}"] if flow.get("upload") else []),
             "事件链："]
     for c in flow.get("chain") or []:
-        rows.append(f"{c['n']}. {c['what']}｜{c['file']}:{c['line']} `{c['code']}`"
-                    f"｜{'分支：' + c['branch'] if c.get('branch') else '不在分支里'}｜{'反复执行' if c.get('repeat') == 'repeat' else '一轮一次'}"
+        rows.append(f"{c['n']}. {c['what']}｜{c['file']}:{c['line']} `{c['code']}`" + (f"｜函数 {c['func']}" if c.get("func") else "")
+                    + (f"｜标为：{'、'.join(c['role'])}" if c.get("role") else "")
+                    + f"｜{'分支：' + c['branch'] if c.get('branch') else '不在分支里'}｜{'反复执行' if c.get('repeat') == 'repeat' else '一轮一次'}"
                     + (f"｜排在上一步后面：{c['after']}" if c.get("after") else ""))
     for d in flow.get("doubts") or []:
         rows.append(f"拿不准：{d}")
@@ -233,6 +236,7 @@ def check_location(root, file, line):
 
 
 _NONE = ("无", "没有", "不用", "不需要", "none", "-")
+ROLES = ("上传首包", "上传末包", "首个结果", "最后结果")  # 事件链里必须标出的几步（不往外发数据的不要上传两项）
 
 
 def _same_code(said, real):
@@ -267,7 +271,7 @@ def check_chain(root, data):
     返回 (整理好的流程, 问题列表)；问题列表不空就是不合格。"""
     if not isinstance(data, dict):
         return None, ["回答的格式不对，码表看不懂"]
-    bad = []
+    bad, tips, roles, proj = [], [], set(), structure.Project(root)
     trigger = str(data.get("trigger") or "").strip()
     if not trigger:
         bad.append("没写选定的触发路径")
@@ -298,7 +302,8 @@ def check_chain(root, data):
         if n in seen:
             bad.append(f"{tag}的序号重复了")
         seen.add(n)
-        miss = [label for k, label in (("what", "做了什么"), ("file", "文件"), ("line", "行号"), ("code", "原文")) if c.get(k) in (None, "")]
+        miss = [label for k, label in (("what", "做了什么"), ("file", "文件"), ("line", "行号"), ("code", "原文"), ("func", "所在的函数"))
+                if c.get(k) in (None, "")]
         rep = str(c.get("repeat") or "").strip().lower()
         rep = "repeat" if rep in ("repeat", "反复", "反复执行", "every") else "once" if rep in ("once", "一次", "只执行一次") else ""
         if not rep:
@@ -312,11 +317,25 @@ def check_chain(root, data):
         if why:
             bad.append(f"{tag}：{why}")
             continue
+        src = proj.file(_rel(root, c["file"]))
+        got = structure.check_func(src, line, c["func"]) if src is not None else None
+        if got and got[0] == "fail":
+            bad.append(f"{tag}：{got[1]}")
+            continue
+        if got:
+            tips.append(f"{tag}：{got[1]}")
+        role = [r for r in ROLES if r in str(c.get("role") or "")]
+        roles.update(role)
         chain.append({"n": n, "what": str(c["what"]).strip(), "file": _rel(root, c["file"]), "line": line,
-                      "code": check_location(root, c["file"], line)[0], "branch": str(c.get("branch") or "").strip(),
-                      "repeat": rep, "after": str(c.get("after") or "").strip()})
-    flow = {"trigger": trigger, "mode": mode, "detect": det, "chain": chain,
-            "doubts": [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else []}
+                      "code": check_location(root, c["file"], line)[0], "func": str(c["func"]).strip(), "role": role,
+                      "branch": str(c.get("branch") or "").strip(), "repeat": rep, "after": str(c.get("after") or "").strip()})
+    upload = str(data.get("upload") or "").strip()
+    need = [r for r in ROLES if r not in roles and not (r.startswith("上传") and upload.lower().startswith(_NONE))]
+    if raw and need:
+        bad.append(f"事件链里没标出：{'、'.join(need)}（在对应步骤的 role 里写；确实不往外发数据的，upload 写「无」）")
+    flow = {"trigger": trigger, "upload": upload, "mode": mode, "detect": det, "chain": chain,
+            "doubts": [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else [],
+            "tips": tips}  # 码表判断不了、放行的地方（比如 lambda 里写的函数名），只提醒
     return flow, bad
 
 
@@ -329,13 +348,15 @@ def chain_no(v):
     return n if n > 0 else None
 
 
-def parse(text, root, chain=None):
+def parse(text, root, chain=None, strict=False):
     """读大模型的回答：取最后的 json，逐个核对位置。chain 是第一次调用理清的事件链（点只能从里面选）。"""
     data = _json_block(text)
     if not isinstance(data, dict):
         return _fail("bad_reply", "大模型读完了代码，但回答的格式不对，码表看不懂。点\"重试\"再找一次。", found=found_names(text))
     if chain:
         data["chain"] = chain
+    if strict:
+        data["strict"] = True  # 两步识别的新结果：沿用缓存时也按这套更严的结构检查
     warn = None
     if data.get("start_found") is False or data.get("end_found") is False:
         which = "起点" if data.get("start_found") is False else "终点"
@@ -366,7 +387,7 @@ def parse(text, root, chain=None):
                 "felt": s.get("felt") if s.get("felt") in ("first", "last") else "",
                 "kind": str(s.get("kind") or "") if s.get("felt") in ("first", "last") else "",
                 "chain_step": chain_no(s.get("chain_step"))}  # 对应事件链第几步；旧结果没有这一项
-        if chain and step["chain_step"] is not None and step["chain_step"] not in {c["n"] for c in chain}:
+        if chain and not strict and step["chain_step"] is not None and step["chain_step"] not in {c["n"] for c in chain}:
             problem = "；".join(x for x in (problem, f"理清的流程里没有第 {step['chain_step']} 步，这个点不是从流程里选的") if x)
         if problem:
             step["sure"], step["doubt"] = "低", problem + (("；" + step["doubt"]) if step["doubt"] else "")
@@ -378,7 +399,7 @@ def parse(text, root, chain=None):
     if len(steps) < 2:
         return _fail("bad_reply", "大模型只给出了不到 2 个步骤，量不出用时。点\"重试\"再找一次，或者换个说法写\"测从什么到什么\"。",
                      found=[s["name"] for s in steps])
-    structure.check(root, steps, data.get("segments"), data.get("side_segments"), data.get("chain"))  # 位置在不在之外，再看插下去落在什么结构里
+    structure.check(root, steps, data.get("segments"), data.get("side_segments"), data.get("chain"), strict=strict)  # 位置在不在之外，再看插下去落在什么结构里
     return {"ok": True, **data, "steps": steps, "warn": warn}
 
 
@@ -492,7 +513,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None):
         calls += 1
         return failed(e, "pick")
     calls += 1
-    r = parse(reply, root, chain=flow["chain"])
+    r = parse(reply, root, chain=flow["chain"], strict=True)
     r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick")
     if chain_reply is not None:
         r["chain_reply"] = chain_reply
@@ -536,7 +557,8 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
         try:
             r = json.loads(f.read_text(encoding="utf-8"))
             # 沿用的结果也按现在的源码重新做一遍结构检查（存下时可能还没有这层检查，或者是改完再测挪过行号的）
-            structure.check(root, r.get("steps") or [], r.get("segments"), r.get("side_segments"), r.get("chain"))
+            structure.check(root, r.get("steps") or [], r.get("segments"), r.get("side_segments"), r.get("chain"),
+                            strict=r.get("strict") is True)  # 旧缓存没有这一项：照旧宽松
             # 页面数据按存下的步骤重新算一遍：码表升级后页面要的新字段（比如"一轮记哪一次"）也有
             return {**r, "page": to_page(r, what), "reused": True, "seconds": 0, "calls": 0}
         except (OSError, ValueError, TypeError, KeyError, AttributeError):

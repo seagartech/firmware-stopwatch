@@ -561,7 +561,65 @@ def check_segments(proj, steps, segments):
     return out
 
 
-def _check_one(proj, s, branch=""):
+
+# ---------- 两步识别：事件链每一步写的函数、计时点在不在链里那一步 ----------
+def _line_at(src, line):
+    """这一行第一个真正的字（跳过开头的空白和 }，免得算进上一支）的位置。"""
+    k = line - 1
+    c = src.clines[k]
+    j = len(c) - len(c.lstrip(" \t}"))
+    return src.starts[k] + min(j, len(c))
+
+
+def _opened_on(src, line):
+    """在这一行打开的块（比如 `} else if (x) {`、函数头）。"""
+    a, b = src.starts[line - 1], src.starts[line - 1] + len(src.lines[line - 1])
+    return [i for i, blk in enumerate(src.blocks) if a <= blk["open"] < b]
+
+
+def func_at(src, line):
+    """包住这一行的函数：(函数名, 途经的 lambda 块)。按大括号层级往外找；找不到函数返回 (None, [])。"""
+    lambdas = []
+    for i in src.chain(_line_at(src, line)):
+        b = src.blocks[i]
+        if b["kind"] == "lambda":
+            lambdas.append(i)
+        elif b["kind"] == "function":
+            return b["name"], lambdas
+    for i in _opened_on(src, line):  # 这一行就是函数头
+        if src.blocks[i]["kind"] == "function":
+            return src.blocks[i]["name"], []
+    return None, lambdas
+
+
+def check_func(src, line, func):
+    """事件链这一步写的函数对不对：返回 None（对得上）、("tip", 说明)（判断不了，放行）或 ("fail", 说明)。"""
+    words = set(re.findall(r"[A-Za-z_~]\w*", str(func or "")))
+    name, lambdas = func_at(src, line)
+    if not name:
+        return ("tip", f"第 {line} 行码表没找到包住它的函数（可能是宏或预处理把大括号拆开了），写的「{func}」没法核对，请自己核对")
+    if name in words:
+        return None
+    if lambdas:  # 在 lambda 或回调里：写交给谁的、回调名，都可能说得通
+        names = {src.blocks[i]["name"] for i in lambdas if src.blocks[i]["name"]}
+        if names & words:
+            return None
+        return ("tip", f"第 {line} 行在 {name} 里的一个 lambda 里，写的是「{func}」，码表判断不了是不是同一个回调，请核对")
+    there = [src.line_of(b["open"]) for b in src.blocks if b["kind"] == "function" and b["name"] in words]
+    more = f"；「{func}」在这个文件第 {there[0]} 行开始，不包含这一行" if there else ""
+    return ("fail", f"第 {line} 行在函数 {name} 里，不在写的「{func}」里{more}。请沿真实的调用关系重新追这一步")
+
+
+def in_step_area(src, chain_line, pos):
+    """计时点（位置 pos）是不是落在链里那一步那一行所在的那一支里（含这一行自己打开的块）。判断不了算在。"""
+    inner = src.chain(_line_at(src, chain_line))
+    areas = inner[:1] + _opened_on(src, chain_line)
+    if not areas:
+        return True
+    return any(src.blocks[i]["open"] < pos <= src.blocks[i]["close"] for i in areas)
+
+
+def _check_one(proj, s, branch="", strict=False):
     if not s.get("loc_ok", True) or not s.get("file") or not s.get("line"):
         return
     src = proj.file(s["file"])
@@ -574,8 +632,8 @@ def _check_one(proj, s, branch=""):
     if t:
         s["chk"].append({"level": "fail", "kind": "anchor", "text": t})
     elif where == "before" and re.match(r"(?:if|while|for|switch|do)\b", src.clines[line - 1].strip()):
-        # 旧写法：插在判断或循环开头之前。位置是清楚的（整个判断前面、不在任何一支里），兼容旧结果，只提醒
-        s["chk"].append({"level": "tip", "kind": "anchor",
+        # 旧写法：插在判断或循环开头之前。旧结果、演示数据只提醒；两步识别的新结果算失败（多半是想放进这一支、这个循环里）
+        s["chk"].append({"level": "fail" if strict else "tip", "kind": "anchor",
                          "text": f"参照的第 {line} 行「{_cond_text(src.lines[line - 1].strip())}」是条件或循环的开头：点放在整个判断前面，"
                                  "不在任何一支里。要放进某一支，参照句应写那一支大括号里的第一句"})
     t = None if t else check_branch(src, line, where)
@@ -615,15 +673,48 @@ def _chain_branches(chain):
     return out
 
 
-def check(root, steps, segments=None, side_segments=None, chain=None):
+def _check_chain_step(proj, s, steps_by_n):
+    """两步识别的新结果：点必须对应链里的一步，并且插在那一步那一行或它所在的那一支里。返回说明或 None。"""
+    n = s.get("chain_step")
+    if n is None:
+        return "没写对应理清的流程里第几步（chain_step）。两步识别里计时点只能从流程里选"
+    c = steps_by_n.get(n)
+    if c is None:
+        return f"理清的流程里没有第 {n} 步，这个点不是从流程里选的"
+    if not s.get("loc_ok", True) or not s.get("file") or not s.get("line"):
+        return None
+    if s["file"] != c.get("file"):
+        return f"流程第 {n} 步在 {c.get('file')}，这个点却插在 {s['file']}，不是那一步的位置"
+    src = proj.file(s["file"])
+    line, cl = int(s["line"]), int(c.get("line") or 0)
+    if src is None or not 1 <= line <= len(src.lines) or not 1 <= cl <= len(src.lines) or line == cl:
+        return None
+    if not in_step_area(src, cl, src.pos(line, str(s.get("where") or "").strip().lower())):
+        return f"流程第 {n} 步在第 {cl} 行，这个点插在第 {line} 行，不在那一行所在的那一支里"
+    return None
+
+
+def check(root, steps, segments=None, side_segments=None, chain=None, strict=False):
     """逐个计时点做结构检查，结果写进 step["chk"]（[{level: fail/tip, kind, text}]）和 step["struct_ok"]。
-    有硬失败的点可信度降成"低"。可以重复调用（缓存、沿用的结果也再查一遍），每次重新算，不会叠加。"""
+    有硬失败的点可信度降成"低"。可以重复调用（缓存、沿用的结果也再查一遍），每次重新算，不会叠加。
+    strict：两步识别的新结果（点必须来自事件链、插在判断或循环开头之前算失败）；旧结果和演示数据不加这两条。"""
     proj = Project(root)
     branches = _chain_branches(chain)
+    by_n = {}
+    for i, c in enumerate(chain if isinstance(chain, list) else []):
+        if isinstance(c, dict):
+            try:
+                by_n[int(str(c.get("n", i + 1)).strip())] = c
+            except (TypeError, ValueError):
+                pass
     for s in steps:
         s["chk"] = []
         try:
-            _check_one(proj, s, branches.get(s.get("chain_step"), ""))
+            if strict:
+                t = _check_chain_step(proj, s, by_n)
+                if t:
+                    s["chk"].append({"level": "fail", "kind": "chain", "text": t})
+            _check_one(proj, s, branches.get(s.get("chain_step"), ""), strict)
         except Exception as e:  # 检查自己出错不能挡住识别：说清楚这一步没查完
             s["chk"].append({"level": "tip", "kind": "error", "text": f"码表结构检查这一步没做完（{type(e).__name__}），请自己核对"})
     by = {s.get("id"): s for s in steps}
