@@ -2044,6 +2044,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             r.pop("chain_reply", None)
             ident["flow"] = r.pop("flow", None) if not r.get("ok") else None  # 第二次失败：重试时带上理清的流程
             job.update({k: v for k, v in r.items() if k in ("page", "found", "kind", "message", "reused", "summary", "doubts", "stage")})
+            if r.get("error"):
+                job["error"] = r["error"]["detail"]  # 页面"详情"里给原话（已去掉密钥）
+                job["error_info"] = r["error"]
             job["seconds"] = r.get("seconds", round(time.time() - job["started"], 1))
             job["state"] = "done" if r.get("ok") else "failed"
             if not r.get("reused") and r.get("calls", 1):

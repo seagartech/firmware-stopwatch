@@ -11,11 +11,12 @@
 import hashlib
 import json
 import re
+import sys
 import time
 from pathlib import Path
 
 from fsw import structure
-from fsw.llm import LLMError
+from fsw.llm import LLMError, redact
 
 PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写代码的硬件负责人。
 
@@ -525,13 +526,21 @@ def to_page(r, what):
     return page
 
 
+def error_record(e, stage, stage_seconds, seconds):
+    """调用大模型出错时存下的记录（页面提示仍用好懂的话）：哪一步、第几次请求、异常类型和原话、HTTP 状态码、用时。
+    文字已去掉像密钥、Authorization 头的部分，不带请求内容。"""
+    info = {k: v for k, v in (getattr(e, "info", None) or {}).items() if v is not None}
+    return {"kind": getattr(e, "kind", "other"), "stage": STAGES.get(stage, stage), "detail": redact(getattr(e, "detail", "") or ""),
+            **info, "stage_seconds": stage_seconds, "seconds": seconds}
+
+
 def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, category=""):
     """真识别：第一次调用理清流程（flow 给了就跳过），码表检查过再第二次调用选计时点。
     on_progress 收到 {stage, seconds, found, read, last}；出错时已找到的留着，重试时告诉大模型接着找。
     返回里带 flow（理清的流程，没通过检查的不带）和 calls（这次真调用了几次大模型）。"""
     t0, text = time.time(), []
     state = {"stage": "chain" if flow is None else "pick", "found": list(known or []), "at": [""] * len(known or []), "read": 0, "last": ""}
-    calls, chain_reply = 0, None
+    calls, chain_reply, t_stage = 0, None, [t0]
 
     def report():
         on_progress and on_progress({"seconds": round(time.time() - t0, 1), **state,
@@ -555,7 +564,10 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
     def failed(e, stage):
         tail = (f"已找到的 {len(state['found'])} 个留着，点\"重试\"接着找" if stage == "pick"
                 else "点\"重试\"再试一次") + "，也可以到设置页换一个大模型。"
-        return _fail(e.kind, f"{STAGES[stage]}时出错：{e.message}<br>{tail}", found=state["found"], stage=stage,
+        err = error_record(e, stage, round(time.time() - t_stage[0], 1), round(time.time() - t0, 1))
+        print(f"[识别] {err['stage']}出错：{err['detail'] or err['kind']}（第 {err.get('request_no', '?')} 次请求，"
+              f"这一步已用 {err['stage_seconds']} 秒）", file=sys.stderr, flush=True)  # 运行日志：原始报错，已去掉密钥
+        return _fail(e.kind, f"{STAGES[stage]}时出错：{e.message}<br>{tail}", found=state["found"], stage=stage, error=err,
                      seconds=round(time.time() - t0, 1), calls=calls,
                      **({"flow": flow} if flow else {}), **({"chain_reply": chain_reply} if chain_reply else {}))
 
@@ -574,7 +586,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
                          found=[], stage="chain", problems=bad, chain_reply=chain_reply,
                          seconds=round(time.time() - t0, 1), calls=calls)
         flow = got
-        state["stage"], text = "pick", []
+        state["stage"], text, t_stage[0] = "pick", [], time.time()
         report()
     try:
         reply = llm.investigate(build_prompt(what, chip, known, flow), root, on_text=on_text, on_tool=on_tool)

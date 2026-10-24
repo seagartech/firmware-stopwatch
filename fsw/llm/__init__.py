@@ -30,12 +30,31 @@ MAX_TOOL_ROUNDS = 80  # 读代码最多来回多少轮；用完就让它按已�
 READ_ONLY = "Read,Grep,Glob"  # Claude Code 只开这三个读代码的工具，改文件、跑命令的都不给
 
 
+_SECRET = re.compile(r"sk-[A-Za-z0-9_\-]{4,}|(?i:bearer)\s+[^\s\"']+|(?i:x-api-key|authorization)[\"']?\s*[:=]\s*[\"']?(?:(?i:bearer)\s+)?[^\s\"',}]+")
+
+
+def redact(text, limit=600):
+    """存下、打出来的报错文字：去掉像密钥、Authorization 头的部分，太长的截断（不会带上整个请求）。"""
+    t = _SECRET.sub(lambda m: "sk-***" if m.group().startswith("sk-") else m.group().split()[0].split(":")[0].split("=")[0] + " ***",
+                    str(text or ""))
+    return t if len(t) <= limit else t[:limit] + "…"
+
+
+def _why(e):
+    """异常类型和原话；urllib 把底层原因包在 URLError 里，把里面那层的类型也写出来（比如连接被重置、证书、代理）。"""
+    r = getattr(e, "reason", None)
+    if isinstance(e, urllib.error.URLError) and isinstance(r, BaseException):
+        return f"{type(e).__name__}({type(r).__name__}): {r}"
+    return f"{type(e).__name__}: {e}"
+
+
 class LLMError(Exception):
-    def __init__(self, kind, message, detail=""):
+    def __init__(self, kind, message, detail="", **info):
         super().__init__(message)
         self.kind = kind
         self.message = message
-        self.detail = detail  # 原始报错，放进页面的"详情"，不放进提示
+        self.detail = redact(detail)  # 原始报错（异常类型和原话），放进页面的"详情"和记录，不放进提示
+        self.info = info  # 补充：status（HTTP 状态码）、request_no（这次读代码的第几次请求）、elapsed（这次调用已用秒数）
 
 
 class LLM:
@@ -62,8 +81,8 @@ class LLM:
             "dropped": f"和{self.name}的连接中途断了：看看网络稳不稳，再点重试。",
         }.get(kind, f"{self.name}返回了错误：{detail[:200]}")
 
-    def fail(self, kind, detail=""):
-        return LLMError(kind, self._say(kind, detail), detail)
+    def fail(self, kind, detail="", **info):
+        return LLMError(kind, self._say(kind, redact(detail)), detail, **info)
 
     def _read_error(self, e):
         """读回复途中出的错（超时、断连、坏行）：归成大模型错误，原始报错留在 detail 里。"""
@@ -129,18 +148,18 @@ class ClaudeAPI(LLM):
         try:
             yield
         except anthropic.AuthenticationError as e:
-            raise self.fail("bad_key") from e
+            raise self.fail("bad_key", f"{type(e).__name__}: {e}", status=getattr(e, "status_code", None)) from e
         except anthropic.PermissionDeniedError as e:
-            raise self.fail("bad_key") from e
+            raise self.fail("bad_key", f"{type(e).__name__}: {e}", status=getattr(e, "status_code", None)) from e
         except anthropic.RateLimitError as e:
-            raise self.fail("busy") from e
+            raise self.fail("busy", f"{type(e).__name__}: {e}", status=getattr(e, "status_code", None)) from e
         except anthropic.InternalServerError as e:
-            raise self.fail("busy") from e
+            raise self.fail("busy", f"{type(e).__name__}: {e}", status=getattr(e, "status_code", None)) from e
         except anthropic.APIStatusError as e:
             msg = str(getattr(e, "message", "") or e)
             if e.status_code == 402 or "credit balance" in msg.lower():
-                raise self.fail("no_balance") from e
-            raise self.fail("other", f"{e.status_code} {msg}") from e
+                raise self.fail("no_balance", f"{type(e).__name__} {e.status_code}: {msg}", status=e.status_code) from e
+            raise self.fail("other", f"{e.status_code} {msg}", status=e.status_code) from e
         except anthropic.APITimeoutError as e:  # 是它的子类，要放在"连不上"前面：超时不是没联网
             raise LLMError("slow", self._say("slow"), str(e)) from e
         except anthropic.APIConnectionError as e:
@@ -152,13 +171,18 @@ class ClaudeAPI(LLM):
             raise LLMError(kind, self._say(kind), f"{type(e).__name__}: {e}") from e
 
     def investigate(self, prompt, root, on_text=None, on_tool=None):
-        tools, messages, final = SourceTools(root), [{"role": "user", "content": prompt}], []
+        tools, messages, final, t0 = SourceTools(root), [{"role": "user", "content": prompt}], [], time.time()
         for rnd in range(MAX_TOOL_ROUNDS + 1):
             kw = {"tools": anthropic_tools()} if rnd < MAX_TOOL_ROUNDS else {}
             if rnd == MAX_TOOL_ROUNDS:
                 messages.append({"role": "user", "content": "读代码的次数用完了，请按已读的内容直接给出最终结果。"})
-            with self._errors():
-                msg = self.client.messages.create(model=self.model, max_tokens=16000, messages=messages, **kw)
+            sent = time.time()
+            try:
+                with self._errors():
+                    msg = self.client.messages.create(model=self.model, max_tokens=16000, messages=messages, **kw)
+            except LLMError as e:
+                e.info.update(request_no=rnd + 1, request_seconds=round(time.time() - sent, 1), elapsed=round(time.time() - t0, 1))
+                raise
             if msg.stop_reason == "refusal":
                 raise self.fail("refused")
             texts = [b.text for b in msg.content if b.type == "text"]
@@ -211,25 +235,36 @@ class DeepSeek(LLM):
             return urllib.request.urlopen(req, timeout=self.timeout)
         except urllib.error.HTTPError as e:
             kind = {401: "bad_key", 403: "bad_key", 402: "no_balance", 429: "busy"}.get(e.code, "busy" if e.code >= 500 else "other")
-            raise self.fail(kind, f"{e.code}") from e
+            try:
+                said = e.read(300).decode("utf-8", "replace")
+            except Exception:  # 读不到服务器的说明也不要紧
+                said = ""
+            err = self.fail(kind, f"HTTPError {e.code}: {said}".strip())
+            err.info["status"] = e.code
+            raise err from e
         except (urllib.error.URLError, OSError) as e:
             if isinstance(getattr(e, "reason", e), TimeoutError):  # 连上了但等不到回复：不是没联网
                 raise self._read_error(getattr(e, "reason", e)) from e
-            raise LLMError("offline", self._say("offline"), f"{type(e).__name__}: {e}") from e
+            raise LLMError("offline", self._say("offline"), _why(e)) from e
 
     def investigate(self, prompt, root, on_text=None, on_tool=None):
-        tools, messages = SourceTools(root), [{"role": "user", "content": prompt}]
+        tools, messages, t0 = SourceTools(root), [{"role": "user", "content": prompt}], time.time()
         for rnd in range(MAX_TOOL_ROUNDS + 1):
             body = {"model": self.model, "messages": messages}
             if rnd < MAX_TOOL_ROUNDS:
                 body["tools"] = openai_tools()
             else:
                 messages.append({"role": "user", "content": "读代码的次数用完了，请按已读的内容直接给出最终结果。"})
-            with self._post(body) as resp:
-                try:
-                    msg = json.loads(resp.read())["choices"][0]["message"]
-                except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
-                    raise self._read_error(e) from e  # 读回复时超时、断开、格式不对，都按大模型的错说
+            sent = time.time()
+            try:
+                with self._post(body) as resp:
+                    try:
+                        msg = json.loads(resp.read())["choices"][0]["message"]
+                    except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
+                        raise self._read_error(e) from e  # 读回复时超时、断开、格式不对，都按大模型的错说
+            except LLMError as e:  # 记下是第几次请求、这次请求等了多久、这次调用一共用了多久
+                e.info.update(request_no=rnd + 1, request_seconds=round(time.time() - sent, 1), elapsed=round(time.time() - t0, 1))
+                raise
             if msg.get("content"):
                 on_text and on_text(msg["content"])
             calls = msg.get("tool_calls") or []
