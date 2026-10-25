@@ -1329,6 +1329,43 @@ def _end_base(p, steps, by_n, segs=None, start_from=None):
     return None
 
 
+def _kind(s):
+    k = str(s.get("once") or "").strip().lower()
+    return k if k in ("first", "last") else "once"
+
+
+def build_segments(steps, segments):
+    """要测的这条线的段由码表按点的先后连（模型写的段只拿来用名字、谁在忙、在不在设备外）：
+    同一步的"最后一次"从这一步的"第一次"量起；"第一次"不从别处的"最后一次"量起（那样会是负的），往前找最近一个不是"最后一次"的点；
+    其余从紧挨着的上一个点量起。先后说不准、最后结果和全部放完从哪儿量，再交给 repair_segments 理。返回 (段, [说明])。"""
+    main = [x for x in steps if x.get("line_of") in ("start", "main")]
+    model = [g for g in segments or [] if isinstance(g, dict)]
+    out, notes = [], []
+    for i, p in enumerate(main):
+        if i == 0:
+            continue
+        k = _kind(p)
+        a = None
+        if k == "last":
+            a = next((x for x in main[:i] if x.get("chain_step") == p.get("chain_step") and p.get("chain_step") is not None and _kind(x) == "first"), None)
+        if a is None and k in ("first", "last"):
+            a = next((x for x in reversed(main[:i]) if _kind(x) != "last"), None)
+        if a is None:
+            a = main[i - 1]
+        mine = [g for g in model if g.get("to") == p.get("id")]
+        g = next((g for g in mine if g.get("from") == a.get("id")), mine[0] if mine else None)
+        seg = {"from": a.get("id"), "to": p.get("id"), "name": (g or {}).get("name") or f"{a.get('name')}到{p.get('name')}",
+               "who": (g or {}).get("who") or "", "outside": bool((g or {}).get("outside"))}
+        if g is None:
+            seg["added"] = True
+        out.append(seg)
+    old = {(g.get("from"), g.get("to")) for g in model}
+    new = {(g["from"], g["to"]) for g in out}
+    if old != new:
+        notes.append(f"要测的这条线的段由码表按点的先后连：{len(new - old)} 段和模型连的不一样")
+    return out, notes
+
+
 def repair_segments(root, steps, segments, chain):
     """两步识别的新结果：码表把主线的段理顺，模型只管选点。
     1. 先后说不准的两步被串成一段（后一步写明和上一步先后不确定、或两步都标了最后结果）：起点换成更前面的点，两头各自从那里量；

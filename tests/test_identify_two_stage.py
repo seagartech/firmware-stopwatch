@@ -753,33 +753,57 @@ def _door_output(missing_last=True):
     return d
 
 
-def test_pick_follow_up_fixes_only_those_points(door):
+def test_output_step_gets_first_and_last_from_the_tool_without_asking(door):
+    """标了输出的那一步只放了一个点：码表自己补上同一行的另一个（first、last），不再追问。"""
     m = FakeLLM(js(_door_output()), followups=[js(_door_output(False))])
     r = idf.identify(m, door, "从刷卡到开门")
-    assert r["ok"] and len(m.asked) == 1 and "流程第 6 步标了输出" in m.asked[0] and "不要再读源码" in m.asked[0]
-    f = [x for x in r["followups"] if x["stage"] == "选计时点"]
-    assert len(f) == 1 and f[0]["kind"] == "fix" and f[0]["ok"] and f[0]["fails_before"] == 1 and f[0]["fails_after"] == 0
-    assert any(s["id"] == "P6" for s in r["steps"]) and r["reply_first"] == js(_door_output())
+    assert r["ok"] and m.asked == [] and not [x for x in r["followups"] if x["stage"] == "选计时点"]
+    outs = [s for s in r["steps"] if s["chain_step"] == 6]
+    assert [(s["once"], s["file"], s["line"]) for s in outs] == [("first", "main/lock_ctrl.c", 55), ("last", "main/lock_ctrl.c", 55)]
+    assert {"from": outs[0]["id"], "to": outs[1]["id"]} in [{"from": g["from"], "to": g["to"]} for g in r["segments"]]
+    assert all(c["level"] != "fail" for s in r["steps"] for c in s["chk"])
+
+
+def _side_on_if(door, d):
+    """顺带那条线的点写在一个 if 开头（码表不替顺带那条线挪点）：选点要追问一次。"""
+    p = door / "main/lock_ctrl.c"
+    rows = p.read_text(encoding="utf-8").split("\n")
+    rows[57:63] = ["void door_beep(int door_ok) {", "", "    if (door_ok) {", "        beep_twice();", "    }", "}"]
+    p.write_text("\n".join(rows), encoding="utf-8")
+    d["steps"][2].update(file="main/lock_ctrl.c", line=60, chain_step=None, where="before")
+    return d
 
 
 def test_pick_follow_up_that_makes_it_worse_keeps_the_first_answer(door):
-    worse = _door_output()
-    worse["steps"][0]["file"] = "main/net_auth.c"
-    m = FakeLLM(js(_door_output()), followups=[js(worse)])
+    first = _side_on_if(door, _door_output())
+    worse = copy.deepcopy(first)
+    worse["steps"].append({**worse["steps"][2], "id": "P7", "name": "多出来的点", "chain_step": 9})  # 链里没有第 9 步：更糟
+    m = FakeLLM(js(first), followups=[js(worse)])
     r = idf.identify(m, door, "从刷卡到开门")
-    assert r["ok"] and len(m.asked) == 1 and not any(s["id"] == "P6" for s in r["steps"])
+    assert r["ok"] and len(m.asked) == 1
     assert [(x["kind"], x["ok"]) for x in r["followups"]] == [("fix", False)]
-    assert r["steps"][0]["file"] == "main/rfid_task.c"
+    p3 = next(x for x in r["steps"] if x["id"] == "P3")
+    assert (p3["file"], p3["line"]) == ("main/lock_ctrl.c", 60) and not any(x["id"] == "P7" for x in r["steps"])
 
 
 def test_wrong_file_gets_a_put_back_follow_up_used_only_if_better(door):
-    d = _door_output(False)
-    d["steps"][1]["file"] = "main/net_auth.c"
-    d["steps"][1]["line"] = 180
+    d = _side_on_if(door, _door_output(False))
     m = FakeLLM(js(d), followups=[js(d)])  # 追问后原样不改：不用追问的结果，原来的照旧算数
     r = idf.identify(m, door, "从刷卡到开门")
-    assert r["ok"] and len(m.asked) == 1 and "line 改成 131、file 改成 main/rfid_task.c" in m.asked[0]
-    assert r["followups"][0]["fails_after"] == r["followups"][0]["fails_before"] == 1 and r["steps"][1]["file"] == "main/net_auth.c"
+    assert r["ok"] and len(m.asked) == 1 and "第 61 行" in m.asked[0]
+    p3 = next(x for x in r["steps"] if x["id"] == "P3")
+    assert r["followups"][0]["fails_after"] == r["followups"][0]["fails_before"] == 1 and p3["line"] == 60
+
+
+def test_main_point_off_its_step_is_moved_back_by_the_tool(door):
+    """主线上没标角色的那一步，点写到了别的文件：码表自己挪回那一步那一行，不再追问。"""
+    d = _door_output(False)
+    d["steps"][1]["file"], d["steps"][1]["line"] = "main/net_auth.c", 180
+    m = FakeLLM(js(d))
+    r = idf.identify(m, door, "从刷卡到开门")
+    p2 = next(x for x in r["steps"] if x["id"] == "P2")
+    assert r["ok"] and m.asked == [] and (p2["file"], p2["line"]) == ("main/rfid_task.c", 131)
+    assert any("P2" not in t and "卡号读完" in t and "挪到那一步那一行前面" in t for t in r["seg_repairs"])
 
 
 # ---------- 段由码表理顺；输出同一行拆成几步算一步；语音类要有收到识别文字那一步 ----------
@@ -872,7 +896,7 @@ def test_voice_chain_needs_the_recognized_text_step(voice):
 
 def test_stage_two_prompt_leaves_segment_rules_to_the_tool():
     p = idf.build_prompt("全程", "", flow={"chain": []})
-    assert "6. segments 按点发生的先后把相邻两点连起来就行；先后说不准的写进 doubts，怎么量由码表处理。" in p
+    assert "要测的这条线怎么连由码表按流程定" in p and "位置和 first、last、once 由码表按流程放好" in p
     assert "不要串成前后相连的段" not in p and "每个都要有一段以它为终点" not in p
 
 
@@ -992,16 +1016,13 @@ def test_branch_hint_for_failure_if_points_after_the_block(tmp_path):
 
 
 def test_pick_follow_up_runs_even_with_other_failures(door):
-    first = _door_output()
-    first["steps"][1]["file"] = "main/net_auth.c"
-    first["steps"][1]["line"] = 180
-    fixed = _door_output(False)
-    fixed["steps"][1]["file"], fixed["steps"][1]["line"] = "main/net_auth.c", 180
+    first = _side_on_if(door, _door_output())
+    fixed = copy.deepcopy(_side_on_if(door, _door_output(False)))
     m = FakeLLM(js(first), followups=[js(fixed)])
     r = idf.identify(m, door, "从刷卡到开门")
-    assert len(m.asked) == 1 and "流程第 6 步标了输出" in m.asked[0]
+    assert len(m.asked) == 1 and "流程第 6 步标了输出" not in m.asked[0] and "第 61 行" in m.asked[0]  # 输出缺的那一个码表自己补了
     f = r["followups"][0]
-    assert f["fails_before"] == 2 and f["fails_after"] == 1 and any(s["id"] == "P6" for s in r["steps"])
+    assert f["fails_before"] == 1 and f["fails_after"] == 1 and [s["once"] for s in r["steps"] if s["chain_step"] == 6] == ["first", "last"]
 
 
 def test_output_marked_on_caller_and_callee_is_one_output(tmp_path):
