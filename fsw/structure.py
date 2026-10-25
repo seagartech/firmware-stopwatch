@@ -846,6 +846,19 @@ def _check_chain_step(proj, s, steps_by_n):
     return None
 
 
+def _check_side_on_role(s, by_n, steps):
+    """流程里标了角色（上传首包、首个结果、输出……）的那一步只有旁线上的点：那一步是主线，点不能都写成旁线。
+    这一步已经有主线点的，旁线从这里分出去（比如收到结果后顺带换表情）是正常的。"""
+    if s.get("line_of") != "side" or any(x.get("chain_step") == s.get("chain_step") and x.get("line_of") in ("start", "main") for x in steps):
+        return None
+    c = by_n.get(s.get("chain_step")) or {}
+    role = c.get("role")
+    role = "、".join(map(str, role)) if isinstance(role, list) else str(role or "").strip()
+    if not role:
+        return None
+    return f"流程第 {s.get('chain_step')} 步标了{role}，是主线上的一步，这一步的点却都写成了旁线（line_of side）：line_of 要写 main，并按先后接进主线的段里"
+
+
 def chain_no_line(c):
     try:
         return int(c.get("line")) if isinstance(c, dict) else None
@@ -1000,7 +1013,7 @@ def pick_fixes(root, steps, chain):
                 why = f"，而且在第 {fail[0]} 行「{_cond_text(fail[1])}」那一支里，是出错、失败才走的" if fail else ""
                 items.append(f"{s['id']}「{s.get('name')}」放在 {s['file']} 第 {s['line']} 行，这一行只有一个分号（空循环体）{why}：不能放在这里，"
                              "去掉这个点，或者放回流程里那一步那一行")
-            elif c["kind"] == "output":
+            elif c["kind"] in ("output", "line_of"):
                 items.append(f"{s['id']}：{c['text']}")
             elif c["kind"] == "chain" and ("不是那一步的位置" in c["text"] or "不在那一行所在的那一支里" in c["text"]):
                 t = _step_fix_text(proj, s, by_n.get(s.get("chain_step")) or {})
@@ -1090,6 +1103,9 @@ def repair_segments(root, steps, segments, chain):
     by = {s.get("id"): s for s in steps}
     segs = [dict(g) for g in segments or [] if isinstance(g, dict)]
     notes, kept = [], set()
+    for g in [g for g in segs if g.get("from") and g.get("from") == g.get("to")]:
+        segs.remove(g)  # 自己连到自己：量不出东西
+        notes.append(f"删掉「{g.get('name') or ''}」：两头是同一个点（{g.get('from')}），量不出东西")
 
     def name(i):
         return (by.get(i) or {}).get("name") or i
@@ -1201,6 +1217,9 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
                 t = _check_chain_step(proj, s, by_n)
                 if t:
                     s["chk"].append({"level": "fail", "kind": "chain", "text": t})
+                t = _check_side_on_role(s, by_n, steps)
+                if t:
+                    s["chk"].append({"level": "fail", "kind": "line_of", "text": t})
             c = by_n.get(s.get("chain_step")) if strict else None
             cl = chain_no_line(c)
             _check_one(proj, s, branches.get(s.get("chain_step"), ""), strict, cl if c and c.get("file") == s.get("file") else None)

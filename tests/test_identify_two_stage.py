@@ -584,7 +584,7 @@ def test_step_with_uncertain_order_is_not_chained_to_the_previous_step(tmp_path)
 
 def test_prompts_for_uncertain_order_output_and_two_mode_lines():
     c = idf.build_chain_prompt("全程")
-    assert "运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。" in c
+    assert "运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到运行时真正决定它的那一行代码（不是变量的默认初始值），再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。" in c
     assert "和上一步谁先谁后说不准的，after 写\"不确定\"。" in c
     assert "真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。" in c
     assert '"protocol": {"what": "哪种协议或通道；只有一种的写：无"' in c
@@ -1076,3 +1076,71 @@ def test_point_off_an_if_step_gets_the_branch_hint(tmp_path):
 def test_round2_pick_prompt_sentence():
     p = idf.build_pick_prompt({"chain": []}) if hasattr(idf, "build_pick_prompt") else idf.PICK_PROMPT
     assert "（不挪进那一句调用的函数里，也不挪到它引起、在别处执行的代码里）" in p
+
+
+# ---------- 第 3 轮：模式写默认初始值、全部放完标在转发通知那一步、首个结果只放旁线、自己连自己的段 ----------
+def _r3_flow(tmp_path):
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.h").write_text("class App {\n    int mode_ = 1;\n    const int kMax = 3;\n};\n", encoding="utf-8")
+    (tmp_path / "main/a.c").write_text("int Mode(void) {\n    return cfg ? 1 : 2;\n}\nvoid Run(void) {\n    heard();\n    send(p);\n    got(r);\n"
+                                        "    play(b);\n    mark_empty();\n    on_empty();\n    done();\n}\n", encoding="utf-8")
+    return {"trigger": "t", "upload": "有", "mode": {"what": "自动", "file": "main/a.h", "line": 2, "code": "int mode_ = 1;", "protocol": {"what": "无"}},
+            "detect": {"kind": "按键松开", "found": True},
+            "chain": [{"n": 1, "what": "松开", "file": "main/a.c", "line": 5, "code": "heard();", "func": "Run", "repeat": "once", "after": ""},
+                      {"n": 2, "what": "发出", "file": "main/a.c", "line": 6, "code": "send(p);", "func": "Run", "role": "上传首包、上传末包", "repeat": "repeat", "after": "接着"},
+                      {"n": 3, "what": "收到结果", "file": "main/a.c", "line": 7, "code": "got(r);", "func": "Run", "role": "首个结果", "repeat": "once", "after": "接着"},
+                      {"n": 4, "what": "放声", "file": "main/a.c", "line": 8, "code": "play(b);", "func": "Run", "role": "输出", "repeat": "repeat", "after": "接着"},
+                      {"n": 5, "what": "判断播放队列已放空（队列空）", "file": "main/a.c", "line": 9, "code": "mark_empty();", "func": "Run", "repeat": "once", "after": "接着"},
+                      {"n": 6, "what": "处理放空通知", "file": "main/a.c", "line": 10, "code": "on_empty();", "func": "Run", "role": "全部放完", "repeat": "once", "after": "接着"},
+                      {"n": 7, "what": "结束", "file": "main/a.c", "line": 11, "code": "done();", "func": "Run", "role": "最后结果", "repeat": "once", "after": "接着"}]}
+
+
+def test_mode_on_a_default_initializer_is_asked_about(tmp_path):
+    flow = _r3_flow(tmp_path)
+    fixes = []
+    bad = idf.check_chain(tmp_path, flow, "", fixes, fresh=True)[1]
+    assert any("默认初始值" in b for b in bad) and any("运行时给它赋值、或算出它的那一句" in f["text"] for f in fixes)
+    assert not any("默认初始值" in b for b in idf.check_chain(tmp_path, flow, "")[1])  # 旧结果不查
+    for line, code in ((3, "const int kMax = 3;"), ):
+        flow["mode"].update(line=line, code=code)  # 常量：不算
+        assert not any("默认初始值" in b for b in idf.check_chain(tmp_path, flow, "", [], fresh=True)[1])
+    flow["mode"].update(file="main/a.c", line=2, code="return cfg ? 1 : 2;")
+    assert not any("默认初始值" in b for b in idf.check_chain(tmp_path, flow, "", [], fresh=True)[1])
+
+
+def test_done_role_after_a_step_that_already_is_the_drain(tmp_path):
+    flow = _r3_flow(tmp_path)
+    fixes = []
+    bad = idf.check_chain(tmp_path, flow, "", fixes, fresh=True)[1]
+    assert any("全部放完标在了第 6 步，可前面第 5 步" in b for b in bad)
+    assert any("第 6 步去掉这个标记" in f["text"] for f in fixes)
+    flow["chain"][4]["role"], flow["chain"][5]["role"] = "全部放完", ""
+    assert not any("全部放完标在了" in b for b in idf.check_chain(tmp_path, flow, "", [], fresh=True)[1])
+
+
+def test_role_step_with_only_side_points_fails_and_is_asked(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    role_n = next(c["n"] for c in chain if "首个结果" in str(c.get("role") or ""))
+    mine = [p for p in pts if p["chain_step"] == role_n]
+    for p in mine:
+        p["line_of"] = "side"
+    structure.check(tmp_path, pts, [], chain=chain, strict=True)
+    assert all(any(c["kind"] == "line_of" and c["level"] == "fail" for c in p["chk"]) for p in mine)
+    assert any("line_of 要写 main" in t for t in structure.pick_fixes(tmp_path, pts, chain))
+    mine[0]["line_of"] = "main"  # 这一步有主线点：旁线从这里分出去是正常的
+    structure.check(tmp_path, pts, [], chain=chain, strict=True)
+    assert not any(c["kind"] == "line_of" for p in pts for c in p["chk"])
+
+
+def test_self_loop_segments_are_dropped(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    fixed, notes = structure.repair_segments(tmp_path, pts, [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P2", "name": "x"}], chain)
+    assert [(g["from"], g["to"]) for g in fixed if g["from"] == g["to"]] == [] and any("两头是同一个点" in t for t in notes)
+
+
+def test_round3_prompt_sentences():
+    c = idf.build_chain_prompt("全程")
+    assert "两样分别找到运行时真正决定它的那一行代码（不是变量的默认初始值），再查" in c
+    assert "链里标了角色的步骤上的点都是主线，写 main" in idf.PICK_PROMPT

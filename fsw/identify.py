@@ -39,7 +39,7 @@ PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是�
 4. 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。if、while、for、switch、else、case 那一行不能当 line：点会落在整个判断或循环外面，不在你想要的那一支里。只有 {{ 或 }} 的行、#if/#else/#endif 也不能写；只有放在块里最后一句之后才写 after；同一句只放一个点（上面第 2 条的首包、末包除外）。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。条件成立才执行的那一句（比如调用回调、发出数据），点写在 if 大括号里的第一句，不写在 if 那一行；首个结果、最后结果这类点也放在认出是这种消息之后那一支里，不放在消息分发入口。发送或调用本身写在 if 条件里的（比如 if (!send(x))），只能写 if 这一行、where 写 before。
 5. 点放在链写明的那一支里，出错、失败、重试那一支不放。外面套着条件、可能不走的，always 写 false，除非在 why 里说明正常每轮都满足。
 6. segments 按点发生的先后把相邻两点连起来就行；先后说不准的写进 doubts，怎么量由码表处理。
-7. 顺带发现的线（比如播放回复前先切换表情、开门前先亮灯）也列出来；它的分段除了从主线分出的那个点，用的点都要属于这条线本身（line_of 写 side；这条线的点可以不在事件链里）。同一件事有"收到"和"真正生效"两个时刻的，两个都列。
+7. 顺带发现的线（比如播放回复前先切换表情、开门前先亮灯）也列出来；它的分段除了从主线分出的那个点，用的点都要属于这条线本身（line_of 写 side；这条线的点可以不在事件链里；链里标了角色的步骤上的点都是主线，写 main）。同一件事有"收到"和"真正生效"两个时刻的，两个都列。
 {known}
 ## 边找边报
 每确认一个关键步骤，单独输出一行：找到：<中文名>（<文件>:<行号>）
@@ -96,7 +96,7 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 理清连续使用时的第二轮里，从设备察觉人做完输入，到最后一个结果（比如回复全部播完、门完全打开），设备依次做了哪些事。
 1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。从处理这个输入事件的函数开始，沿真实的调用关系往下追（谁调用了谁、事件交给了谁），不能挑一个名字像的函数就用。设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句（起点仍按第 2 条，不从按键、触摸这类触发动作往下追），再挑步骤；有上传却缺了上传首包、末包或首个结果的链是错的。
 2. 第一步用设备自己能察觉人做完输入的检测（比如静音或语音活动检测翻转、读卡完成、按键松开）。哪怕它只用来切换显示、指示灯，不上报，也算设备察觉到了，第一步就用它。确实找不到，在 detect 里写明找过哪里。
-3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。
+3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到运行时真正决定它的那一行代码（不是变量的默认初始值），再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。
 4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面；和上一步谁先谁后说不准的，after 写"不确定"。
 5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
 6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口，也不写之后转发、处理这个通知的地方），role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
@@ -313,6 +313,7 @@ def check_location(root, file, line):
 _NONE = ("无", "没有", "不用", "不需要", "none", "-")
 ROLES = ("上传首包", "上传末包", "首个结果", "最后结果")
 OUTPUT = "输出"  # 真正把输出送出去的那一句（第二步放 first、last 两个点）  # 事件链里必须标出的几步（不往外发数据的不要上传两项）
+_DRAIN_WORD = re.compile(r"放空|放完|排空|drain", re.I)
 DONE = "全部放完"  # 输出或播放队列放空、动作完成这类信号所在的那一步
 NEED_DONE = {"语音对话"}  # 这些类别：链里要有"全部放完"这一步，或者在 doubts 里写明没有这种信号
 
@@ -368,6 +369,16 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
             bad.append(f"决定模式和协议的那一行：{why}")
         else:
             mode = {**mode, "file": _rel(root, mode.get("file")), "line": n}
+            msrc = proj.file(mode["file"])
+            mcode = msrc.clines[n - 1] if msrc is not None and 1 <= n <= len(msrc.clines) else ""
+            if (fresh and msrc is not None and "=" in mcode and not re.search(r"\b(?:const|constexpr|define)\b", mcode)
+                    and structure.func_at(msrc, n) == (None, [])):
+                # 函数外面的变量默认值（比如成员的初始值）：运行时可能被改，不是真正决定模式的那一句
+                bad.append(f"决定模式的那一行（{mode['file']} 第 {n} 行）是函数外面一个变量的默认初始值，运行时可能被改：要写运行时真正决定它的那一句")
+                if fixes is not None:
+                    fixes.append({"bad": bad[-1], "text": f"mode 写的是 {mode['file']} 第 {n} 行「{msrc.lines[n - 1].strip()}」，这是函数外面一个变量的默认初始值，"
+                                                       "不是运行时真正决定模式的那一句：mode 的 file、line、code 改成运行时给它赋值、或算出它的那一句"
+                                                       "（你在 config 里已经找到的话就用那一句）"})
     elif not mwhat.lower().startswith(_NONE):
         bad.append("写了运行时走哪种模式、哪种协议，但没写真正决定它的那一行代码")
     doubts = [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else []
@@ -464,6 +475,16 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
         bad.append(f"输出标在了第 {'、'.join(map(str, same_out))} 步，它们是同一次输出（调用和被调用）：只能标在一步上")
         if fixes is not None:
             fixes.append({"bad": bad[-1], "text": f"输出标在了第 {'、'.join(map(str, same_out))} 步，它们是同一次输出（调用和被调用），只留一步（真正把输出送出去、且一轮里每段都经过的那一句），其余步骤去掉这个标记"})
+    done_at = next((c for c in chain if DONE in c["role"]), None)
+    said = [c["n"] for c in chain if done_at and c["n"] < done_at["n"] and DONE not in c["role"]
+            and _DRAIN_WORD.search(re.split(r"[（(]", c["what"])[0])]
+    if fresh and said:
+        # 前面的步骤已经写的是放空、放完：全部放完要标在判断出放完的那一支，不标在之后转发、处理这个通知的地方
+        bad.append(f"全部放完标在了第 {done_at['n']} 步，可前面第 {'、'.join(map(str, said))} 步写的已经是放空、放完：要标在判断出放完的那一支里那一步")
+        if fixes is not None:
+            fixes.append({"bad": bad[-1], "text": f"全部放完标在了第 {done_at['n']} 步，可第 {'、'.join(map(str, said))} 步写的已经是放空、放完。"
+                                                  "把全部放完标到其中判断出放完的那一支里那一步上，第 " + str(done_at["n"]) +
+                                                  " 步去掉这个标记（它是之后转发、处理这个通知的地方；属于下一轮的事就整步去掉）"})
     if raw and need:
         bad.append(f"事件链里没标出：{'、'.join(need)}（在对应步骤的 role 里写；确实不往外发数据的，upload 写「无」）")
         if fixes is not None:  # 改 role 不用再读源码：步骤已经在链里的，追问时只补标记
@@ -543,6 +564,10 @@ def parse(text, root, chain=None, strict=False):
                      found=[s["name"] for s in steps])
     if strict and data.get("chain"):  # 两步识别的新结果：段由码表按流程理顺（负段、串起来的先后说不准、没量到的最后结果）
         data["segments"], data["seg_repairs"] = structure.repair_segments(root, steps, data.get("segments"), data["chain"])
+        loops = [g for g in data.get("side_segments") or [] if isinstance(g, dict) and g.get("from") and g.get("from") == g.get("to")]
+        if loops:  # 自己连到自己的段量不出东西：去掉
+            data["side_segments"] = [g for g in data.get("side_segments") or [] if g not in loops]
+            data["seg_repairs"] = list(data["seg_repairs"]) + [f"删掉「{g.get('name') or ''}」：两头是同一个点（{g.get('from')}），量不出东西" for g in loops]
     structure.check(root, steps, data.get("segments"), data.get("side_segments"), data.get("chain"), strict=strict)  # 位置在不在之外，再看插下去落在什么结构里
     return {"ok": True, **data, "steps": steps, "warn": warn}
 
