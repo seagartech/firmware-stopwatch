@@ -808,6 +808,32 @@ def chain_no_line(c):
         return None
 
 
+END_ROLES = ("最后结果", "全部放完")
+
+
+def check_dangling(steps, segments, by_n):
+    """流程里标了最后结果、全部放完的那一步，它的点至少要有一段量到它（作为某一段的终点；先后说不准的从前面同一个点量起）。
+    一段都没连上的点量不出来，等于白放。返回 [(点 id, 说明)]，每一步只报一次。"""
+    ends = {g.get("to") for g in segments or [] if isinstance(g, dict)}
+    seen, out = set(), []
+    for s in steps:
+        n = s.get("chain_step")
+        c = by_n.get(n)
+        if not c or n in seen:
+            continue
+        role = str(c.get("role") or "")
+        tag = next((r for r in END_ROLES if r in role), None)
+        if not tag:
+            continue
+        mine = [x for x in steps if x.get("chain_step") == n]
+        if any(x.get("id") in ends for x in mine):
+            continue
+        seen.add(n)
+        out.append((s.get("id"), f"「{s.get('name')}」是流程里标了{tag}的第 {n} 步，但没有任何一段量到它：至少要有一段以它为终点"
+                                 "（和别的点先后说不准的，从前面同一个点量起），不然这一点量不出来"))
+    return out
+
+
 def check(root, steps, segments=None, side_segments=None, chain=None, strict=False):
     """逐个计时点做结构检查，结果写进 step["chk"]（[{level: fail/tip, kind, text}]）和 step["struct_ok"]。
     有硬失败的点可信度降成"低"。可以重复调用（缓存、沿用的结果也再查一遍），每次重新算，不会叠加。
@@ -850,6 +876,13 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
     except Exception as e:
         for s in steps[-1:]:
             s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查先后说不准的段时出错（{type(e).__name__}），请自己核对"})
+    try:
+        for sid, t in check_dangling(steps, [g for g in list(segments or []) + list(side_segments or []) if isinstance(g, dict)], by_n):
+            if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):
+                by[sid]["chk"].append({"level": "fail" if strict else "tip", "kind": "segment", "text": t})
+    except Exception as e:
+        for s in steps[-1:]:
+            s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查最后结果有没有段量到时出错（{type(e).__name__}），请自己核对"})
     try:
         for sid, t in check_order(proj, steps, [g for g in list(segments or []) + list(side_segments or []) if isinstance(g, dict)]):
             if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):

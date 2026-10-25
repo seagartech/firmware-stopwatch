@@ -647,3 +647,44 @@ def test_other_problems_mean_no_code_fix_follow_up(door):
     m = FakeLLM(js(d), followups=[DOOR_REPLY])
     r = idf.identify(m, door, "从刷卡到开门")
     assert not r["ok"] and r["kind"] == "bad_chain" and not m.asked and not r["followups"]
+
+
+# ---------- 标了最后结果、全部放完的点要有一段量到它；先把输入追到真正发出去的那一句 ----------
+def _end_project(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.c").write_text("void Run(void) {\n    begin();\n    drained();\n    finish();\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 2}, {"n": 2, "file": "main/a.c", "line": 3, "role": "全部放完"},
+             {"n": 3, "file": "main/a.c", "line": 4, "role": "最后结果"}]
+    pts = [{"id": f"P{i}", "chain_step": i, "name": f"第{i}步", "file": "main/a.c", "line": i + 1, "where": "before", "once": "once",
+            "line_of": "start" if i == 1 else "main", "loc_ok": True} for i in (1, 2, 3)]
+    return structure, chain, pts
+
+
+@pytest.mark.parametrize("strict,level", [(True, "fail"), (False, "tip")])
+def test_dangling_last_result_is_flagged(tmp_path, strict, level):
+    structure, chain, pts = _end_project(tmp_path)
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2", "name": "放完"}], chain=chain, strict=strict)
+    got = [c for c in pts[2]["chk"] if c["kind"] == "segment"]
+    assert [c["level"] for c in got] == [level] and "没有任何一段量到它" in got[0]["text"]
+    assert not [c for c in pts[1]["chk"] if c["kind"] == "segment"]
+
+
+def test_last_result_measured_from_a_common_earlier_point_passes(tmp_path):
+    structure, chain, pts = _end_project(tmp_path)
+    segs = [{"from": "P1", "to": "P2", "name": "放完"}, {"from": "P1", "to": "P3", "name": "结束"}]
+    structure.check(tmp_path, pts, segs, chain=chain, strict=True)
+    assert not [c for p in pts for c in p["chk"] if c["kind"] == "segment"]
+    side = [{"from": "P1", "to": "P3", "name": "旁线到它也算"}]
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], side, chain=chain, strict=True)
+    assert not [c for p in pts for c in p["chk"] if c["kind"] == "segment"]
+
+
+def test_prompts_trace_input_to_the_send_and_connect_end_points():
+    c = idf.build_chain_prompt("全程")
+    assert ("设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句，再挑步骤；"
+            "有上传却缺了上传首包、末包或首个结果的链是错的。") in c
+    p = idf.build_prompt("全程", "", flow={"chain": []})
+    assert "标了最后结果、全部放完的点，每个都要有一段以它为终点。" in p
+    for t in (c, p, idf.VOICE_HINT, idf.CARD_HINT):
+        assert "xiaozhi" not in t.lower() and "application.cc" not in t
