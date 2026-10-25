@@ -267,7 +267,8 @@ def real_scenario(page, standard, values=None):
             "point_names": {x["p"]: x["n"] for x in steps},
             "point_kinds": {x["p"]: x.get("kind") or "" for x in steps if x.get("felt")},
             "category": page.get("category") or "",
-            "last_points": [x["p"] for x in steps if x.get("felt") == "last" or x.get("once") == "last"],
+            # 一轮取最后一次的点：感觉到的最后一下、插成"记最后一次"的、码表有意设成每次都记的全部放完（回复分几句播，每句之间都放空一次）
+            "last_points": [x["p"] for x in steps if x.get("felt") == "last" or x.get("once") == "last" or x.get("whole")],
             "start_late": bool(page.get("startLate")), "start_note": page.get("startNote") or "",
             "optional": [x["p"] for x in steps if x.get("opt")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l"),

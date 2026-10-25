@@ -1060,7 +1060,7 @@ def _check_one(proj, s, branch="", strict=False, chain_line=None):
         else:
             s["chk"].append({"level": "fail", "kind": "branch",
                              "text": t + "。要放进这一支，参照句写这一支大括号里的第一句、where 写 before"})
-    t = check_repeat(proj, s["file"], src, line, where, once)
+    t = None if s.get("every_why") else check_repeat(proj, s["file"], src, line, where, once)  # 码表有意设成每次都记的（全部放完）：不提醒
     if t:
         s["chk"].append({"level": "tip", "kind": "repeat", "text": t})
     t = check_ifdef(proj, src, line)
@@ -1362,6 +1362,8 @@ def build_segments(steps, segments):
     其余从紧挨着的上一个点量起。先后说不准、最后结果和全部放完从哪儿量，再交给 repair_segments 理。返回 (段, [说明])。"""
     main = [x for x in steps if x.get("line_of") in ("start", "main")]
     model = [g for g in segments or [] if isinstance(g, dict)]
+    ids = {x.get("id") for x in steps}
+    dropped = {g.get("from") for g in model} - ids  # 模型连过、码表去掉了的点（比如起点之前就一直在跑的流水线中间那几步）
     out, notes = [], []
     for i, p in enumerate(main):
         if i == 0:
@@ -1378,7 +1380,8 @@ def build_segments(steps, segments):
             a = main[i - 1]
         mine = [g for g in model if g.get("to") == p.get("id")]
         g = next((g for g in mine if g.get("from") == a.get("id")), mine[0] if mine else None)
-        seg = {"from": a.get("id"), "to": p.get("id"), "name": (g or {}).get("name") or f"{a.get('name')}到{p.get('name')}",
+        gone = g is not None and g.get("from") != a.get("id") and g.get("from") in dropped  # 模型那段的起头点被去掉了：名字只说了后半截
+        seg = {"from": a.get("id"), "to": p.get("id"), "name": (not gone and (g or {}).get("name")) or f"{a.get('name')}到{p.get('name')}",
                "who": (g or {}).get("who") or "", "outside": bool((g or {}).get("outside"))}
         if g is None:
             seg["added"] = True

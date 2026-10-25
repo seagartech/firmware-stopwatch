@@ -881,6 +881,8 @@ def parse(text, root, chain=None, strict=False):
                      found=[s["name"] for s in steps])
     if strict and data.get("chain"):  # 两步识别的新结果：关键步骤上的点和主线的段由码表按流程放、连，再理顺（负段、先后说不准、没量到的最后结果）
         steps, pnotes = place_role_points(root, steps, data["chain"])
+        steps, snotes = drop_stream_points(steps, data["chain"])
+        pnotes = pnotes + snotes
         side_add, onotes = side_for_one_impl(root, steps, data["chain"], data.get("segments"))
         if side_add:
             data["side_segments"] = [g for g in data.get("side_segments") or [] if isinstance(g, dict)] + side_add
@@ -888,6 +890,7 @@ def parse(text, root, chain=None, strict=False):
         built, bnotes = structure.build_segments(steps, data.get("segments"))
         data["segments"], notes = structure.repair_segments(root, steps, built, data["chain"])
         data["seg_repairs"] = pnotes + bnotes + notes
+        data["rules"] = RULES_VER
         loops = [g for g in data.get("side_segments") or [] if isinstance(g, dict) and g.get("from") and g.get("from") == g.get("to")]
         if loops:  # 自己连到自己的段量不出东西：去掉
             data["side_segments"] = [g for g in data.get("side_segments") or [] if g not in loops]
@@ -897,6 +900,9 @@ def parse(text, root, chain=None, strict=False):
 
 
 POINT_ROLES = ROLES + (OUTPUT, DONE)
+# 码表放点、连段的规则版本：存下的两步识别结果版本不同，沿用时用存下的大模型回答按现在的规则重排一遍（不调大模型）
+# 2：去掉起点之前就一直在跑的流水线中间那几步；全部放完每次都记
+RULES_VER = 2
 
 
 def _want(roles, repeat):
@@ -1002,6 +1008,35 @@ def side_for_one_impl(root, steps, chain, segments):
                      f"它的点改成顺带那条线，从第 {caller} 步调用 {name} 的那一句量起；主线用第 {caller} 步")
     return added, notes
 
+def _roles_of(c):
+    roles = c.get("role") or []
+    return [r for r in POINT_ROLES if r in (roles if isinstance(roles, list) else str(roles))]
+
+
+def drop_stream_points(steps, chain):
+    """起点之后、第一个标了角色的步骤（比如上传首包、首个结果）之前，反复执行（逐帧、逐包）又没标角色的步骤：
+    这几步是起点之前就一直在跑的流水线（输入还在源源不断进来，比如录音一帧帧切好、压缩、排队）。
+    起点之后各自"第一次"处理的不是同一份数据（这一步的第一次可能是起点前那一帧，下一步的第一次是更早的那一帧），
+    两点之间量出来的不是这份数据走了多久，先后也说不准、会是负的（真测：音频帧交编码比编码好的包入队还晚 0.15 秒）。
+    这几步上的点去掉，前后两点直接连成一段量。返回 (点, [说明])。"""
+    by_n = {c["n"]: c for c in chain if isinstance(c, dict) and isinstance(c.get("n"), int)}
+    if not by_n:
+        return steps, []
+    first_n = min(by_n)
+    roled = sorted(n for n, c in by_n.items() if n != first_n and _roles_of(c))
+    if not roled:
+        return steps, []
+    stream = {n for n, c in by_n.items() if first_n < n < roled[0] and c.get("repeat") == "repeat" and not _roles_of(c)}
+    out, notes = [], []
+    for x in steps:
+        if x.get("chain_step") in stream and x.get("line_of") in ("start", "main"):
+            notes.append(f"去掉「{x.get('name')}」：这一步在起点之前就一直逐帧、逐包在跑（输入还在不断进来），"
+                         f"起点之后它第一次处理的和前后的点不是同一份数据，两点之间量不准、会是负的；前后两点直接连成一段量")
+            continue
+        out.append(x)
+    return out, notes
+
+
 def place_role_points(root, steps, chain):
     """第 1 步和标了角色的步骤上的点由码表放：反复执行的放 first、last 两个，一轮一次的放一个，都插在那一步那一行前面。
     模型在这一步写的点留着名字、felt 这些，只改位置和 first/last/once；多出来的去掉，要两个却只放了一个的补上另一个。
@@ -1065,6 +1100,10 @@ def place_role_points(root, steps, chain):
                     was = None
                 p.update(file=c["file"], line=line, func=c.get("func") or p.get("func") or "", where="before", once=k, code=code, loc_ok=True,
                          chain_step=n, line_of="start" if n == first_n else "main")
+                if k == "once" and n != first_n and DONE in _roles_of(c) and OUTPUT not in _roles_of(c):
+                    # 全部放完（播放队列放空、动作做完）：一轮里可能放空好几次（回复分几句播，每句之间都会放空一下），
+                    # 只记第一次就只量到第一句。每次都记，码表取这一轮最后那一次
+                    p["once"], p["every_why"] = "every", "done"
                 if was is None:
                     notes.append(f"补上第 {n} 步的点「{p['name']}」（{k}）")
                 elif was != (c["file"], line, k, n):
@@ -1112,7 +1151,8 @@ def to_page(r, what):
               "where": s["where"], "once": s["once"], "func": s["func"],
               "struct_ok": s.get("struct_ok", True), "chk": [{"level": c["level"], "text": c["text"]} for c in s.get("chk") or []],
               **({"note": s["doubt"]} if s["doubt"] else {}), **({} if s.get("always", True) else {"opt": True}),
-              **({"felt": s["felt"], "kind": s.get("kind") or ""} if s.get("felt") else {})} for s in r["steps"]]
+              **({"felt": s["felt"], "kind": s.get("kind") or ""} if s.get("felt") else {}),
+              **({"whole": True} if s.get("every_why") else {})} for s in r["steps"]]  # whole：一轮里报好几次，取最后那次（全部放完）
     ids = {s["p"] for s in steps}
     start, main, side = r.get("start") or {}, r.get("main") or {}, r.get("side")
     side_steps = [s["p"] for s in steps if s["line"] == "face"]
@@ -1346,6 +1386,12 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
     if reuse and f and f.exists():
         try:
             r = json.loads(f.read_text(encoding="utf-8"))
+            if r.get("strict") is True and r.get("rules") != RULES_VER and r.get("reply") and isinstance(r.get("chain"), list):
+                # 两步识别的结果：点和段是码表按规则放、连的。规则升级后（比如去掉起点前就一直在跑的流水线中间那几步、
+                # 全部放完改成每次都记）用存下的大模型回答按现在的规则重排一遍，不再调用大模型
+                again = parse(r["reply"], root, chain=r["chain"], strict=True)
+                if again.get("ok"):
+                    r = {**r, **{k: v for k, v in again.items() if k != "ok"}}
             # 沿用的结果也按现在的源码重新做一遍结构检查（存下时可能还没有这层检查，或者是改完再测挪过行号的）
             structure.check(root, r.get("steps") or [], r.get("segments"), r.get("side_segments"), r.get("chain"),
                             strict=r.get("strict") is True)  # 旧缓存没有这一项：照旧宽松

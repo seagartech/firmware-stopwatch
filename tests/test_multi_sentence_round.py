@@ -54,11 +54,49 @@ def log(name="raw.txt"):
     return (HERE / name).read_text(encoding="utf-8").splitlines()
 
 
+# ---- 1. 起点之前就在跑的流水线中间那几步 ----
+
+def test_identify_drops_points_on_steps_streaming_before_the_start():
+    r = reparse()
+    assert r["ok"]
+    steps = {s["id"]: s for s in r["steps"]}
+    assert not any(s.get("chain_step") in (3, 4) for s in r["steps"])  # 逐帧切帧交编码、编码入队：起点前就一直在跑
+    pairs = [(g["from"], g["to"]) for g in r["segments"]]
+    assert ("P2", "P5") in pairs and not any(a in ("P3", "P4") or b in ("P3", "P4") for a, b in pairs)
+    assert next(g for g in r["segments"] if (g["from"], g["to"]) == ("P2", "P5"))["name"] == "说完事件回调到上传首包"
+    assert any("音频帧交编码" in x and "同一份数据" in x for x in r["seg_repairs"])
+    # 回复那边逐包的几步（起点之后才开始）照旧在
+    assert {"P10", "P11", "P12", "P13", "P14"} <= set(steps)
+    assert structure.check_order(structure.Project(str(SRC)), r["steps"], r["segments"]) == []
 
 
+def test_steps_before_first_role_that_run_once_are_kept():
+    chain = [{"n": 1, "role": []}, {"n": 2, "repeat": "once", "role": []}, {"n": 3, "repeat": "repeat", "role": []},
+             {"n": 4, "repeat": "repeat", "role": ["上传首包"]}, {"n": 5, "repeat": "repeat", "role": []}]
+    steps = [{"id": f"P{n}", "name": f"s{n}", "chain_step": n, "line_of": "start" if n == 1 else "main"} for n in range(1, 6)]
+    out, notes = idf.drop_stream_points(steps, chain)
+    assert [s["id"] for s in out] == ["P1", "P2", "P4", "P5"]  # 只去第 3 步：在起点和第一个标了角色的步骤之间、反复执行、没角色
+    assert len(notes) == 1
+    side = [dict(steps[2], line_of="side")]
+    assert idf.drop_stream_points(side, chain)[0] == side  # 顺带那条线不管
 
 
+def test_reused_identify_result_is_reordered_by_current_rules_without_model(tmp_path):
+    d = saved()
+    old = {"ok": True, "strict": True, "reply": d["reply"], "chain": d["chain"], "what": d["what"],
+           "steps": [{"id": "P3", "name": "旧的", "file": "x", "line": 1, "line_of": "main", "once": "first"}], "segments": []}
+    f = idf._cache_file(tmp_path, "fp", d["what"], "p")
+    f.parent.mkdir(parents=True)
+    f.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
 
+    class NoModel:
+        def investigate(self, *a, **k):
+            raise AssertionError("不该调用大模型")
+
+    r = idf.identify_cached(NoModel(), str(SRC), d["what"], tmp_path, "fp", "p")
+    assert r["reused"] and r["calls"] == 0
+    ids = [s["p"] for s in r["page"]["steps"]]
+    assert "P3" not in ids and "P4" not in ids and "P5" in ids
 
 
 # ---- 2. 线的用时不把分出去的几段加起来 ----
@@ -89,4 +127,27 @@ def test_last_output_takes_the_last_sentence_of_the_reply():
                                      "why": "这段终点比起点先记到，两个计时点的先后对不上"}]  # 老的识别结果：重新识别后才没有（见下）
 
 
+def test_identify_marks_queue_empty_every_time_and_measure_takes_the_last():
+    r = reparse()
+    p15 = next(s for s in r["steps"] if s["id"] == "P15")
+    assert p15["once"] == "every"
+    assert not any(c["kind"] == "repeat" for c in p15.get("chk") or [])  # 码表有意每次都记：不提醒"考虑只记一次"
+    page = idf.to_page(r, saved()["what"])
+    assert next(s for s in page["steps"] if s["p"] == "P15").get("whole") is True
+    sc = scenario(page)
+    assert "P15" in sc["last_points"] and "P14" in sc["last_points"]
+    (rd,) = replay(sc, log("raw-after.txt"), 20)
+    assert rd["segs"]["P13-P15"] == round(23.182210 - 11.516684, 6)  # 整段回复放完，不是第一句（原来 0.125291）
+    assert rd["segs"]["P13-P14"] == round(23.122210 - 11.516684, 6)
+    assert rd["segs"]["P2-P5"] == round(10.339111 - 10.302389, 6)
+    assert all(v is None or v >= 0 for v in rd["segs"].values())
+    assert meas.suspects(rd, sc) == []
+    assert rd["ends"] == [1.214504, TRUE_TOTAL]
 
+
+def test_insert_prompt_asks_to_record_queue_empty_every_time():
+    from fsw import instrument
+    page = idf.to_page(reparse(), saved()["what"])
+    txt = instrument.build_prompt(page["steps"], "main/fw_stopwatch.h")
+    line = next(l for l in txt.splitlines() if l.startswith("- P15"))
+    assert "每次都记" in line
