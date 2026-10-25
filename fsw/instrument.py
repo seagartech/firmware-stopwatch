@@ -554,6 +554,47 @@ def place_reset(root, steps):
         return None
 
 
+def _drop_model_flush(data):
+    """码表放了每轮清零时，AI 写的"打印最后一次"（FSW_FLUSH_LAST）不用：清零前设备会把这一轮还没打印的"最后一次"补打一行
+    （FSW,LATE,…，见 fw_stopwatch.h 的 fsw_round_reset），试一次和多轮实测都把它当这个点的最后一次。
+    清零之后才发生的（设备先回到等待、后放完）两种写法都打不出来，所以去掉不少东西。返回去掉的那几条。"""
+    gone, keep = [], []
+    for x in data["inserts"]:
+        ls = x.get("lines") if isinstance(x, dict) else None
+        if not isinstance(ls, list) or not any(isinstance(l, str) and FLUSH_CALL.search(l) for l in ls):
+            keep.append(x)
+            continue
+        gone.append(x)
+        rest = [l for l in ls if not (isinstance(l, str) and FLUSH_CALL.search(l))]
+        if any(isinstance(l, str) and l.strip().startswith(("FSW_", "#include")) for l in rest):
+            keep.append({**x, "lines": rest})
+    data["inserts"] = keep
+    return gone
+
+
+def _outside_body(root, rel, after, lines, cache):
+    """插在第 after 行后面的计时点语句落在函数（或 lambda）外面：返回说明，否则 None。
+    只有注释、#include 的不查；文件里大括号对不上（宏藏了括号、#if 两边不配对）说不准，不拦。"""
+    if not any(isinstance(l, str) and l.strip().startswith("FSW_") for l in lines):
+        return None
+    from fsw import structure
+    try:
+        if rel not in cache:
+            cache[rel] = structure.Project(root).file(rel)
+        src = cache[rel]
+        if src is None or src.code.count("{") != src.code.count("}") or not 0 <= after <= len(src.lines) \
+                or not any(b["kind"] in ("function", "lambda") for b in src.blocks):
+            return None  # 大括号对不上、或一个函数都认不出来（比如只有片段）：说不准
+        at = src.starts[after] if after else 0
+        if any(src.blocks[i]["kind"] in ("function", "lambda") for i in src.chain(at)):
+            return None
+        near = src.lines[after - 1].strip()[:60] if after else ""
+        return (f"{rel} 第 {after} 行（「{near}」）后面插的语句落在函数外面，编译不过；"
+                "要插在函数的大括号里面（比如函数最后一个 } 之前）")
+    except Exception:  # 结构读不懂：不拦
+        return None
+
+
 def _use_tool_reset(data, root, steps):
     """把 AI 写的清零换成码表放的（见 place_reset）。返回 (换掉的那几条, 码表放的那一条或 None)。"""
     auto = place_reset(root, steps)
@@ -599,6 +640,7 @@ def parse_plan(text, root, steps, needs=None):
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
     out, problems, bad, moved, srcs = [], [], [], [], {}
     replaced, auto = _use_tool_reset(data, root, steps)
+    flushed = _drop_model_flush(data) if auto else []
 
     def reject(x, why):
         problems.append(why)
@@ -635,6 +677,10 @@ def parse_plan(text, root, steps, needs=None):
             reject(x, f"{rel} 第 {after} 行的附加值不是只读的：<code>{html.escape(badv[0][:80])}</code>"
                       "（附加值只能读已有的变量或不带参数的函数返回值）")
             continue
+        outside = _outside_body(root, p.relative_to(root).as_posix(), after, lines, srcs)
+        if outside:
+            reject(x, outside)
+            continue
         where = _once_place(root, rel, after, lines, steps)
         if where:
             reject(x, where)
@@ -666,6 +712,9 @@ def parse_plan(text, root, steps, needs=None):
                "to": auto["after_line"], "to_file": auto["file"],
                "lines": [str(l) for l in x.get("lines") or []], "why": f"每轮清零由码表放在{auto['where']}，不用 AI 写的位置"}
               for x in replaced] if auto else []
+    fixes += [{"kind": "dropped_by_tool", "step": str(x.get("step") or ""), "file": str(x.get("file") or ""),
+               "after_line": x.get("after_line"), "lines": [str(l) for l in x.get("lines") or [] if isinstance(l, str) and FLUSH_CALL.search(l)],
+               "why": "码表放的每轮清零会在清零前补打这一轮还没打印的「最后一次」，AI 写的打印最后一次不用"} for x in flushed]
     if auto and not replaced:
         fixes.append({"kind": "reset_by_tool", "step": "reset", "file": "", "after_line": None, "to": auto["after_line"],
                       "to_file": auto["file"], "lines": [], "why": f"AI 没写每轮清零，码表放在{auto['where']}"})
@@ -929,19 +978,51 @@ def diff_view(rec, steps):
 ERR = re.compile(r"([^\s:'\"]+\.(?:c|cc|cpp|cxx|h|hpp)):(\d+)(?::\d+)?:\s*(?:fatal )?error")
 
 
-def locate_error(text, rec, root):
-    """按报错的"文件:行号"对回是哪一处计时点；对不上返回 None。"""
+# 报错指到码表的头文件里（宏展开出来的）：编译器接着会说"在哪里展开的这个宏"，那才是插进去的那一句
+EXPAND = re.compile(r"([^\s:'\"]+\.(?:c|cc|cpp|cxx|h|hpp)):(\d+)(?::\d+)?:\s*note:\s*(?:in expansion of macro|expanded from macro)")
+HELPER_NAMES = {"reset": "每轮清零", "arm": "武装", "flush": "打印最后一次", "include": "#include"}
+
+
+def _rel(f, root):
+    try:
+        return Path(f).resolve().relative_to(root).as_posix() if f.startswith("/") else f.lstrip("./")
+    except ValueError:
+        return None
+
+
+def error_place(text, rec, root):
+    """按报错的"文件:行号"（报错在码表头文件里时，按"在哪里展开的这个宏"）对回是插进去的哪一处（计时点或辅助语句）。
+    返回 {"step", "file", "at"（原文件第几行后面）, "line"（插完后的行号）, "lines"}；对不上返回 None。"""
     root = Path(root).resolve()
-    for m in ERR.finditer(text or ""):
-        f, line = m.group(1), int(m.group(2))
-        try:
-            rel = Path(f).resolve().relative_to(root).as_posix() if f.startswith("/") else f.lstrip("./")
-        except ValueError:
-            continue
-        for sid, s in rec["steps"].items():
-            if s["file"] == rel and (line in s["lines"] or line == max(s["lines"]) + 1):
-                return sid
+    hits = []
+    for m in re.finditer(ERR.pattern + "|" + EXPAND.pattern, text or ""):
+        f, line = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        rel = _rel(f, root)
+        if rel and not rel.endswith("fw_stopwatch.h"):
+            hits.append((rel, int(line)))
+    for rel, line in hits:
+        for pl in rec.get("places") or []:
+            nl = pl.get("new_lines") or []
+            if pl["file"] == rel and nl and (line in nl or line == max(nl) + 1):
+                return {"step": pl["step"], "file": rel, "at": pl["at"], "line": line, "lines": pl.get("lines") or []}
+        for sid, s in rec["steps"].items():  # 老的插入记录没有 new_lines
+            if s["file"] == rel and s["lines"] and (line in s["lines"] or line == max(s["lines"]) + 1):
+                return {"step": sid, "file": rel, "at": s.get("at"), "line": line, "lines": []}
     return None
+
+
+def error_text(place, steps):
+    """编译报错对回的那一处，用大白话说是哪一句、放在哪（页面上显示，重插时也告诉 AI）。"""
+    sid = place["step"]
+    name = HELPER_NAMES.get(sid) or next((s.get("n") for s in steps if point_id(s, steps) == sid), None) or sid
+    what = f"「{name}」那一句" if sid in HELPER_NAMES else f"计时点 {sid}「{name}」"
+    return f"码表插的{what}放的地方不对，编译不过：{place['file']} 第 {place['at']} 行后面（插完后是第 {place['line']} 行）"
+
+
+def locate_error(text, rec, root):
+    """按报错的"文件:行号"对回是哪一处计时点（辅助语句不算）；对不上返回 None。"""
+    pl = error_place(text, rec, root)
+    return pl["step"] if pl and pl["step"] not in HELPERS else None
 
 
 def drop(root, plan, step, backup):
