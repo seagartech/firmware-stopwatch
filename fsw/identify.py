@@ -38,7 +38,7 @@ PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是�
 3. 点所在那一层是循环体（或逐帧、逐包反复调用的函数）时，它每圈都执行，不能写 once：要么放进循环里判断出"就是这一次"的那一支（这时写 once），要么写 first 或 last。不写 every。首包、首个结果这类，放在判断出"确实会被用上"之后。
 4. 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。if、while、for、switch、else、case 那一行不能当 line：点会落在整个判断或循环外面，不在你想要的那一支里。只有 {{ 或 }} 的行、#if/#else/#endif 也不能写；只有放在块里最后一句之后才写 after；同一句只放一个点（上面第 2 条的首包、末包除外）。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。条件成立才执行的那一句（比如调用回调、发出数据），点写在 if 大括号里的第一句，不写在 if 那一行；首个结果、最后结果这类点也放在认出是这种消息之后那一支里，不放在消息分发入口。发送或调用本身写在 if 条件里的（比如 if (!send(x))），只能写 if 这一行、where 写 before。
 5. 点放在链写明的那一支里，出错、失败、重试那一支不放。外面套着条件、可能不走的，always 写 false，除非在 why 里说明正常每轮都满足。
-6. 链里先后写着"不确定"的、两步都标了最后结果的，不要串成前后相连的段：各自从前面同一个点量起，写进 doubts。标了最后结果、全部放完的点，每个都要有一段以它为终点。
+6. segments 按点发生的先后把相邻两点连起来就行；先后说不准的写进 doubts，怎么量由码表处理。
 7. 顺带发现的线（比如播放回复前先切换表情、开门前先亮灯）也列出来；它的分段除了从主线分出的那个点，用的点都要属于这条线本身（line_of 写 side；这条线的点可以不在事件链里）。同一件事有"收到"和"真正生效"两个时刻的，两个都列。
 {known}
 ## 边找边报
@@ -343,6 +343,7 @@ def _where_code(root, file, line, code):
     return None, f"{_rel(root, file)} 第 {n} 行是「{real[:40]}」，和它抄的原文「{str(code).strip()[:40]}」对不上"
 
 
+_RECOGNIZED = re.compile(r"识别|转写|stt|asr|transcri|recogni", re.I)
 _SILENCE = re.compile(r"静音|语音活动|说话结束|语音结束|vad|silence|end[ _-]?of[ _-]?speech|speech[ _-]?end", re.I)
 
 
@@ -446,6 +447,10 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
         bad.append(f"事件链里没标出：{'、'.join(need)}（在对应步骤的 role 里写；确实不往外发数据的，upload 写「无」）")
     if raw and str(category or "").strip() in NEED_DONE and DONE not in roles and not any(DONE in d for d in doubts):
         bad.append(f"事件链里没有「{DONE}」这一步（输出或播放队列放空这类信号所在的那一支）；代码里确实没有这种信号的，在 doubts 里写明\"没有{DONE}的信号\"和找过哪里")
+    if (fresh and raw and str(category or "").strip() == "语音对话"
+            and not any(_RECOGNIZED.search(f"{re.split(r'[（(]', str(c.get('what') or ''))[0]} {c.get('code') or ''}") for c in raw)
+            and not any(re.search(r"没有[^，。；]{0,10}识别", str(d)) for d in doubts)):  # 只看这一步说的主句（括号里顺带提到的不算）
+        bad.append("语音类的链里没有「收到识别出的文字」这一步（设备收到识别结果的那一支）；协议里确实没有这种消息的，在 doubts 里写明\"没有识别文字的消息\"和找过哪里")
     flow = {"trigger": trigger, "upload": upload, "mode": mode, "detect": det, "chain": chain,
             "doubts": [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else [],
             "tips": tips}  # 码表判断不了、放行的地方（比如 lambda 里写的函数名），只提醒
@@ -512,6 +517,8 @@ def parse(text, root, chain=None, strict=False):
     if len(steps) < 2:
         return _fail("bad_reply", "大模型只给出了不到 2 个步骤，量不出用时。点\"重试\"再找一次，或者换个说法写\"测从什么到什么\"。",
                      found=[s["name"] for s in steps])
+    if strict and data.get("chain"):  # 两步识别的新结果：段由码表按流程理顺（负段、串起来的先后说不准、没量到的最后结果）
+        data["segments"], data["seg_repairs"] = structure.repair_segments(root, steps, data.get("segments"), data["chain"])
     structure.check(root, steps, data.get("segments"), data.get("side_segments"), data.get("chain"), strict=strict)  # 位置在不在之外，再看插下去落在什么结构里
     return {"ok": True, **data, "steps": steps, "warn": warn}
 

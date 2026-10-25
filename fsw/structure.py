@@ -808,13 +808,23 @@ def chain_no_line(c):
         return None
 
 
+def _same_line_steps(by_n, n):
+    """和第 n 步写在同一文件同一行的所有步骤（含它自己）：同一行拆成几步写的，算一步。"""
+    c = by_n.get(n) or {}
+    key = (c.get("file"), str(c.get("line")))
+    return {k for k, x in by_n.items() if (x.get("file"), str(x.get("line"))) == key} if c.get("file") else {n}
+
+
 def check_output(steps, by_n):
-    """流程里标了输出的那一步：首段、末段输出用它的第一次和最后一次执行，点要有 first 和 last 两个。返回 [(点 id, 说明)]。"""
-    out = []
+    """流程里标了输出的那一步：首段、末段输出用它的第一次和最后一次执行，点要有 first 和 last 两个。
+    同一文件同一行拆成几步写的算一步。返回 [(点 id, 说明)]。"""
+    out, done = [], set()
     for n, c in by_n.items():
-        if "输出" not in str(c.get("role") or ""):
+        if "输出" not in str(c.get("role") or "") or n in done:
             continue
-        mine = [x for x in steps if x.get("chain_step") == n and x.get("line_of") != "side"]
+        group = _same_line_steps(by_n, n)
+        done |= group
+        mine = [x for x in steps if x.get("chain_step") in group and x.get("line_of") != "side"]
         if not mine:
             continue
         have = {str(x.get("once") or "").strip().lower() for x in mine}
@@ -870,6 +880,98 @@ def pick_fixes(root, steps, chain):
 
 
 END_ROLES = ("最后结果", "全部放完")
+
+
+def _end_role(s, by_n):
+    c = by_n.get(s.get("chain_step")) or {}
+    return any(r in str(c.get("role") or "") for r in END_ROLES)
+
+
+def _end_base(p, steps, by_n):
+    """标了最后结果、全部放完的点从哪儿量起：按点的先后，往前找最近的一个主线点，跳过别的最后结果、全部放完的点，
+    也跳过"最后一次执行"的点（逐包、逐帧的最后一次和结束消息谁先谁后说不准）。找不到就是 None。"""
+    i = next((k for k, x in enumerate(steps) if x is p), None)
+    for x in reversed(steps[:i] if i is not None else []):
+        if x.get("line_of") not in ("start", "main") or _end_role(x, by_n):
+            continue
+        if str(x.get("once") or "").strip().lower() == "last":
+            continue
+        return x
+    return None
+
+
+def repair_segments(root, steps, segments, chain):
+    """两步识别的新结果：码表把主线的段理顺，模型只管选点。三种情况改成从前面同一个点量起：
+    1. 先后说不准的两步被串成一段（后一步写明和上一步先后不确定、或两步都标了最后结果）；
+    2. 同一次发送的"最后一次"连到"第一次"（负段）；
+    3. 标了最后结果、全部放完的那一步，没有任何一段量到它。
+    原来那段的起点换成"前一头是从哪儿量起的"（最后结果、全部放完的点按 _end_base 找）；换完和已有的段重复就删掉。
+    返回 (新的段, [改了什么])。"""
+    proj = Project(root)
+    by_n = {}
+    for i, c in enumerate(chain if isinstance(chain, list) else []):
+        if isinstance(c, dict):
+            try:
+                by_n[int(str(c.get("n", i + 1)).strip())] = c
+            except (TypeError, ValueError):
+                pass
+    by = {s.get("id"): s for s in steps}
+    segs = [dict(g) for g in segments or [] if isinstance(g, dict)]
+    notes = []
+
+    def name(i):
+        return (by.get(i) or {}).get("name") or i
+
+    for _ in range(3 * len(segs) + 3):
+        k, why, neg = None, "", False
+        for j, g in enumerate(segs):
+            if check_order(proj, steps, [g]):
+                k, why, neg = j, "同一次发送从最后一次连到第一次，是负的", True
+            elif check_uncertain(steps, [g], by_n):
+                k, why, neg = j, "两步先后说不准", False
+            if k is not None:
+                break
+        if k is None:
+            break
+        g = segs[k]
+        b = by.get(g.get("to"))
+        if b is not None and _end_role(b, by_n):
+            base = _end_base(b, steps, by_n)
+            new = base.get("id") if base else None
+        else:  # 负段：改从前一头的上一个点量起；先后说不准：顺着往回找，直到落在前一头那一步之前的点（和前一头各自从这个点量起）
+            new, na, hops = g.get("from"), (by.get(g.get("from")) or {}).get("chain_step"), 0
+            while new and (hops == 0 or (not neg and (by.get(new) or {}).get("chain_step") == na)) and hops <= len(segs):
+                new = next((x.get("from") for x in segs if x is not g and x.get("to") == new), None)
+                hops += 1
+        old = g.get("from")
+        if not new or new == g.get("to") or new == old:
+            segs.pop(k)
+            notes.append(f"删掉「{g.get('name') or ''}」{name(old)}→{name(g.get('to'))}：{why}")
+            continue
+        if any(x is not g and x.get("from") == new and x.get("to") == g.get("to") for x in segs):
+            segs.pop(k)
+            notes.append(f"删掉「{g.get('name') or ''}」{name(old)}→{name(g.get('to'))}：{why}（从{name(new)}量起的那段已经有了）")
+            continue
+        g["from"] = new
+        notes.append(f"「{g.get('name') or ''}」改成从「{name(new)}」量到「{name(g.get('to'))}」（原来从「{name(old)}」：{why}）")
+    ends = {g.get("to") for g in segs}
+    seen = set()
+    for p in steps:
+        n = p.get("chain_step")
+        if p.get("line_of") not in ("start", "main") or n in seen or not _end_role(p, by_n):
+            continue
+        mine = [x for x in steps if x.get("chain_step") == n and x.get("line_of") in ("start", "main")]
+        seen.add(n)
+        if any(x.get("id") in ends for x in mine):
+            continue
+        target = mine[-1]
+        base = _end_base(target, steps, by_n)
+        if base is None:
+            continue
+        segs.append({"from": base.get("id"), "to": target.get("id"), "name": f"到{target.get('name')}", "who": "", "outside": False, "added": True})
+        ends.add(target.get("id"))
+        notes.append(f"补上「{base.get('name')}」→「{target.get('name')}」：标了最后结果或全部放完的这一点原来没有段量到它")
+    return segs, notes
 
 
 def check_dangling(steps, segments, by_n):

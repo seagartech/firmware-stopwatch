@@ -589,7 +589,7 @@ def test_prompts_for_uncertain_order_output_and_two_mode_lines():
     assert "真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。" in c
     assert '"protocol": {"what": "哪种协议或通道；只有一种的写：无"' in c
     p = idf.build_prompt("全程", "", flow={"chain": []})
-    assert "链里先后写着\"不确定\"的、两步都标了最后结果的，不要串成前后相连的段：各自从前面同一个点量起，写进 doubts。" in p
+    assert "先后说不准的写进 doubts，怎么量由码表处理。" in p
     assert "标了输出的那一步也放 first、last 两个点。" in p
 
 
@@ -685,7 +685,7 @@ def test_prompts_trace_input_to_the_send_and_connect_end_points():
     assert ("设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句（起点仍按第 2 条，不从按键、触摸这类触发动作往下追），再挑步骤；"
             "有上传却缺了上传首包、末包或首个结果的链是错的。") in c
     p = idf.build_prompt("全程", "", flow={"chain": []})
-    assert "标了最后结果、全部放完的点，每个都要有一段以它为终点。" in p
+    assert "怎么量由码表处理" in p
     for t in (c, p, idf.VOICE_HINT, idf.CARD_HINT):
         assert "xiaozhi" not in t.lower() and "application.cc" not in t
 
@@ -779,3 +779,97 @@ def test_no_pick_follow_up_for_wrong_file(door):
     m = FakeLLM(js(d), followups=[DOOR_REPLY])
     r = idf.identify(m, door, "从刷卡到开门")
     assert r["ok"] and not m.asked and not r["followups"]
+
+
+# ---------- 段由码表理顺；输出同一行拆成几步算一步；语音类要有收到识别文字那一步 ----------
+def _seg_project(tmp_path):
+    (tmp_path / "main").mkdir(exist_ok=True)
+    (tmp_path / "main/a.c").write_text(
+        "void Run(void) {\n    heard();\n    send(pkt);\n    got_text();\n    reply_start();\n    play(buf);\n    drained();\n    reply_end();\n}\n",
+        encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 2}, {"n": 2, "file": "main/a.c", "line": 3, "role": "上传首包、上传末包"},
+             {"n": 3, "file": "main/a.c", "line": 4, "role": "首个结果", "after": "不确定"},
+             {"n": 4, "file": "main/a.c", "line": 5}, {"n": 5, "file": "main/a.c", "line": 6, "role": "输出"},
+             {"n": 6, "file": "main/a.c", "line": 7, "role": "全部放完"}, {"n": 7, "file": "main/a.c", "line": 8, "role": "最后结果", "after": "不确定"}]
+    spec = [("P1", 1, "once", "start"), ("P2", 2, "first", "main"), ("P3", 2, "last", "main"), ("P4", 3, "once", "main"),
+            ("P5", 4, "once", "main"), ("P6", 5, "first", "main"), ("P7", 5, "last", "main"), ("P8", 6, "once", "main"), ("P9", 7, "once", "main")]
+    pts = [{"id": i, "chain_step": n, "name": f"点{i}", "file": "main/a.c", "line": n + 1, "where": "before", "once": o, "line_of": lo, "loc_ok": True}
+           for i, n, o, lo in spec]
+    return chain, pts
+
+
+def test_tool_repairs_uncertain_negative_and_dangling_segments(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P3", "to": "P4"}, {"from": "P4", "to": "P5"},
+            {"from": "P5", "to": "P6"}, {"from": "P6", "to": "P7"}, {"from": "P7", "to": "P8"}, {"from": "P8", "to": "P9"}]
+    fixed, notes = structure.repair_segments(tmp_path, pts, segs, chain)
+    pairs = [(g["from"], g["to"]) for g in fixed]
+    assert ("P3", "P4") not in pairs and ("P1", "P4") in pairs  # 先后说不准：从上一步之前的那个点量起（和上一步各自量）
+    assert ("P8", "P9") not in pairs and ("P6", "P9") in pairs  # 两个最后结果：从前面最近的、不是"最后一次"的点量起
+    assert ("P7", "P8") in pairs  # 放空在末段输出之后，有因果先后的不动
+    assert len(notes) == 2
+    structure.check(tmp_path, pts, fixed, chain=chain, strict=True)
+    assert not [c for p in pts for c in p["chk"] if c["level"] == "fail"]
+
+
+def test_tool_adds_a_segment_to_a_dangling_last_result(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P2", "to": "P4"}, {"from": "P4", "to": "P5"},
+            {"from": "P5", "to": "P6"}, {"from": "P6", "to": "P7"}, {"from": "P7", "to": "P8"}]
+    fixed, notes = structure.repair_segments(tmp_path, pts, segs, chain)
+    assert ("P6", "P9") in [(g["from"], g["to"]) for g in fixed] and any("补上" in t for t in notes)
+
+
+def test_tool_fixes_last_to_first_of_the_same_send(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.c").write_text("static int tx(int p) {\n    return wire(p);\n}\nvoid Run(void) {\n    heard();\n    tx(1);\n    done();\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 5}, {"n": 2, "file": "main/a.c", "line": 6, "role": "上传首包、上传末包"},
+             {"n": 3, "file": "main/a.c", "line": 2}, {"n": 4, "file": "main/a.c", "line": 7, "role": "最后结果"}]
+    spec = [("P1", 1, 5, "once", "start"), ("P2", 2, 6, "first", "main"), ("P3", 2, 6, "last", "main"), ("P4", 3, 2, "first", "main"), ("P5", 4, 7, "once", "main")]
+    pts = [{"id": i, "chain_step": n, "name": i, "file": "main/a.c", "line": ln, "where": "before", "once": o, "line_of": lo, "loc_ok": True} for i, n, ln, o, lo in spec]
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P3", "to": "P4"}, {"from": "P4", "to": "P5"}]
+    fixed, notes = structure.repair_segments(tmp_path, pts, segs, chain)
+    pairs = [(g["from"], g["to"]) for g in fixed]
+    assert ("P3", "P4") not in pairs and ("P2", "P4") in pairs and "负的" in notes[0]
+
+
+def test_parse_repairs_segments_for_new_results(door):
+    d = copy.deepcopy(DOOR_RESULT)
+    d["segments"] = d["segments"][:2]  # 最后结果（开锁）没有段量到它
+    r = idf.parse(js(d), door, chain=DOOR_RESULT["chain"], strict=True)
+    assert ("P4", "P5") in [(g["from"], g["to"]) for g in r["segments"]] and r["seg_repairs"]
+    old = idf.parse(js(d), door, chain=DOOR_RESULT["chain"])  # 旧结果不动
+    assert ("P4", "P5") not in [(g["from"], g["to"]) for g in old["segments"]]
+
+
+def test_output_split_over_two_steps_on_the_same_line_counts_as_one(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    chain.insert(5, {"n": 55, "file": "main/a.c", "line": 6, "role": "输出"})
+    pts[6]["chain_step"] = 55
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
+    assert not [c for p in pts for c in p["chk"] if c["kind"] == "output"]
+
+
+def test_voice_chain_needs_the_recognized_text_step(voice):
+    flow = voice_flow()
+    msg = "收到识别出的文字"
+    assert any(msg in b for b in idf.check_chain(voice, flow, "语音对话", fresh=True)[1])
+    assert not any(msg in b for b in idf.check_chain(voice, flow, "语音对话")[1])
+    assert not any(msg in b for b in idf.check_chain(voice, flow, "刷卡终端", fresh=True)[1])
+    flow["chain"][0]["what"] = "收到服务器发回的识别结果"
+    assert not any(msg in b for b in idf.check_chain(voice, flow, "语音对话", fresh=True)[1])
+    flow = voice_flow()
+    flow["chain"][1]["what"] = "切到说话态（识别文字在这之前到）"  # 括号里顺带提到的不算
+    assert any(msg in b for b in idf.check_chain(voice, flow, "语音对话", fresh=True)[1])
+    flow["doubts"] = ["协议里没有下发识别文字的消息，找过消息分发那一支"]
+    assert not any(msg in b for b in idf.check_chain(voice, flow, "语音对话", fresh=True)[1])
+
+
+def test_stage_two_prompt_leaves_segment_rules_to_the_tool():
+    p = idf.build_prompt("全程", "", flow={"chain": []})
+    assert "6. segments 按点发生的先后把相邻两点连起来就行；先后说不准的写进 doubts，怎么量由码表处理。" in p
+    assert "不要串成前后相连的段" not in p and "每个都要有一段以它为终点" not in p

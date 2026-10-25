@@ -130,7 +130,7 @@ def test_identify_prompt_states_the_purpose_and_is_sent_to_the_model(door, what)
                 "插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）",
                 "要放进某一支，就写这一支大括号里的第一句", "只有放在块里最后一句之后才写 after",
                 "#if/#else/#endif 也不能写", "`stop();`、before", "点放在链写明的那一支里", "出错、失败、重试那一支不放",
-                "always 写 false，除非在 why 里说明正常每轮都满足", "不要串成前后相连的段", "用的点都要属于这条线本身",
+                "always 写 false，除非在 why 里说明正常每轮都满足", "怎么量由码表处理", "用的点都要属于这条线本身",
                 '"chain_step": 1', '"once": "once / first / last']:
         assert key in second, key
     assert '"chain": [{' not in second  # 链是给它的输入，不用再写一遍
