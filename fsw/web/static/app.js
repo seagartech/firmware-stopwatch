@@ -1057,6 +1057,7 @@ function diffViewReal(){const V=FSWJ.view;
  <div class="dlist">${one('hdr','＋',`新文件 ${V.header.split('/').pop()}`,`计时点工具，+${V.header_lines} 行；总开关也在这里`,[['+',`// 总开关：FW_STOPWATCH_ENABLE 改成 0，所有计时点变成空语句`],['+','#define FW_STOPWATCH_ENABLE 1'],['…',`（共 ${V.header_lines} 行）`]])}
  ${mine.map((x,i)=>one('m'+i,i+1,x.n,`${x.file.split('/').pop()} 第 ${x.at} 行 · +${x.added} 行`,x.lines)).join('')}
  ${help.length?one('help','＋',`辅助的 ${help.length} 处`,'加上计时点工具、每轮开始清零等',help.flatMap(x=>[['…',`${x.file.split('/').pop()} 第 ${x.at} 行后：${x.n}`],...x.lines.filter(l=>l[0]==='+')])):''}</div>
+ ${(FSWJ.checks||[]).map(c=>`<p class="note" style="margin:6px 0 0;color:var(--warn)">⚠ ${htmlEsc(c)}</p>`).join('')}
  ${FSWJ.notes&&FSWJ.notes.length?`<details style="margin-top:8px"><summary class="note">AI 插的时候提醒的 ${FSWJ.notes.length} 件事</summary><ol class="notes" style="font-size:14px">${FSWJ.notes.map(n=>`<li>${htmlEsc(n)}</li>`).join('')}</ol></details>`:''}
  <p class="note">总开关在 <span class="code">${V.header.split('/').pop()}</span>：关掉后固件和原版大小相同、逻辑相同。要完全回到原版，用"还原"，会逐字节比对。</p>`}
 function diffView(){if(realFlash()&&FSWJ&&FSWJ.view)return diffViewReal();const rows=live(),F=FF[scene];const num=p=>p.replace(/\D/g,'')||'0';

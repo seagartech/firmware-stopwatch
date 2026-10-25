@@ -33,6 +33,9 @@ HEADER = r"""// fw_stopwatch.h —— 固件码表的计时点工具（只记时
 // 每轮开始打印：FSW,RESET,<开机后微秒>,0
 // "记最后一次"的点到一轮开始时还没打印出来（比如设备先回到等待、后放空声音）：清零前先补打一行
 // FSW,LATE,P<编号>,<那次的微秒>,<这一轮几次>，码表只把它当"取最后一次"的终点用
+// 可能在清零之后才走到的点（FSW_TAIL_MASK，码表按流程先后找出来写进来）：清零后 FSW_TAIL_US 内、下一轮起点之前走到，
+// 还是上一轮的尾巴——"记最后一次"的直接补打一行 LATE，"每次都记"的照常打印；
+// 更晚才走到的"记最后一次"打一行 FSW,TAIL,P<编号>,<微秒>,0（每轮一次），只是告诉码表它晚了，不算数
 // 开销：取时间用 esp_timer_get_time()，只用原子读写，不分配内存、不加锁。
 #pragma once
 #include <stdint.h>
@@ -56,6 +59,14 @@ extern "C" {
 #define FSW_START_ID -1
 #endif
 
+// 可能在每轮清零之后才走到的点（第几位 = 编号）。0 = 没有（老的插法）：和以前一样
+#ifndef FSW_TAIL_MASK
+#define FSW_TAIL_MASK 0UL
+#endif
+#ifndef FSW_TAIL_US
+#define FSW_TAIL_US 1000000
+#endif
+
 // 几个文件共用同一份记录：weak 让链接时合成一份（C 和 C++ 文件都行）
 __attribute__((weak)) unsigned char fsw_done[FSW_MAX_ID];   // "一轮只记第一次"：这一轮记过没有
 __attribute__((weak)) int64_t fsw_last_us[FSW_MAX_ID];      // "记最后一次"：最后一次的时间
@@ -63,6 +74,8 @@ __attribute__((weak)) int32_t fsw_last_n[FSW_MAX_ID];       // "记最后一次"
 __attribute__((weak)) unsigned char fsw_armed;              // 这一轮是否已经"武装"
 __attribute__((weak)) unsigned char fsw_started;            // 这一轮的起点到了没有
 __attribute__((weak)) unsigned char fsw_pre[FSW_MAX_ID];    // 起点之前打过没有：起点之前每个点最多打一次
+__attribute__((weak)) int64_t fsw_tail_until;               // 上一轮（有起点的）清零后，到这个时间之前算它的尾巴
+__attribute__((weak)) int32_t fsw_tail_n[FSW_MAX_ID];       // 尾巴里"记最后一次"的点：接着上一轮数到第几次
 
 static inline int fsw_ok(int id) { return id >= 0 && id < FSW_MAX_ID; }
 
@@ -88,12 +101,19 @@ static inline void fsw_print_pre(int id, int32_t v) {
     if (!__atomic_exchange_n(&fsw_pre[id], (unsigned char)1, __ATOMIC_RELAXED)) fsw_print(id, esp_timer_get_time(), v);
 }
 
+// 上一轮的尾巴：这个点可能在清零之后才走到（FSW_TAIL_MASK），清零后还没过 FSW_TAIL_US、下一轮起点还没到
+static inline int fsw_tail(int id, int64_t now) {
+    return ((((unsigned long)FSW_TAIL_MASK) >> id) & 1UL) && fsw_before_start(id)
+        && now <= __atomic_load_n(&fsw_tail_until, __ATOMIC_RELAXED);
+}
+
 // 每次都记
 static inline void fsw_mark(int id, int32_t v) {
     if (!fsw_ok(id)) return;
     fsw_seen(id);
-    if (fsw_before_start(id)) { fsw_print_pre(id, v); return; }
-    fsw_print(id, esp_timer_get_time(), v);
+    int64_t now = esp_timer_get_time();
+    if (fsw_before_start(id) && !fsw_tail(id, now)) { fsw_print_pre(id, v); return; }
+    fsw_print(id, now, v);
 }
 
 // 一轮只记第一次。这一轮的起点还没到时打印一次、但不算"记过"：上一轮的尾巴（比如打断回答后上一句的结束消息）
@@ -132,7 +152,16 @@ static inline void fsw_mark_once_after(int id, int after_id, int32_t v) {
 static inline void fsw_keep_last(int id) {
     if (!fsw_ok(id)) return;
     fsw_seen(id);
-    __atomic_store_n(&fsw_last_us[id], esp_timer_get_time(), __ATOMIC_RELAXED);
+    int64_t now = esp_timer_get_time();
+    if (fsw_tail(id, now)) {  // 上一轮的尾巴（清零时补打过的那次之后又走到了）：直接补打这一次，不然下一轮起点会把它清掉
+        printf("FSW,LATE,P%d,%lld,%ld\n", id, (long long)now, (long)__atomic_add_fetch(&fsw_tail_n[id], 1, __ATOMIC_RELAXED));
+        return;
+    }
+    // 可能晚到的点在清零 FSW_TAIL_US 之后、下一轮起点之前才走到：打一行 TAIL 告诉码表（每轮一次），码表试一次时会点名它晚了多久
+    if (((((unsigned long)FSW_TAIL_MASK) >> id) & 1UL) && fsw_before_start(id) && __atomic_load_n(&fsw_tail_until, __ATOMIC_RELAXED)
+        && !__atomic_exchange_n(&fsw_pre[id], (unsigned char)1, __ATOMIC_RELAXED))
+        printf("FSW,TAIL,P%d,%lld,0\n", id, (long long)now);
+    __atomic_store_n(&fsw_last_us[id], now, __ATOMIC_RELAXED);
     __atomic_fetch_add(&fsw_last_n[id], 1, __ATOMIC_RELAXED);
 }
 // 起点之前不打印（那是这一轮开始之前的，比如唤醒提示音放完）
@@ -144,17 +173,22 @@ static inline void fsw_flush_last(int id) {
 }
 
 // 一轮开始：清零（"记最后一次"还没打印的先补打一行 LATE，不然这一轮就少了这个点；这一轮连起点都没有就不补打）
+// 这一轮有起点时，之后 FSW_TAIL_US 内可能在清零之后才走到的点（FSW_TAIL_MASK）还算这一轮的尾巴
 static inline void fsw_round_reset(void) {
+    int had = FSW_START_ID >= 0 && __atomic_load_n(&fsw_started, __ATOMIC_RELAXED);
     for (int i = 0; i < FSW_MAX_ID; i++) {
         __atomic_store_n(&fsw_done[i], (unsigned char)0, __ATOMIC_RELAXED);
         __atomic_store_n(&fsw_pre[i], (unsigned char)0, __ATOMIC_RELAXED);
         int64_t us = __atomic_exchange_n(&fsw_last_us[i], (int64_t)0, __ATOMIC_RELAXED);
         int32_t n = __atomic_exchange_n(&fsw_last_n[i], (int32_t)0, __ATOMIC_RELAXED);
         if (us && !fsw_before_start(i)) printf("FSW,LATE,P%d,%lld,%ld\n", i, (long long)us, (long)n);
+        __atomic_store_n(&fsw_tail_n[i], n, __ATOMIC_RELAXED);
     }
     __atomic_store_n(&fsw_armed, (unsigned char)0, __ATOMIC_RELAXED);
     __atomic_store_n(&fsw_started, (unsigned char)0, __ATOMIC_RELAXED);
-    printf("FSW,RESET,%lld,0\n", (long long)esp_timer_get_time());
+    int64_t now = esp_timer_get_time();
+    __atomic_store_n(&fsw_tail_until, had ? now + FSW_TAIL_US : (int64_t)0, __ATOMIC_RELAXED);
+    printf("FSW,RESET,%lld,0\n", (long long)now);
 }
 
 #ifdef __cplusplus
@@ -184,11 +218,17 @@ static inline void fsw_round_reset(void) {
 #endif  // FW_STOPWATCH_ENABLE
 """
 
-def header_text(start=None):
-    """计时点工具的内容：知道这一轮的起点是哪个计时点就写进去（"一轮只记第一次"的点起点之前不占名额）。"""
-    return HEADER if start is None else HEADER.replace("#define FSW_START_ID -1", f"#define FSW_START_ID {int(start)}", 1)
+def header_text(start=None, tail=None):
+    """计时点工具的内容：知道这一轮的起点是哪个计时点就写进去（"一轮只记第一次"的点起点之前不占名额）；
+    可能在每轮清零之后才走到的点（见 tail_points）写进 FSW_TAIL_MASK。"""
+    out = HEADER if start is None else HEADER.replace("#define FSW_START_ID -1", f"#define FSW_START_ID {int(start)}", 1)
+    ids = sorted({int(str(k).lstrip("P")) for k in tail or [] if str(k).lstrip("P").isdigit() and 0 < int(str(k).lstrip("P")) < 32})
+    if ids and start is not None:
+        out = out.replace("#define FSW_TAIL_MASK 0UL", f"#define FSW_TAIL_MASK 0x{sum(1 << i for i in ids):X}UL  // {' '.join(f'P{i}' for i in ids)}", 1)
+    return out
 
 
+LATE_SECS = 1  # 和 measure.LATE_US、头文件里的 FSW_TAIL_US 一样：清零之后这么久内到的尾巴还算上一轮
 PLAN_VER = 3  # 插入提示词改过（决策 118 加了 FSW_MARK_ONCE_AFTER；插点改成以"插在哪一句之前"为主）：之前存的插入方案不再沿用
 HELPERS = {"include", "reset", "arm", "flush"}
 LINE_OK = re.compile(r'^\s*(//[^\n]*|#include\s+["<][^"<>\n]*fw_stopwatch\.h[">]\s*(//[^\n]*)?|FSW_[A-Z_]+\([^;\n]*\);\s*(//[^\n]*)?)?$')
@@ -467,11 +507,138 @@ def _same_block(root, rel, after, s, cache):
         return None
 
 
-def round_end(steps):
-    """一轮的结束那一步：表里（按流程先后）最后一个"一轮只经过一次"、不是可选、不是起点的计时点。没有就 None。"""
-    st = next((s for s in steps if s.get("line") == "start"), None)
-    ends = [s for s in steps if s is not st and not s.get("opt") and s.get("once") == "once"]
+SIDE_LINE = "face"  # 顺带发现的那条线（见 identify.to_page）：不算进要测的这一轮怎么结束
+
+
+def _main_steps(steps):
+    return [s for s in steps if s.get("line") != SIDE_LINE]
+
+
+def _hinted(steps, hint):
+    """试一次看出来的"一轮其实到这一步才完"（{"end": P 编号, "name": 名字}）：步骤还在、名字对得上、一轮只走一次才用。"""
+    if not isinstance(hint, dict) or not hint.get("end"):
+        return None
+    s = next((s for s in _main_steps(steps) if point_id(s, steps) == hint["end"]), None)
+    if s and s.get("n") == hint.get("name") and s.get("once") == "once" and s.get("line") != "start":
+        return s
+    return None
+
+
+def round_end(steps, hint=None):
+    """一轮的结束那一步：要测的这条线上（顺带的那条不算），表里（按流程先后）最后一个"一轮只经过一次"、不是可选、不是起点的计时点。
+    试一次看出来一轮其实到后面某一步才完（hint，见 _hinted）就用那一步。没有就 None。"""
+    h = _hinted(steps, hint)
+    if h:
+        return h
+    main = _main_steps(steps)
+    st = next((s for s in main if s.get("line") == "start"), None)
+    ends = [s for s in main if s is not st and not s.get("opt") and s.get("once") == "once"]
     return ends[-1] if ends else None
+
+
+def _seg_pairs(flow):
+    out = []
+    for g in (flow or {}).get("segs") or []:
+        a, b = (g.get("a"), g.get("b")) if isinstance(g, dict) else (tuple(g) + (None, None))[:2]
+        if a and b:
+            out.append((str(a), str(b)))
+    return out
+
+
+def end_check(steps, flow=None):
+    """核对"一轮结束那一步"（round_end）和识别结果对不对得上，对不上就别按它放清零。返回 [大白话的矛盾]，空 = 对得上。
+    flow：{"end": 识别时说这条线到哪一步结束（名字）, "segs": 分段 [{a, b}], "hint": 试一次看出来的结束}。
+    - 识别说的结束那一步是一轮只走一次的、不是可选的，却不是码表挑的那一步（它后面还有一轮只走一次的步骤）；
+    - 分段里结束那一步后面还接着一轮只走一次的步骤；
+    - 分段说的先后和步骤表里排的先后，在结束那一步上正好相反。
+    一轮会走好几次的步骤（比如"播放全部放完"）是结束：不算矛盾，它可能在清零之后才走到，见 tail_points。"""
+    flow = flow or {}
+    end = round_end(steps, flow.get("hint"))
+    if not end or _hinted(steps, flow.get("hint")):
+        return []
+    main = _main_steps(steps)
+    by_p = {s["p"]: s for s in main}
+    order = [s["p"] for s in main]
+    out = []
+    name = str(flow.get("end") or "").strip()
+    named = next((s for s in main if str(s.get("n") or "").strip() == name), None) if name else None
+    if named is not None and named is not end and named.get("once") == "once" and not named.get("opt") and named.get("line") != "start":
+        later = "在它前面" if order.index(named["p"]) > order.index(end["p"]) else "在它后面"
+        out.append(f"识别时说这一轮到「{name}」结束，可按步骤先后，一轮只走一次的最后一步是「{end['n']}」（{later}），两边对不上")
+    for a, b in _seg_pairs(flow):
+        if a == end["p"] and b in by_p and by_p[b].get("once") == "once" and not by_p[b].get("opt") and by_p[b].get("line") != "start":
+            out.append(f"分段里「{end['n']}」后面还接着一轮只走一次的「{by_p[b]['n']}」，说明「{end['n']}」不是一轮的最后一步")
+        elif end["p"] in (a, b) and a in by_p and b in by_p and order.index(a) > order.index(b):
+            out.append(f"分段说「{by_p[a]['n']}」在「{by_p[b]['n']}」前面，可步骤表里排的先后正好反过来")
+    return list(dict.fromkeys(out))
+
+
+def tail_points(steps, flow=None):
+    """可能在每轮结束那一步之后才走到的点（清零之后才打出来，会算不进这一轮）。只看流程，不认名字：
+    - 步骤表里排在结束那一步后面的（要测的这条线上）；
+    - 一轮会走好几次的（"记最后一次""每次都记"）：从它到结束那一步之间，没有一轮只走一次的步骤卡着
+      （有的话，它最后那次一定在那一步之前），最后那次和结束谁先谁后流程说不准，比如最后一段声音还在放、设备已经回到等待；
+    - 分段里它是一段的终点、后面不再接别的（和结束那一步并排的终点）。
+    起点、结束那一步本身、"一轮只记第一次"的不算（第一次一定在结束之前）。返回 [step]，按步骤表的先后。"""
+    flow = flow or {}
+    end = round_end(steps, flow.get("hint"))
+    main = _main_steps(steps)
+    if end is None or end not in main:
+        return []
+    i = main.index(end)
+    pairs = _seg_pairs(flow)
+    heads = {a for a, _ in pairs}
+    sinks = {b for _, b in pairs if b not in heads}
+    out = []
+    for k, s in enumerate(main):
+        if s is end or s.get("line") == "start":
+            continue
+        if k > i:
+            out.append(s)
+        elif s.get("once") in ("last", "every") and all(x is end or x.get("opt") or x.get("once") in ("last", "every", "first")
+                                                         for x in main[k + 1:i + 1]):
+            out.append(s)
+        elif s.get("once") != "first" and s["p"] in sinks and pairs:
+            out.append(s)
+    return out
+
+
+def _before_reset(root, s, auto):
+    """这个点在码表放的清零那一句之前、同一个函数里按顺序执行（不在循环里）：一定先于清零。看不出来返回 False。"""
+    from fsw import structure
+    try:
+        if (s.get("path") or s.get("f")) != auto["file"]:
+            return False
+        src = structure.Project(root).file(auto["file"])
+        line = int(s.get("l"))
+        if src is None or not src.balanced or line > auto["after_line"]:
+            return False
+        a = src.pos(line, s.get("where") or "before")
+        b = src.starts[auto["after_line"]] if auto["after_line"] < len(src.starts) else len(src.code)
+        la, ia, _ = src.context(a)
+        lb, ib, _ = src.context(b)
+        ca, cb = src.chain(a), src.chain(b)
+        # 点所在的那一块包着清零（清零在它里面、或更深的一支里），不是旁边已经关上的另一支；点不直接在 switch 里（各 case 互斥）
+        return ia is not None and ia == ib and not la and a < b and bool(ca) and ca[0] in cb \
+            and not src.blocks[ca[0]]["head"].startswith("switch")
+    except Exception:
+        return False
+
+
+def after_reset(root, steps, auto, flow=None):
+    """核对码表放的清零：这一轮哪几个点可能在清零之后才打出来。按流程先后挑出可能晚于结束的点（tail_points），
+    同一个函数里清零之前按顺序执行的算核对过了。返回 [{"step", "name", "kind", "why"}]。"""
+    out = []
+    end = round_end(steps, (flow or {}).get("hint"))
+    for s in tail_points(steps, flow):
+        if auto and _before_reset(root, s, auto):
+            continue
+        kind = {"last": "last", "every": "every"}.get(s.get("once"), "once")
+        why = ("步骤表里排在每轮结束那一步后面" if _main_steps(steps).index(s) > _main_steps(steps).index(end) else
+               "一轮会走好几次，最后那次和每轮结束谁先谁后流程里说不准" if kind != "once" else
+               "和每轮结束那一步并排（分段里是另一段的终点），谁先谁后说不准")
+        out.append({"step": point_id(s, steps), "name": s.get("n"), "kind": kind, "why": why})
+    return out
 
 
 def _indent(src, line):
@@ -488,7 +655,43 @@ def _next_stmt(src, line):
     return None
 
 
-def _state_case(src, rel, first, line):
+def _reach(root, calls, targets, depth=3, limit=60):
+    """从这几个函数出发，顺着函数体里的调用往下最多 depth 层，走得到 targets 里的哪几个函数（按名字，只看文本，不认文件名）。"""
+    from fsw import structure
+    if root is None:
+        return set()
+    proj = structure.Project(root)
+    raws = {}
+    for rel in proj.sources():
+        try:
+            raws[rel] = (proj.root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+    short = lambda n: (n or "").split("::")[-1]
+    want = {short(t): t for t in targets}
+    got, seen, cur = set(), set(), [short(c) for c in calls]
+    for _ in range(depth + 1):
+        nxt = []
+        for name in cur:
+            if name in seen or len(seen) > limit:
+                continue
+            seen.add(name)
+            if name in want:
+                got.add(want[name])
+            pat = re.compile(rf"(?<![\w]){re.escape(name)}\s*\(")
+            for rel, raw in raws.items():
+                if not pat.search(raw):
+                    continue
+                f = proj.file(rel)
+                for b in f.blocks if f is not None else []:
+                    if b["kind"] == "function" and short(b["name"]) == name:
+                        nxt += [n for n in re.findall(r"(?<![\w])([A-Za-z_]\w*)\s*\(", f.code[b["open"]:b["close"]])
+                                if n not in structure.KEYWORDS]
+        cur = list(dict.fromkeys(nxt))
+    return got
+
+
+def _state_case(src, rel, first, line, root=None):
     """结束那一句是"把状态设成某个值"（参数里有个名字，同一个文件里正好有一处 case 这个名字:）：清零放进这个 case 的第一句前面——
     进入这个状态的每条路（自动、手动、唤醒）都经过它，一轮一次。返回 (插在第几行后面, 缩进, 说明) 或 None。"""
     from fsw import structure
@@ -502,6 +705,14 @@ def _state_case(src, rel, first, line):
         cm = re.match(r"\s*case\s+(?:[\w:]*::)?([A-Za-z_]\w*)\s*:", c)
         if cm and cm.group(1) in names:
             hits.append((k, cm.group(1), c[cm.end():].strip()))
+    if len(hits) > 1:  # 好几处 case 这个值：挑结束那一句调用的函数（往下最多三层）走得到的那个函数里的
+        calls = [n for n in re.findall(r"(?<![\w])([A-Za-z_]\w*)\s*\(", stmt) if n not in structure.KEYWORDS]
+        reach = _reach(root, calls, {structure.func_at(src, k)[0] for k, _, _ in hits} - {None})
+        mine = [h for h in hits if structure.func_at(src, h[0])[0] in reach]
+        if len(mine) != 1:
+            return {"unsure": f"{rel} 里有 {len(hits)} 处「case {hits[0][1]}:」，从「{src.lines[first - 1].strip()[:50]}」"
+                              f"{'一处都看不出走得到' if not mine else '好几处都走得到'}，说不准放哪一处"}
+        hits = mine
     if len(hits) != 1:
         return None
     k, name, rest = hits[0]
@@ -516,14 +727,23 @@ def _state_case(src, rel, first, line):
     return s1 - 1, _indent(src, s1), f"{rel} 第 {k} 行「case {name}:」这一支（进入这个状态时走一次）"
 
 
-def place_reset(root, steps):
+def place_reset(root, steps, flow=None, warn=None):
     """每轮清零由码表按找到的关键步骤放，不用 AI 写的位置。一轮的结束那一步（见 round_end）：
     - 它那一句是把状态设成某个值、同一个文件里正好有一处处理这个值的 case：放进那个 case 的第一句前面；
     - 否则放在结束那一步的计时点紧后面（同一块、同一个位置）。
     放好后照样用 AI 插法的那几条检查核对（不在一直转的地方、不在函数开头分支前）；说不准就返回 None（用 AI 的位置，加一句提醒）。
+    结束那一步和识别结果对不上（见 end_check）：不放，返回 None，矛盾写进 warn。
+    试一次看出来一轮其实到后面某一步才完（flow["hint"]）：放在那一步那一句的紧后面。
     返回 {"file", "after_line", "lines", "where"}。只看结构和表里的步骤，不认文件名、函数名。"""
     from fsw import structure
-    end = round_end(steps)
+    warn = [] if warn is None else warn
+    flow = flow or {}
+    bad = end_check(steps, flow)
+    if bad:
+        warn += bad
+        return None
+    end = round_end(steps, flow.get("hint"))
+    hinted = _hinted(steps, flow.get("hint")) is not None
     if not end:
         return None
     rel = str(end.get("path") or end.get("f") or "")
@@ -539,9 +759,15 @@ def place_reset(root, steps):
         last = line
         while last < len(src.clines) and structure._UNFINISHED.search(src.clines[last - 1].rstrip()):
             last += 1
-        got = _state_case(src, rel, first, last)
+        got = _state_case(src, rel, first, last, root) if not hinted else None
+        if isinstance(got, dict):  # 好几处 case、说不准：照旧放在结束那一步旁边，提醒一句
+            warn.append(got["unsure"] + f"，清零放在「{end['n']}」那一句旁边")
+            got = None
         if got:
             after, ind, place = got
+        elif hinted and not re.match(r"(?:return|break|continue|goto)\b", src.clines[first - 1].strip()):
+            # 试一次看出来的：一轮到这一步才完，清零放在它那一句的紧后面（那一句是 return / break 的话放它前面，后面执行不到）
+            after, ind, place = last, _indent(src, first), f"{rel} 第 {last} 行「{end['n']}」那一句后面（试一次看出来一轮到这一步才完）"
         elif where != "after":
             after, ind, place = first - 1, _indent(src, first), f"{rel} 第 {first} 行「{end['n']}」那一句前面（这一轮结束的地方）"
         else:
@@ -556,8 +782,8 @@ def place_reset(root, steps):
 
 def _drop_model_flush(data):
     """码表放了每轮清零时，AI 写的"打印最后一次"（FSW_FLUSH_LAST）不用：清零前设备会把这一轮还没打印的"最后一次"补打一行
-    （FSW,LATE,…，见 fw_stopwatch.h 的 fsw_round_reset），试一次和多轮实测都把它当这个点的最后一次。
-    清零之后才发生的（设备先回到等待、后放完）两种写法都打不出来，所以去掉不少东西。返回去掉的那几条。"""
+    （FSW,LATE,…，见 fw_stopwatch.h 的 fsw_round_reset），试一次和多轮实测都把它当这个点的最后一次；
+    清零之后不久才发生的（设备先回到等待、后放完），可能晚到的点（FSW_TAIL_MASK）设备照样补打。去掉不少东西。返回去掉的那几条。"""
     gone, keep = [], []
     for x in data["inserts"]:
         ls = x.get("lines") if isinstance(x, dict) else None
@@ -572,9 +798,24 @@ def _drop_model_flush(data):
     return gone
 
 
+UNREADABLE = "大括号对不上（多半是宏或编译开关把括号藏起来了），码表看不懂这个文件的结构，插的位置在不在函数里、在不在对应那一句的同一块里没核对"
+
+
+def _unchecked(root, rel, cache):
+    """这个文件的结构码表看不懂（大括号配不上）：返回说明，看得懂返回 None。"""
+    from fsw import structure
+    try:
+        if rel not in cache:
+            cache[rel] = structure.Project(root).file(rel)
+        src = cache[rel]
+        return UNREADABLE if src is not None and not src.balanced else None
+    except Exception:
+        return "码表读这个文件的结构时出错，插的位置没核对"
+
+
 def _outside_body(root, rel, after, lines, cache):
     """插在第 after 行后面的计时点语句落在函数（或 lambda）外面：返回说明，否则 None。
-    只有注释、#include 的不查；文件里大括号对不上（宏藏了括号、#if 两边不配对）说不准，不拦。"""
+    只有注释、#include 的不查；文件里大括号对不上（宏藏了括号、#if 两边不配对）说不准，不拦（parse_plan 记"没核对"）。"""
     if not any(isinstance(l, str) and l.strip().startswith("FSW_") for l in lines):
         return None
     from fsw import structure
@@ -582,7 +823,7 @@ def _outside_body(root, rel, after, lines, cache):
         if rel not in cache:
             cache[rel] = structure.Project(root).file(rel)
         src = cache[rel]
-        if src is None or src.code.count("{") != src.code.count("}") or not 0 <= after <= len(src.lines) \
+        if src is None or not src.balanced or not 0 <= after <= len(src.lines) \
                 or not any(b["kind"] in ("function", "lambda") for b in src.blocks):
             return None  # 大括号对不上、或一个函数都认不出来（比如只有片段）：说不准
         at = src.starts[after] if after else 0
@@ -595,9 +836,9 @@ def _outside_body(root, rel, after, lines, cache):
         return None
 
 
-def _use_tool_reset(data, root, steps):
+def _use_tool_reset(data, root, steps, flow=None, warn=None):
     """把 AI 写的清零换成码表放的（见 place_reset）。返回 (换掉的那几条, 码表放的那一条或 None)。"""
-    auto = place_reset(root, steps)
+    auto = place_reset(root, steps, flow, warn)
     if not auto:
         return [], None
     mine, keep = [], []
@@ -624,7 +865,7 @@ def _use_tool_reset(data, root, steps):
     return mine, auto
 
 
-def parse_plan(text, root, steps, needs=None):
+def parse_plan(text, root, steps, needs=None, flow=None):
     """读 AI 给的插入清单，逐条核对。只能插计时点语句、注释和 #include，别的代码一行都不插。
     不合规的那几条（比如夹带了 if 判断）：去掉以后每个计时点都还在、留下的都能照常工作，就只去掉这几条，其余照插，
     去掉了什么写进 fixes 和说明；会缺计时点（或缺它要的武装、打印、清零那一句），整份不用（一个文件都不改），
@@ -639,8 +880,10 @@ def parse_plan(text, root, steps, needs=None):
         header = default_header(root)
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
     out, problems, bad, moved, srcs = [], [], [], [], {}
-    replaced, auto = _use_tool_reset(data, root, steps)
+    warn = []  # 每轮结束那一步和识别结果对不上、好几处 case 说不准：照旧插，说清楚
+    replaced, auto = _use_tool_reset(data, root, steps, flow, warn)
     flushed = _drop_model_flush(data) if auto else []
+    unchecked = {}  # 结构看不懂、没核对位置的文件
 
     def reject(x, why):
         problems.append(why)
@@ -677,6 +920,9 @@ def parse_plan(text, root, steps, needs=None):
             reject(x, f"{rel} 第 {after} 行的附加值不是只读的：<code>{html.escape(badv[0][:80])}</code>"
                       "（附加值只能读已有的变量或不带参数的函数返回值）")
             continue
+        un = _unchecked(root, p.relative_to(root).as_posix(), srcs) if any(isinstance(l, str) and l.strip().startswith("FSW_") for l in lines) else None
+        if un:
+            unchecked.setdefault(p.relative_to(root).as_posix(), {"file": p.relative_to(root).as_posix(), "why": un, "steps": []})["steps"].append(step)
         outside = _outside_body(root, p.relative_to(root).as_posix(), after, lines, srcs)
         if outside:
             reject(x, outside)
@@ -722,6 +968,18 @@ def parse_plan(text, root, steps, needs=None):
     notes += [f"每轮清零由码表放在{auto['where']}（{auto['file']} 第 {auto['after_line']} 行后面），AI 写的清零没用"] if auto else \
         ["码表没找到能确定放每轮清零的地方，用的是 AI 给的位置（已经核对过不在一直转的地方）；试一次时要是每轮在半路被清零，码表会说"] \
         if any(RESET_CALL.search(l) for x in out for l in x["lines"] if isinstance(l, str)) else []
+    if warn and not auto:
+        fixes.append({"kind": "reset_end_unsure", "step": "reset", "file": "", "after_line": None, "lines": [], "why": "；".join(warn)})
+        notes.append("每轮结束是哪一步说不准（" + "；".join(warn) + "），码表没自己放清零，用的是 AI 给的位置；试一次时要是每轮半路被清零，码表会说")
+    elif warn:
+        notes += [f"提醒：{w}" for w in warn]
+    tail = after_reset(root, steps, auto, flow) if auto else []
+    if tail:
+        names = "」「".join(x["name"] for x in tail)
+        notes.append(f"「{names}」可能在每轮清零之后才打出来（{tail[0]['why']}）：清零后 {LATE_SECS} 秒内走到的码表照样记回这一轮"
+                     f"（设备上「记最后一次」的会补打出来）；试一次时会核对，晚过 {LATE_SECS} 秒会点名")
+    for u in unchecked.values():
+        notes.append(f"{u['file']}：{u['why']}（这里插了 {'、'.join(u['steps'])}）；照样插了，编译、试一次会再核对")
     notes += [f"码表把 {m['step']} 从 {m['file']} 第 {m['after_line']} 行后面挪到第 {m['to']} 行后面：{m['why']}" for m in moved]
     notes += [f"码表去掉了 AI 多加的一处（{b['file']} 第 {b['after_line']} 行后面，{b['step']}）：{b['why']}。"
               "只能插计时点、注释和 #include；去掉后每个计时点都还在" for b in bad]
@@ -738,7 +996,10 @@ def parse_plan(text, root, steps, needs=None):
                      "what": need["what"]}
     st = next((s for s in steps if s.get("line") == "start"), steps[0] if steps else None)  # 一轮的起点（和场景里一样）
     start = number(st["p"], steps) if st and f"P{number(st['p'], steps)}" in {x["step"] for x in out} else None
-    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes}
+    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes,
+            "tail": tail if start is not None else [], "unchecked": list(unchecked.values()),
+            "end": (lambda e: {"step": point_id(e, steps), "name": e.get("n")} if e else None)(round_end(steps, (flow or {}).get("hint")))
+            if auto else None}
 
 
 PLAN_FIX = """你给的插入清单里有几条码表不能用（一个文件都还没改）。规则：只能插注释、#include 和 FSW_ 开头的计时点语句，每行一句；
@@ -755,10 +1016,10 @@ PLAN_FIX = """你给的插入清单里有几条码表不能用（一个文件都
 只改这几条（以及因为它们改了、要跟着改的那个计时点），其余照原样抄，不用再读代码。最后只输出一个完整的 ```json 代码块，格式和上次一样。"""
 
 
-def fix_plan(llm, text, root, steps, needs=None):
+def fix_plan(llm, text, root, steps, needs=None, flow=None):
     """核对插入清单；不合规又不能只去掉那几条（会缺计时点）时，在同一段对话里追问 AI 一次，只改这几条。
     返回 (插入清单或失败, 追问后的回答或 None)。追问后还不对就失败，说清楚。接法不支持追问（比如沿用的、命令行）就直接失败。"""
-    plan = parse_plan(text, root, steps, needs)
+    plan = parse_plan(text, root, steps, needs, flow)
     if plan["ok"] or not plan.get("bad") or llm is None:
         return plan, None
     items = "\n".join(f"- {b['step']}（{b['file']} 第 {b['after_line']} 行后面）：{b['why']}；原来写的：{' / '.join(l.strip() for l in b['lines'])}"
@@ -773,7 +1034,7 @@ def fix_plan(llm, text, root, steps, needs=None):
         return plan, None
     if not again.strip():
         return {**plan, "asked": True}, None
-    plan2 = parse_plan(again, root, steps, needs)
+    plan2 = parse_plan(again, root, steps, needs, flow)
     if not plan2["ok"]:
         return {**plan2, "asked": True, "message": "AI 给的插法里有不能用的地方，码表追问它改了一次还是不对，一个文件都没改：" +
                 plan2["message"].split("一个文件都没改：", 1)[-1], "first_bad": plan["bad"]}, again
@@ -845,7 +1106,7 @@ def apply(root, plan, backup):
     if rec["deleted"]:  # 还没动任何文件
         return _fail("deleted", f"码表核对时发现会删掉或改掉 {rec['deleted']} 行原有代码，已经撤回，一个文件都没改。")
     if created:
-        rec["added"] += len(header_text(plan.get("start")).splitlines())
+        rec["added"] += len(header_text(plan.get("start"), [x["step"] for x in plan.get("tail") or []]).splitlines())
     rec.update(state="applying", before={f: _sha(root / f) for f in files},
                after={f: hashlib.sha256(news[f]).hexdigest() for f in files})
     try:
@@ -864,7 +1125,7 @@ def apply(root, plan, backup):
             (root / f).write_bytes(news[f])
         if created:
             header.parent.mkdir(parents=True, exist_ok=True)
-            header.write_text(header_text(plan.get("start")), encoding="utf-8")
+            header.write_text(header_text(plan.get("start"), [x["step"] for x in plan.get("tail") or []]), encoding="utf-8")
         rec["state"] = "done"
         _write_record(backup, rec, plan)
     except BaseException as e:  # 只读文件、磁盘满、杀毒软件锁住文件、被强行中断：已改的撤回
@@ -956,6 +1217,14 @@ def compare(work, original):
     diff += [k for k in extra if Path(k).name == "fw_stopwatch.h"]
     return {"same": not diff, "files": len(fo), "diff": sorted(diff),
             "extra": [k for k in extra if Path(k).name != "fw_stopwatch.h"]}
+
+
+def plan_checks(plan):
+    """看改动那页要直接摆出来的提醒（不折叠）：结构看不懂、没核对位置的文件；每轮结束是哪一步说不准。"""
+    out = [f"没核对：{u['file']} {u['why'].split('，', 1)[0]}，这个文件里插的 {'、'.join(u['steps'])} 在不在函数里、在不在对应那一句的同一块里码表没法核对，编译和试一次时会再看"
+           for u in plan.get("unchecked") or []]
+    out += [f"每轮结束是哪一步说不准：{f['why']}。清零用的是 AI 给的位置" for f in plan.get("fixes") or [] if f.get("kind") == "reset_end_unsure"]
+    return out
 
 
 def diff_view(rec, steps):

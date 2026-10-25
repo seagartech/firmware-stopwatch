@@ -270,6 +270,8 @@ class FswInsertBody(BaseModel):
     board: str | None = None
 
 
+TAIL = re.compile(r"FSW,TAIL,P(\d+),(-?\d+),-?\d+")  # 设备补打的"可能晚到的点在清零 1 秒之后才走到"（见 fw_stopwatch.h 的 fsw_tail）
+TAIL_MAX_US = 30_000_000  # 清零之后这么久以后才走到的不算"上一轮晚到"（多半是下一轮开始前的动静，比如提示音）
 NO_DATA_SECS = 20  # 多轮实测：调试口开着，这么久没收到计时点就说人话提示（不停下，做了就接着收）
 CARRY_SECS = 30  # 试通后这么久内开始多轮实测，才接着算试通时正在进行的那一轮
 ROUND_SETTLE = 1.5  # 多轮实测：一轮收全后，下一轮一直没开始，再等这么久就收尾（最后一轮、或设备不再开始下一轮）
@@ -676,6 +678,40 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             cached = None
         return fp, cached
 
+    def _redo(project_dir):
+        """上一次插完编译或试的时候码表看出来的问题（存在项目文件夹的 fsw-redo.json，码表重开也在）：
+        {"note": 重插时告诉 AI 的那句话（用掉、插好就清掉）, "end": 试一次看出来一轮到哪一步才完 {"end": P 编号, "name": 名字}（一直留着）}。"""
+        try:
+            d = json.loads((Path(project_dir) / "fsw-redo.json").read_text(encoding="utf-8"))
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _redo_set(project_dir, note=None, end=None, clear_note=False):
+        d = _redo(project_dir)
+        if note:
+            d.update(note=note, at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        if clear_note:
+            d.pop("note", None)
+        if end is not None:
+            d["end"] = end
+        try:
+            Path(project_dir).mkdir(parents=True, exist_ok=True)
+            (Path(project_dir) / "fsw-redo.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _flow(project_dir):
+        """核对每轮结束那一步要用的识别结果：识别时说这条线到哪一步结束、分段；加上试一次看出来的结束（见 _redo）。"""
+        out = {"hint": _redo(project_dir).get("end")}
+        try:
+            ids = sorted((Path(project_dir) / "identify").glob("*.json"), key=lambda f: f.stat().st_mtime)
+            d = json.loads(ids[-1].read_text(encoding="utf-8")) if ids else {}
+            out.update(end=(d.get("main") or {}).get("end"), segs=(d.get("page") or {}).get("segs") or [])
+        except (OSError, ValueError, AttributeError):
+            pass
+        return out
+
     def _prep_view(p):
         return {k: v for k, v in p.items() if k not in ("text", "work", "steps", "llm")}
 
@@ -683,23 +719,24 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     # 人没改步骤，点"确认"就直接用；改了就作废、按新步骤重新生成
     @app.post("/api/fsw/prepare")
     def fsw_prepare(body: FswInsertBody):
-        if _plan_cache(body)[1]:
+        note = _redo(body.project_dir).get("note")
+        if _plan_cache(body)[1] and not note:
             return {"status": "reuse"}
         backup, _, _ = _fsw_dirs(body)
         if ins.current(backup):  # 这份代码上已经插过（改了步骤要重插）：等点确认、先还原再生成，免得行号对不上
             return {"status": "skip"}
         p = fsw.get("prep")
-        if p and p["work"] == body.work and p["steps"] == body.steps and p["status"] in ("running", "ready"):
+        if p and p["work"] == body.work and p["steps"] == body.steps and p["status"] in ("running", "ready") and p.get("note") == note:
             return _prep_view(p)
         model = _model()[1]
         p = {"status": "running", "work": body.work, "steps": body.steps, "started": time.time(), "text": None, "seconds": None,
-             "read": "", "llm": model}  # llm：插法不合规时在同一段对话里追问一次（见 ins.fix_plan）
+             "read": "", "llm": model, "note": note}  # note：上次看出来的问题，提前准备时也告诉 AI  # llm：插法不合规时在同一段对话里追问一次（见 ins.fix_plan）
         fsw["prep"] = p
 
         def run():
             needs = stds.needed_values(body.steps, stds.find(body.steps))
             try:
-                text = model.investigate(ins.build_prompt(body.steps, ins.default_header(body.work), needs), body.work,
+                text = model.investigate(ins.build_prompt(body.steps, ins.default_header(body.work), needs, extra=note), body.work,
                                          on_tool=lambda d: p.update(read=d))
                 p.update(status="ready", text=text)
             except Exception as e:
@@ -722,9 +759,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         _stop_collect()
         proj = Path(body.project_dir)
         fp, cached = _plan_cache(body)
-        if fsw.get("redo_note"):  # 上一次插完编译或试的时候发现插法有问题：不再沿用上次的插法、也不用提前准备的，带上这个问题重新问 AI
+        note = _redo(body.project_dir).get("note")
+        if note:  # 上一次插完编译或试的时候发现插法有问题：不再沿用上次的插法，带上这个问题重新问 AI；提前准备时没带上这句的也不用
             cached = None
-            if fsw.get("prep"):
+            if fsw.get("prep") and fsw["prep"].get("note") != note:
                 fsw["prep"]["status"] = "stale"
         prep, use_prep, redo = fsw.get("prep"), False, None
         if not cached and prep and prep["work"] == body.work and prep["status"] in ("running", "ready", "failed"):
@@ -776,31 +814,33 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     try:
                         job["calls"] += 1
                         talk["llm"] = _model()[1]
-                        text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("redo_note", None)), body.work,
+                        text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=note), body.work,
                                                        on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     except llms.LLMError as e:
                         return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
             else:
                 job["calls"] += 1
                 try:
-                    text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("redo_note", None)), body.work,
+                    text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=note), body.work,
                                              on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     talk["llm"] = model
                 except llms.LLMError as e:
                     return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
             Path(body.project_dir).mkdir(parents=True, exist_ok=True)
             (Path(body.project_dir) / "fsw-plan-reply.txt").write_text(text, encoding="utf-8")  # AI 的原话留一份，出错时好查
-            first = ins.parse_plan(text, body.work, steps, needs)
+            flow = _flow(body.project_dir)
+            first = ins.parse_plan(text, body.work, steps, needs, flow)
             if not first["ok"] and first.get("bad") and talk["llm"] is not None:
                 job["log"] = f"AI 给的插法里有 {len(first['bad'])} 处不能用（只能插计时点、注释和 #include），追问它改一次"
-            plan, again = ins.fix_plan(talk["llm"], text, body.work, steps, needs) if not first["ok"] else (first, None)
+            plan, again = ins.fix_plan(talk["llm"], text, body.work, steps, needs, flow) if not first["ok"] else (first, None)
             job["calls"] += 1 if plan.get("asked") else 0
             if again:  # 追问后的回答也留一份
                 (Path(body.project_dir) / "fsw-plan-followup.txt").write_text(again, encoding="utf-8")
             job["seconds"]["insert"] = round(time.time() - t0, 1)
             if plan["ok"] and fp:
                 (proj / "fsw-plan.json").write_text(json.dumps({"fingerprint": fp, "steps": steps, "reply": again or text, "ver": ins.PLAN_VER,
-                                                                "fixes": plan.get("fixes") or []},
+                                                                "fixes": plan.get("fixes") or [], "unchecked": plan.get("unchecked") or [],
+                                                                "tail": plan.get("tail") or [], "end": plan.get("end")},
                                                                ensure_ascii=False), encoding="utf-8")
             if not plan["ok"]:
                 return _fail(job, "insert", plan["message"])
@@ -817,8 +857,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "insert", rec["message"])
             _save_inserted(body.project_dir, steps, rec["steps"])
             fsw["plan"] = plan
+            if note and not cached:
+                _redo_set(body.project_dir, clear_note=True)  # 这句话已经告诉 AI、插好了：下次不再带
             job.update(status="inserted", view=ins.diff_view(rec, steps), notes=plan["notes"], log="插好了，先看改动",
-                       total=len(rec["steps"]))
+                       total=len(rec["steps"]), checks=ins.plan_checks(plan))
             T().end("insert", reused=bool(cached), prepared=bool(job.get("prepared")))
             T().count("llm_calls", job.get("calls", 0))
             T().begin("confirm")
@@ -885,7 +927,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 short = (r.get("error") or "").replace(str(Path(a.work).resolve()) + "/", "").replace(str(a.work) + "/", "")
                 if place:  # 报错对回了插进去的哪一句（报错指到头文件时按"在哪里展开的宏"找）：说清楚，重插时告诉 AI
                     note = ins.error_text(place, a.steps)
-                    fsw["redo_note"] = note
+                    _redo_set(a.project_dir, note)
                     return _fail(job, "build", f"编译没通过：{note}。点\"重新插入\"，码表会把这个问题告诉 AI。",
                                  error=short, step=step, step_name=s["n"] if s else None, where=where)
                 return _fail(job, "build", "编译没通过", error=short, step=None, step_name=None, where="")
@@ -960,8 +1002,11 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             rounds = {"cur": set(), "best": set(), "seen": set(), "raw": set(), "start_us": None}  # 这一轮收到的、收得最多的那一轮、收到过的
             # 每轮半路被清零：一轮有了起点、还没走到结束那一步就读到清零，清零后（下一个起点之前）又陆续来了这一轮后面的点
             order = [int(ins.point_id(x, a.steps)[1:]) for x in a.steps]
-            end_s = ins.round_end(a.steps)
+            flow = _flow(a.project_dir)
+            end_s = ins.round_end(a.steps, flow.get("hint"))
             end_id = int(ins.point_id(end_s, a.steps)[1:]) if end_s else None
+            # 可能在每轮清零之后才打出来的点（见 ins.tail_points）：清零后、下一个起点之前打出来的，看晚了多久
+            tail_ids = {int(ins.point_id(x, a.steps)[1:]) for x in ins.tail_points(a.steps, flow)} & want
             full = lambda got: got >= want - start_ids
             shown = lambda got: got | (rounds["seen"] & start_ids)
             job["missing"] = []
@@ -971,10 +1016,25 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 提示音那次的"末段输出"还被交给第 1 轮）。起点本身算；不知道起点（没有起点那一步）的照旧都算。"""
                 return not start_ids or (st is not None and (st[0] in start_ids or (start_us is not None and st[1] >= start_us)))
 
+            def _late_tail(pid, us):
+                """上一轮（有起点的）清零之后、下一个起点之前打出来的、可能晚到的点：晚了多久。晚过 1 秒的记下（算不进上一轮）。"""
+                rs = rounds.get("reset")
+                if pid not in tail_ids or not rs or not rs["had"] or rs["us"] is None:
+                    return
+                gap = us - rs["us"]
+                if meas.LATE_US < gap <= TAIL_MAX_US:
+                    tl = rounds.setdefault("too_late", {})
+                    tl[pid] = max(tl.get(pid, 0), gap)
+
             def feed(line):
                 p = meas.parse_line(line)
+                tm = TAIL.search(line)
+                if tm:  # 设备说：可能晚到的点在清零 1 秒之后才走到（下一个起点之前），码表算不进上一轮
+                    _late_tail(int(tm.group(1)), int(tm.group(2)))
+                    return
                 if line.strip().startswith("FSW,RESET"):
                     cur = rounds["cur"]
+                    rounds["reset"] = {"us": p[1] if p else None, "had": bool(cur & start_ids) or (not start_ids and bool(cur))}
                     # 这一轮有起点、走过起点、还没到结束那一步、没收全就被清零：先记着，清零后真来了这一轮后面的点才算"半路被清零"
                     rounds["maybe_cut"] = {"after": rounds.get("last_id"), "had": set(cur), "later": set()} \
                         if start_ids and cur & start_ids and end_id is not None and end_id not in cur and not full(cur) \
@@ -989,6 +1049,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     return
                 lm = meas.LATE.search(line)
                 st = (int(p[0][1:]), p[1]) if p else (int(lm.group(1)[1:]), int(lm.group(2))) if lm else None
+                if st and rounds["start_us"] is None and not (st[0] in start_ids):
+                    _late_tail(*st)
                 if st:
                     rounds.setdefault("tail", []).append(line)  # 这一轮到现在的计时点：试通时交给多轮实测，这一轮接着算（不用再多说一句）
                 raw = ins.count_marks([line]) & want
@@ -1074,6 +1136,25 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                              error=f"打不开调试口：{err}" if err else "没看到设备")
             got = shown(rounds["best"])  # 按收得最多的那一轮判（起点不要求）
             job["got"] = sorted(got)
+            late = {k: v for k, v in (rounds.get("too_late") or {}).items() if k not in got}
+            if late and not full(got):  # 缺的点其实走到了，只是在每轮清零之后才打出来（晚过 1 秒）：说清楚是哪一个
+                job["try_fails"] = job.get("try_fails", 0) + 1
+                k = max(late, key=lambda x: order.index(x) if x in order else -1)
+                s = next((x for x in a.steps if ins.point_id(x, a.steps) == f"P{k}"), {})
+                n, secs = names.get(f"P{k}") or f"P{k}", late[k] / 1e6
+                end_n = names.get(f"P{end_id}") if end_id else None
+                if s.get("once") == "once" and s.get("line") != "start":  # 一轮只走一次：码表重插时把清零挪到它后面
+                    _redo_set(a.project_dir, f"「{n}」在每轮清零之后 {secs:.1f} 秒才走到，算不进这一轮；一轮其实到「{n}」才完",
+                              end={"end": f"P{k}", "name": s.get("n")})
+                    msg = (f"「{n}」走到了，但在每轮清零{('（「' + end_n + '」那里）') if end_n else ''}之后 {secs:.1f} 秒才打出来，算不进这一轮。"
+                           f"一轮其实到「{n}」才完：回到「插计时点」那一步点「重新插入」，码表会把清零挪到「{n}」后面。")
+                    why = "清零放在码表按步骤先后找到的结束那一步；试一次看到还有一步更晚，这一步才是一轮真正的结束。"
+                else:
+                    msg = (f"「{n}」走到了，但它一轮会走好几次，最后那次在每轮清零{('（「' + end_n + '」那里）') if end_n else ''}之后 {secs:.1f} 秒才打出来，"
+                           f"算不进这一轮；清零没法挪到它后面（它每轮走好几次）。回到「找关键步骤」把「{n}」去掉，或者换成一轮只走一次、真正最后发生的那一步，再插一次。")
+                    why = f"码表只把清零后 {meas.LATE_US // 1_000_000} 秒内打出来的算回上一轮；再晚就分不清是这一轮的尾巴，还是下一轮开始前的动静。"
+                return _fail(job, "try", msg, why=why, error=f"（收到 {len(got)} / {len(want)} 个）",
+                             missing=[names.get(f"P{x}") or f"P{x}" for x in sorted(want - got)], offer_restore=job["try_fails"] >= 2)
             cut = rounds.get("cut")
             if cut and not full(got):
                 job["try_fails"] = job.get("try_fails", 0) + 1
@@ -1081,7 +1162,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 rest = "」「".join(names.get(f"P{k}") or f"P{k}" for k in sorted(cut["later"], key=order.index))
                 note = (f"每轮清零那一句放错了：每一轮在「{at_n}」之后就被清零，后面的「{rest}」都算不进这一轮。"
                         "清零要放在一轮结束、回到等待的地方，不能放在每次换状态、每一步都会走的地方")
-                fsw["redo_note"] = note  # 回到「插计时点」重插时告诉 AI
+                _redo_set(a.project_dir, note)  # 回到「插计时点」重插时告诉 AI（存在项目文件夹，码表重开也在）
                 return _fail(job, "try", note + "。再试也一样，回到「插计时点」那一步重新插一次（码表会把这个问题告诉 AI）。",
                              why="设备真的走完了这一轮（后面的点都打出来了），只是半路被清零，码表没法把它们算进同一轮。",
                              error=f"（收到 {len(got)} / {len(want)} 个）", missing=[names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)],
