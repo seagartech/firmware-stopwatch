@@ -217,7 +217,7 @@ def test_try_with_only_a_few_points_is_not_a_pass(tmp_path):
     def builder(work, target, board, idf, progress):
         fake_build_output(work)
         return {"ok": True, "seconds": 0.1, "error": None}
-    dev = FakeDevice(lines=["boot ok", "FSW,P5,30,0"])  # 3 个计时点只收到 1 个（比如只唤醒了设备）
+    dev = FakeDevice(lines=["boot ok", "FSW,P1,10,1"])  # 3 个计时点只收到 1 个（起点到了，后面没做完）；只有起点之前的点见 test_fsw_api
     c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=lambda p, k: FakeLLM(reply()),
                               idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
                               cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.usbmodem1101"],

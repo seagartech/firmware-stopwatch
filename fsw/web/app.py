@@ -280,6 +280,7 @@ class RestoreBody(BaseModel):
     project_dir: str | None = None   # 码表重开过：按项目文件夹里存的插入记录还原
 
 
+TRY_END_WAIT = 20  # 试一次收全后最多再等多久结束标记（回复还在放）：等到了，这一轮连同结束时补打的点一起交给多轮实测
 TRY_SECONDS = 180  # 试一次最多等多久（决策 107）：烧完就开始听，设备重启、连网、人做一次要测的事都在这里面；不用人判断"准备好了"
 REOPEN_SECS = 8   # 试一次：打开调试口后这么久没有任何输出就重开（设备烧完重启，调试口会断开再回来）
 
@@ -935,32 +936,50 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             # 起点（比如"设备听出你说完"）：喊唤醒词、点屏幕开头的那一轮本来就没有它（唤醒词模块认的，不经过"说完"判断）。
             # 所以试一次不等起点：其余的有一轮收齐就算试通；起点留给多轮实测去核对（连着几轮没记到起点会点名，见 take）
             start_ids = {int(ins.point_id(x, a.steps)[1:]) for x in a.steps if x.get("line") == "start"} & want
-            rounds = {"cur": set(), "best": set(), "seen": set()}  # 这一轮收到的、收得最多的那一轮、收到过的
+            rounds = {"cur": set(), "best": set(), "seen": set(), "raw": set(), "start_us": None}  # 这一轮收到的、收得最多的那一轮、收到过的
             full = lambda got: got >= want - start_ids
             shown = lambda got: got | (rounds["seen"] & start_ids)
             job["missing"] = []
 
+            def counts(st, start_us):
+                """这一行算不算这一轮收到的：起点之后的才算（10-25 真机：唤醒提示音在起点之前走了回复那几个点，试一次照样判通过，
+                提示音那次的"末段输出"还被交给第 1 轮）。起点本身算；不知道起点（没有起点那一步）的照旧都算。"""
+                return not start_ids or (st is not None and (st[0] in start_ids or (start_us is not None and st[1] >= start_us)))
+
             def feed(line):
                 p = meas.parse_line(line)
                 if line.strip().startswith("FSW,RESET"):
-                    if rounds["cur"] & start_ids and full(rounds["cur"]):  # 带起点、收全了的一轮在试一次里就结束了（比如被打断）：记着，试通时交给多轮实测
+                    if (rounds["cur"] & start_ids or not start_ids) and full(rounds["cur"]):
+                        # 带起点、收全了的一轮读到了结束标记：记着，试通时交给多轮实测（带上这一轮最后补打的 LATE 行）
                         rounds["last_full"] = {"lines": list(rounds.get("tail") or []), "at": time.time()}
-                    rounds["prev"] = (rounds["cur"], p[1] if p else None)
-                    rounds["cur"] = set()
+                        rounds["ended"] = True
+                    rounds["prev"] = (rounds["cur"], p[1] if p else None, rounds["start_us"], list(rounds.get("tail") or []))
+                    rounds["cur"], rounds["raw"], rounds["start_us"] = set(), set(), None
                     rounds["tail"] = []
                     return
-                if p or meas.LATE.search(line):
+                lm = meas.LATE.search(line)
+                st = (int(p[0][1:]), p[1]) if p else (int(lm.group(1)[1:]), int(lm.group(2))) if lm else None
+                if st:
                     rounds.setdefault("tail", []).append(line)  # 这一轮到现在的计时点：试通时交给多轮实测，这一轮接着算（不用再多说一句）
-                got = ins.count_marks([line]) & want
-                rounds["seen"] |= got
+                raw = ins.count_marks([line]) & want
+                rounds["seen"] |= raw
                 pv = rounds.get("prev")
                 # 设备回到聆听（结束标记）后 1 秒内、下一轮还没开始时才放完的最后一声：补上就收齐的，算上一轮的（和多轮实测同一个做法）
-                if got and not rounds["cur"] and pv and pv[0] and pv[1] is not None and p and 0 <= p[1] - pv[1] <= meas.LATE_US and full(pv[0] | got) and not full(pv[0]):
-                    pv[0].update(got)
+                late = raw if pv and counts(st, pv[2]) else set()
+                if late and not rounds["cur"] and pv and pv[0] and pv[1] is not None and st and 0 <= st[1] - pv[1] <= meas.LATE_US and full(pv[0] | late) and not full(pv[0]):
+                    pv[0].update(late)
                     rounds["best"] = set(pv[0])
+                    rounds["last_full"] = {"lines": pv[3] + [line], "at": time.time()}  # 这一轮已经结束：连同晚到的这一声交给多轮实测
+                    rounds["ended"] = True
                     return
+                if st and st[0] in start_ids and rounds["start_us"] is None:
+                    rounds["start_us"] = st[1]
+                rounds["raw"] |= raw
+                got = raw if counts(st, rounds["start_us"]) else set()
                 rounds["cur"] |= got
                 if (full(rounds["cur"]), len(rounds["cur"])) >= (full(rounds["best"]), len(rounds["best"])):
+                    if full(rounds["cur"]) and not full(rounds["best"]):
+                        rounds["full_at"] = time.time()
                     rounds["best"] = set(rounds["cur"])
 
             def on_line(line):
@@ -970,14 +989,20 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if not job.get("dev_seen") and _plain(line):
                     job["dev_seen"] = time.time()  # 设备开机、有输出了：页面上从"设备正在重启"换成"现在做一次要测的事"
                 feed(line)
-                # 页面显示收得最多的那一轮：唤醒那一轮（没有起点）结束后计数不清回 0，免得像又从头来了一遍
-                cur = shown(rounds["cur"] if (full(rounds["cur"]), len(rounds["cur"])) >= (full(rounds["best"]), len(rounds["best"])) else rounds["best"])
+                # 页面显示收得最多的那一轮：唤醒那一轮（没有起点）结束后计数不清回 0，免得像又从头来了一遍。
+                # 起点还没到的这一轮先按收到的显示（缺的就是起点），判通过只算起点之后的
+                now = rounds["cur"] or (rounds["raw"] if not rounds["best"] else set())
+                cur = shown(now if (full(now), len(now)) >= (full(rounds["best"]), len(rounds["best"])) else rounds["best"])
                 job["got"] = sorted(cur)
                 job["missing"] = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - cur)] if cur else []
                 _log(job, line[:300])
 
-            def enough():  # 有一轮除起点外全部收到才停；差几个就接着听，页面上告诉人这一轮还差哪几步
-                return full(rounds["best"])
+            def enough():
+                """有一轮起点之后全部收到，还要读到这一轮的结束标记才停（结束时补打的 LATE 行、紧跟着的最后一声一起交给多轮实测；
+                10-25 真机：读到 LATE,P3 就停，紧跟着那行回复的末段输出没读到）。结束标记一直不来，收全后最多再等 TRY_END_WAIT 秒。"""
+                if not full(rounds["best"]):
+                    return False
+                return bool(rounds.get("ended")) or time.time() - rounds.get("full_at", time.time()) >= TRY_END_WAIT
             t_end, lines, err = time.time() + TRY_SECONDS, None, None
             while lines is None and time.time() < t_end and not superseded():  # 烧完设备重启，调试口会断开一下再回来：等它回来再读
                 ports = port_finder()
@@ -1021,6 +1046,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "try", f"只收到 {len(got)} / {len(want)} 个计时点，这一次没走完。点「再试一次」，然后完整做一次要测的事。",
                              why="可能刚才只做了一半（比如只让设备准备好、还没真正做那件事），或者设备还没准备好。", error=f"（收到 {len(got)} / {len(want)} 个）",
                              offer_restore=job["try_fails"] >= 2)
+            if not got and rounds["seen"] and start_ids:  # 收到了计时点，但都在起点之前（比如只喊了唤醒词、没说完一句）
+                job["try_fails"] = job.get("try_fails", 0) + 1
+                sn = next((names.get(f"P{k}") for k in sorted(start_ids) if names.get(f"P{k}")), None) or "起点"
+                return _fail(job, "try", f"收到了计时点，但一直没有起点「{sn}」。点「再试一次」，然后完整做一次要测的事。",
+                             why="起点之前收到的不算这一轮（比如只喊了唤醒词，设备放了一声提示音）。完整做一次，起点之后的才算。",
+                             error=f"（起点「{sn}」一次都没收到）", offer_restore=job["try_fails"] >= 2)
             if not got:
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 odd = sum(1 for l in lines if _garbled(l))
