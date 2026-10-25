@@ -677,7 +677,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return fp, cached
 
     def _prep_view(p):
-        return {k: v for k, v in p.items() if k not in ("text", "work", "steps")}
+        return {k: v for k, v in p.items() if k not in ("text", "work", "steps", "llm")}
 
     # 插计时点提前（决策 96）：找完关键步骤、人核对步骤时，后台先按这些步骤生成插法（大模型只读）；
     # 人没改步骤，点"确认"就直接用；改了就作废、按新步骤重新生成
@@ -693,7 +693,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             return _prep_view(p)
         model = _model()[1]
         p = {"status": "running", "work": body.work, "steps": body.steps, "started": time.time(), "text": None, "seconds": None,
-             "read": ""}
+             "read": "", "llm": model}  # llm：插法不合规时在同一段对话里追问一次（见 ins.fix_plan）
         fsw["prep"] = p
 
         def run():
@@ -748,6 +748,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if not c["ok"]:
                 return _fail(job, "insert", c["message"])
             plan_text = {}
+            talk = {"llm": None}  # 生成插法的那段对话：插法不合规时在里面追问一次
 
             class Tap:  # 先拿到插入清单（大模型只读），等原版编完存好，再真正插
                 def investigate(self, prompt, root, on_text=None, on_tool=None):
@@ -764,12 +765,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     time.sleep(wait_step / 4)
                 if prep["status"] == "ready":
                     text = prep["text"]
+                    talk["llm"] = prep.get("llm")
                     job["log"] = "用你核对步骤时 AI 提前准备好的插法"
                 else:
                     job.update(prepared=False, log="提前准备的那次没成，重新生成")
                     try:
                         job["calls"] += 1
-                        text = _model()[1].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
+                        talk["llm"] = _model()[1]
+                        text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
                                                        on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     except llms.LLMError as e:
                         return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
@@ -778,14 +781,22 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 try:
                     text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
                                              on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
+                    talk["llm"] = model
                 except llms.LLMError as e:
                     return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
             Path(body.project_dir).mkdir(parents=True, exist_ok=True)
             (Path(body.project_dir) / "fsw-plan-reply.txt").write_text(text, encoding="utf-8")  # AI 的原话留一份，出错时好查
-            plan = ins.parse_plan(text, body.work, steps, needs)
+            first = ins.parse_plan(text, body.work, steps, needs)
+            if not first["ok"] and first.get("bad") and talk["llm"] is not None:
+                job["log"] = f"AI 给的插法里有 {len(first['bad'])} 处不能用（只能插计时点、注释和 #include），追问它改一次"
+            plan, again = ins.fix_plan(talk["llm"], text, body.work, steps, needs) if not first["ok"] else (first, None)
+            job["calls"] += 1 if plan.get("asked") else 0
+            if again:  # 追问后的回答也留一份
+                (Path(body.project_dir) / "fsw-plan-followup.txt").write_text(again, encoding="utf-8")
             job["seconds"]["insert"] = round(time.time() - t0, 1)
             if plan["ok"] and fp:
-                (proj / "fsw-plan.json").write_text(json.dumps({"fingerprint": fp, "steps": steps, "reply": text, "ver": ins.PLAN_VER},
+                (proj / "fsw-plan.json").write_text(json.dumps({"fingerprint": fp, "steps": steps, "reply": again or text, "ver": ins.PLAN_VER,
+                                                                "fixes": plan.get("fixes") or []},
                                                                ensure_ascii=False), encoding="utf-8")
             if not plan["ok"]:
                 return _fail(job, "insert", plan["message"])

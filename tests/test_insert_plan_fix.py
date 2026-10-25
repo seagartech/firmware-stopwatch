@@ -7,12 +7,16 @@
 
 import json
 import re
+import time
 from pathlib import Path
 
+from fastapi.testclient import TestClient
 
 from fsw import instrument as ins
 from fsw.llm import FakeLLM
+from fsw.web.app import create_app
 from tests.identify_fixtures import door_source
+from tests.test_fsw_api import FakeDevice, fake_build_output
 from tests.test_instrument import PLAN, STEPS, reply
 
 HERE = Path(__file__).parent / "fixtures" / "fullflow_multi_sentence"
@@ -114,3 +118,44 @@ def test_prompt_says_no_conditions_and_tool_already_ignores_before_start():
     assert "不能加 if" in text and "起点之后" in text and "不能套在 if 里" in text
     assert "比如提示音也走播放" not in text  # 不再引着 AI 自己去筛提示音
 
+
+def test_insert_job_asks_once_then_inserts_and_keeps_both_answers(tmp_path):
+    """网页那一步：AI 第一次的插法里有一句判断 → 追问一次 → 用改好的插进去；两次回答都留着，记一共调了 2 次。"""
+    bad = json.loads(json.dumps(PLAN))
+    bad["inserts"][2]["lines"] = ["    // 计时点 P2：卡号读完", "    FSW_MARK_ONCE_ARMED(2, 0);"]
+    bad["inserts"].append({"step": "arm", "file": "main/rfid_task.c", "after_line": 88, "lines": ["    if (uid_ok) FSW_ARM();"]})
+    good = json.loads(json.dumps(PLAN))
+    made = []
+
+    def factory(p, k):
+        m = FakeLLM(reply(bad), followups=[reply(good)])
+        made.append(m)
+        return m
+
+    def builder(work, target, board, idf, progress):
+        fake_build_output(work)
+        return {"ok": True, "seconds": 0.1, "error": None}
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", llm_factory=factory,
+                              idf_finder=lambda: [{"path": "/x/idf", "version": "6.1.0"}],
+                              cc_status=lambda: {"found": True, "logged_in": True},
+                              port_finder=lambda: ["/dev/cu.usbmodem1101"], bg_builder=builder, device=FakeDevice(), wait_step=0.01))
+    c.post("/api/settings", json={"llm_provider": "cc"})
+    r = c.post("/api/source/inspect", json={"path": str(door_source(tmp_path / "door"))}).json()
+    c.post("/api/bgbuild/start", json={"work": r["work"], "chip": "ESP32-S3"})
+    c.post("/api/fsw/insert", json={"work": r["work"], "project_dir": r["project_dir"], "steps": STEPS, "chip": "ESP32-S3"})
+    t = time.time()
+    while time.time() - t < 10:
+        j = c.get("/api/fsw").json()
+        if j["status"] in ("inserted", "failed"):
+            break
+        time.sleep(0.02)
+    assert j["status"] == "inserted", j
+    assert j["calls"] == 2 and len(made[0].asked) == 1
+    assert any("追问它改了一次" in n for n in j["notes"])
+    proj = Path(r["project_dir"])
+    assert "if (uid_ok) FSW_ARM();" in (proj / "fsw-plan-reply.txt").read_text(encoding="utf-8")
+    assert (proj / "fsw-plan-followup.txt").exists()
+    saved_plan = json.loads((proj / "fsw-plan.json").read_text(encoding="utf-8"))
+    assert saved_plan["fixes"][0]["kind"] == "rewritten" and "if (uid_ok)" not in saved_plan["reply"]
+    work = Path(r["work"])
+    assert "FSW_ARM" not in "".join(p.read_text(errors="replace") for p in work.rglob("*.c"))
