@@ -271,7 +271,7 @@ def _needs_by_id(steps, needs):
     return {ids[k]: v for k, v in (needs or {}).items() if k in ids}
 
 
-def build_prompt(steps, header, needs=None):
+def build_prompt(steps, header, needs=None, extra=None):
     nb = _needs_by_id(steps, needs)
     names = {f"P{number(s['p'], steps)}": s["n"] for s in steps}
     vrows = "\n".join(f"- {k}（{names.get(k, k)}）：附加值记{v['what']}；正常时是{v['ok']}"
@@ -282,8 +282,11 @@ def build_prompt(steps, header, needs=None):
         f"{'这一句之前' if s.get('where') == 'before' else '这一句之后' if s.get('where') == 'after' else ''}，"
         f"{ONCE.get(s.get('once'), '一轮只记第一次')}" + (f"；为什么在这：{s['why']}" if s.get("why") else "")
         for s in steps)
-    return PROMPT.format(table=rows, header=header, values=VALUES.format(rows=vrows) if nb else "",
-                         values_out=VALUES_OUT if nb else "")
+    out = PROMPT.format(table=rows, header=header, values=VALUES.format(rows=vrows) if nb else "",
+                        values_out=VALUES_OUT if nb else "")
+    if extra:  # 上一次试的时候码表看出来的问题（比如每轮半路被清零）：这次别再犯
+        out += f"\n\n## 上一次插完试的时候发现的问题\n{extra}。这次请避开。"
+    return out
 
 
 MARK_CALL = re.compile(r"FSW_(MARK|MARK_ONCE|MARK_ONCE_ARMED|MARK_ONCE_AFTER)\(\s*(\d+)\s*,\s*(.*)\)\s*;")
@@ -388,6 +391,12 @@ def _once_place(root, rel, after, lines, steps):
             if here and mine and here[0] == mine[0] and src.blocks[here[0]]["kind"] in ("function", "lambda"):
                 return (f"{rel} 第 {after} 行后面的{what}和「{s.get('n')}」在同一段代码里，那里逐帧、逐包反复执行，"
                         f"一轮会{what}很多次；要放在一轮只经过一次的地方（比如进入聆听状态的那一支）")
+        if here and src.blocks[here[0]]["kind"] in ("function", "lambda"):
+            b = src.blocks[here[0]]
+            if re.search(r"\bswitch\b|\belse\b", src.code[at:b["close"]]):
+                name = b.get("name") or "这个函数"
+                return (f"{rel} 第 {after} 行后面的{what}放在「{name}」最开头、不在哪一支里，而这个函数后面按情况分开走（switch 或 if/else），"
+                        f"不管是哪种情况都会先{what}一次，一轮会在半路被{what}；要放进一轮开始（或一轮结束）的那一支里")
     except Exception:  # 结构读不懂：不拦（插的内容照样只有计时点语句）
         return None
     return None
@@ -458,6 +467,122 @@ def _same_block(root, rel, after, s, cache):
         return None
 
 
+def round_end(steps):
+    """一轮的结束那一步：表里（按流程先后）最后一个"一轮只经过一次"、不是可选、不是起点的计时点。没有就 None。"""
+    st = next((s for s in steps if s.get("line") == "start"), None)
+    ends = [s for s in steps if s is not st and not s.get("opt") and s.get("once") == "once"]
+    return ends[-1] if ends else None
+
+
+def _indent(src, line):
+    raw = src.lines[line - 1]
+    return raw[:len(raw) - len(raw.lstrip())]
+
+
+def _next_stmt(src, line):
+    """第 line 行后面第一句有代码的行号（跳过空行、注释、单独的 {），没有就 None。"""
+    for k in range(line + 1, len(src.clines) + 1):
+        c = src.clines[k - 1].strip()
+        if c and c != "{":
+            return k
+    return None
+
+
+def _state_case(src, rel, first, line):
+    """结束那一句是"把状态设成某个值"（参数里有个名字，同一个文件里正好有一处 case 这个名字:）：清零放进这个 case 的第一句前面——
+    进入这个状态的每条路（自动、手动、唤醒）都经过它，一轮一次。返回 (插在第几行后面, 缩进, 说明) 或 None。"""
+    from fsw import structure
+    stmt = " ".join(src.clines[k - 1].strip() for k in range(first, line + 1))
+    m = re.search(r"\((.*)\)", stmt)
+    if not m:
+        return None
+    names = {n for n in re.findall(r"[A-Za-z_]\w*", m.group(1)) if n not in structure.KEYWORDS}
+    hits = []
+    for k, c in enumerate(src.clines, 1):
+        cm = re.match(r"\s*case\s+(?:[\w:]*::)?([A-Za-z_]\w*)\s*:", c)
+        if cm and cm.group(1) in names:
+            hits.append((k, cm.group(1), c[cm.end():].strip()))
+    if len(hits) != 1:
+        return None
+    k, name, rest = hits[0]
+    if rest and rest != "{":
+        return None  # case 那一行后面还写着语句：说不清插哪
+    s1 = _next_stmt(src, k)
+    if s1 is None or re.match(r"(?:case\b|default\s*:|\})", src.clines[s1 - 1].strip()):
+        return None  # 和下一个 case 共用、或空的 case
+    loops, inner, _ = src.context(src.pos(s1, "before"))
+    if loops or inner is None:
+        return None  # 在循环里（每转一圈都走）、或不在函数里
+    return s1 - 1, _indent(src, s1), f"{rel} 第 {k} 行「case {name}:」这一支（进入这个状态时走一次）"
+
+
+def place_reset(root, steps):
+    """每轮清零由码表按找到的关键步骤放，不用 AI 写的位置。一轮的结束那一步（见 round_end）：
+    - 它那一句是把状态设成某个值、同一个文件里正好有一处处理这个值的 case：放进那个 case 的第一句前面；
+    - 否则放在结束那一步的计时点紧后面（同一块、同一个位置）。
+    放好后照样用 AI 插法的那几条检查核对（不在一直转的地方、不在函数开头分支前）；说不准就返回 None（用 AI 的位置，加一句提醒）。
+    返回 {"file", "after_line", "lines", "where"}。只看结构和表里的步骤，不认文件名、函数名。"""
+    from fsw import structure
+    end = round_end(steps)
+    if not end:
+        return None
+    rel = str(end.get("path") or end.get("f") or "")
+    try:
+        root = Path(root).resolve()
+        src = structure.Project(root).file(rel)
+        line, where = int(end.get("l")), end.get("where") or "before"
+        if src is None or not 1 <= line <= len(src.lines):
+            return None
+        first = structure.stmt_start(src, line) if where != "after" else line
+        if not (structure.real_stmt(src, first) or structure.call_in_if(src.clines[first - 1])):
+            return None
+        last = line
+        while last < len(src.clines) and structure._UNFINISHED.search(src.clines[last - 1].rstrip()):
+            last += 1
+        got = _state_case(src, rel, first, last)
+        if got:
+            after, ind, place = got
+        elif where != "after":
+            after, ind, place = first - 1, _indent(src, first), f"{rel} 第 {first} 行「{end['n']}」那一句前面（这一轮结束的地方）"
+        else:
+            after, ind, place = line, _indent(src, line), f"{rel} 第 {line} 行「{end['n']}」那一句后面（这一轮结束的地方）"
+        lines = [f"{ind}// 计时点：一轮结束、回到等待，清零（码表按找到的关键步骤放的）", f"{ind}FSW_ROUND_RESET();"]
+        if _once_place(root, rel, after, lines, steps):
+            return None
+        return {"file": rel, "after_line": after, "lines": lines, "where": place}
+    except Exception:  # 结构读不懂：用 AI 的位置
+        return None
+
+
+def _use_tool_reset(data, root, steps):
+    """把 AI 写的清零换成码表放的（见 place_reset）。返回 (换掉的那几条, 码表放的那一条或 None)。"""
+    auto = place_reset(root, steps)
+    if not auto:
+        return [], None
+    mine, keep = [], []
+    for x in data["inserts"]:
+        ls = x.get("lines") if isinstance(x, dict) else None
+        if not isinstance(ls, list) or not any(isinstance(l, str) and RESET_CALL.search(l) for l in ls):
+            keep.append(x)
+            continue
+        mine.append(x)  # AI 写的清零（单独一条，或夹在某个计时点的几行里）：去掉清零那一句，别的照留
+        rest = [l for l in ls if not (isinstance(l, str) and RESET_CALL.search(l))]
+        if any(isinstance(l, str) and l.strip().startswith(("FSW_", "#include")) for l in rest):
+            keep.append({**x, "lines": rest})
+    data["inserts"] = keep
+    data["inserts"].append({"step": "reset", "file": auto["file"], "after_line": auto["after_line"], "lines": auto["lines"], "_tool": True})
+    rel = auto["file"]
+    has = any(isinstance(x, dict) and str(x.get("file") or "").lstrip("./") == rel and x.get("step") == "include" for x in data["inserts"])
+    if not has and "fw_stopwatch.h" not in (Path(root) / rel).read_text(errors="replace"):
+        inc = next((l for x in data["inserts"] if isinstance(x, dict) and x.get("step") == "include"
+                    for l in (x.get("lines") or []) if isinstance(l, str) and l.strip().startswith("#include")), None)
+        src_lines = _read_lines(Path(root) / rel)
+        at = max((k for k, l in enumerate(src_lines, 1) if l.lstrip().startswith("#include")), default=0)
+        if inc:
+            data["inserts"].append({"step": "include", "file": rel, "after_line": at, "lines": [inc.strip()]})
+    return mine, auto
+
+
 def parse_plan(text, root, steps, needs=None):
     """读 AI 给的插入清单，逐条核对。只能插计时点语句、注释和 #include，别的代码一行都不插。
     不合规的那几条（比如夹带了 if 判断）：去掉以后每个计时点都还在、留下的都能照常工作，就只去掉这几条，其余照插，
@@ -473,6 +598,7 @@ def parse_plan(text, root, steps, needs=None):
         header = default_header(root)
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
     out, problems, bad, moved, srcs = [], [], [], [], {}
+    replaced, auto = _use_tool_reset(data, root, steps)
 
     def reject(x, why):
         problems.append(why)
@@ -536,7 +662,17 @@ def parse_plan(text, root, steps, needs=None):
         return _fail("bad_plan", "AI 给的插入清单不对，码表没有用，一个文件都没改：" + "；".join((problems + whole)[:4]) +
                      "。只能加计时点、注释和 #include。点\"重新插入\"再试一次。", bad=bad, lost=whole)
     fixes = [{"kind": "dropped", **b} for b in bad] + moved  # 只去掉不合规的那几条，其余照插；挪了位置的也记下
+    fixes += [{"kind": "reset_by_tool", "step": "reset", "file": str(x.get("file") or ""), "after_line": x.get("after_line"),
+               "to": auto["after_line"], "to_file": auto["file"],
+               "lines": [str(l) for l in x.get("lines") or []], "why": f"每轮清零由码表放在{auto['where']}，不用 AI 写的位置"}
+              for x in replaced] if auto else []
+    if auto and not replaced:
+        fixes.append({"kind": "reset_by_tool", "step": "reset", "file": "", "after_line": None, "to": auto["after_line"],
+                      "to_file": auto["file"], "lines": [], "why": f"AI 没写每轮清零，码表放在{auto['where']}"})
     notes = [str(n) for n in data.get("notes") or [] if n]
+    notes += [f"每轮清零由码表放在{auto['where']}（{auto['file']} 第 {auto['after_line']} 行后面），AI 写的清零没用"] if auto else \
+        ["码表没找到能确定放每轮清零的地方，用的是 AI 给的位置（已经核对过不在一直转的地方）；试一次时要是每轮在半路被清零，码表会说"] \
+        if any(RESET_CALL.search(l) for x in out for l in x["lines"] if isinstance(l, str)) else []
     notes += [f"码表把 {m['step']} 从 {m['file']} 第 {m['after_line']} 行后面挪到第 {m['to']} 行后面：{m['why']}" for m in moved]
     notes += [f"码表去掉了 AI 多加的一处（{b['file']} 第 {b['after_line']} 行后面，{b['step']}）：{b['why']}。"
               "只能插计时点、注释和 #include；去掉后每个计时点都还在" for b in bad]

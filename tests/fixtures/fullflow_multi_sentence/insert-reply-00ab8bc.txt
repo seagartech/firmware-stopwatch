@@ -1,0 +1,170 @@
+```json
+{
+  "header": "main/fw_stopwatch.h",
+  "inserts": [
+    {
+      "step": "include",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 13,
+      "lines": [
+        "// 固件码表计时点接口（include 路径由组件 INCLUDE_DIRS 的 \".\" 提供，即 main/ 目录）",
+        "#include \"fw_stopwatch.h\""
+      ]
+    },
+    {
+      "step": "P1",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 481,
+      "lines": [
+        "            // 计时点 P1：说话结束（AFE 判定由说话转静音、把说话标志置回之前）",
+        "            FSW_MARK_ONCE(1, 0);"
+      ]
+    },
+    {
+      "step": "P2",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 482,
+      "lines": [
+        "            // 计时点 P2：静音状态回调（向上抛静音通知之前）",
+        "            FSW_MARK_ONCE(2, 0);"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/application.cc",
+      "after_line": 13,
+      "lines": [
+        "// 固件码表计时点接口（include 路径由组件 INCLUDE_DIRS 的 \".\" 提供，即 main/ 目录）",
+        "#include \"fw_stopwatch.h\""
+      ]
+    },
+    {
+      "step": "P5",
+      "file": "main/application.cc",
+      "after_line": 241,
+      "lines": [
+        "                // 计时点 P5：上传首包（本轮第一次把上行音频发出去）",
+        "                FSW_MARK_ONCE(5, 0);"
+      ]
+    },
+    {
+      "step": "P6",
+      "file": "main/application.cc",
+      "after_line": 241,
+      "lines": [
+        "                // 计时点 P6：上传末包（本轮最后一包离开设备，先记内存，回到聆听时打印）",
+        "                FSW_KEEP_LAST(6);"
+      ]
+    },
+    {
+      "step": "P8",
+      "file": "main/application.cc",
+      "after_line": 626,
+      "lines": [
+        "                    // 计时点 P8：回复开始（设备切到说话状态的那一刻）",
+        "                    FSW_MARK_ONCE(8, 0);"
+      ]
+    },
+    {
+      "step": "P12",
+      "file": "main/application.cc",
+      "after_line": 634,
+      "lines": [
+        "                            // 计时点 P12：回到聆听（服务器宣告回复结束、切回自动聆听）",
+        "                            FSW_MARK_ONCE(12, 0);"
+      ]
+    },
+    {
+      "step": "flush",
+      "file": "main/application.cc",
+      "after_line": 634,
+      "lines": [
+        "                            // 打印本轮最后一次上传末包（高频位置只存内存，在这里落一行）",
+        "                            FSW_FLUSH_LAST(6);"
+      ]
+    },
+    {
+      "step": "P7",
+      "file": "main/application.cc",
+      "after_line": 666,
+      "lines": [
+        "                    // 计时点 P7：收到识别结果（服务器识别结果落到对话区）",
+        "                    FSW_MARK_ONCE(7, 0);"
+      ]
+    },
+    {
+      "step": "P13",
+      "file": "main/application.cc",
+      "after_line": 673,
+      "lines": [
+        "                    // 计时点 P13：换表情（服务器情绪消息把双眼换成对应表情，取本轮第一次）",
+        "                    FSW_MARK_ONCE(13, 0);"
+      ]
+    },
+    {
+      "step": "reset",
+      "file": "main/application.cc",
+      "after_line": 1000,
+      "lines": [
+        "    // 计时点：进入聆听状态（状态机新状态这一支），一轮开始，清零“只记第一次”的标记",
+        "    FSW_ROUND_RESET();"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 2,
+      "lines": [
+        "// 固件码表计时点接口（include 路径由组件 INCLUDE_DIRS 的 \".\" 提供，即 main/ 目录）",
+        "#include \"fw_stopwatch.h\""
+      ]
+    },
+    {
+      "step": "P9",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 350,
+      "lines": [
+        "        // 计时点 P9：首段出声（本轮第一段回复音频送进扬声器）",
+        "        FSW_MARK_ONCE(9, 0);"
+      ]
+    },
+    {
+      "step": "P10",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 350,
+      "lines": [
+        "        // 计时点 P10：末段出声（本轮最后一次送音频进扬声器，先记内存，放空时打印）",
+        "        FSW_KEEP_LAST(10);"
+      ]
+    },
+    {
+      "step": "P11",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 372,
+      "lines": [
+        "        // 计时点：播放全部放完的判定之后、真正放空，先把内存里的末段出声打印出来",
+        "        FSW_FLUSH_LAST(10);"
+      ]
+    },
+    {
+      "step": "P11",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 372,
+      "lines": [
+        "        // 计时点 P11：播放全部放完（解码队列、播放队列都空且无在途解码/输出）",
+        "        FSW_MARK(11, 0);"
+      ]
+    }
+  ],
+  "notes": [
+    "P1/P2：AfeAudioEngine::HandleVoiceResult 在不支持 AFE 的板子上不会被调用（只有 CONFIG_IDF_TARGET_ESP32S3/P4/S31 才用 AfeAudioEngine）；另外它是音频输入帧级处理的回调，但 FSW_MARK_ONCE 已按轮去重，实际不会逐帧打行——只是每帧会做一次原子判断。",
+    "P5/P6：插入点在主循环里 while (auto packet = PopPacketFromSendQueue()) 的循环体内、SendAudio 之前，P5 用 FSW_MARK_ONCE，P6 用 FSW_KEEP_LAST，每包只记内存不打印，但仍是逐包执行（每轮约数十次），开销可接受。",
+    "P7/P8/P12/P13：插在 Schedule(...) 投递的 lambda 里，执行在主循环（真正的落地时刻）；协议层收到消息是另一个任务，这里要的是“落到设备/对话区”的时刻，所以没插在 websocket 回调里。若同一轮服务器先发 llm、语音随后才开始，P13 可能落在 P8 之前（这与该点“看它相对出声的先后”的用途一致，属正常）。",
+    "P9/P10：AudioService::AudioOutputTask 是专门的输出任务，一轮内每段音频都会走一遍；用 ONCE + KEEP_LAST，不逐段打印。提示音（PlaySound 的 OGG_POPUP）也会经过 AudioOutputTask，靠“本轮起点之后才计数”来排除，但若提示音在本轮起点（进入聆听/复位）之后才真正送进扬声器，仍可能被算作本轮首段出声。",
+    "P11：AudioService::AudioOutputTask 里 notify_drained 也把 AudioService::Stop()/ResetDecoder() 置位的情况排除在外（那些在别的函数里调 on_playback_drained，本次未插点）；若还想覆盖这些路径，需要在对应位置另加 FK MARK。",
+    "reset：FSW_ROUND_RESET() 插在 Application::HandleStateChangedEvent 的 kDeviceStateListening 分支开头（监听器里每轮只经过一次，不属于任何循环体）；该分支内若因 playback 未排空而走了 pending_listening_start_ 延迟路径，复位发生在延迟启动之前，这一轮起点会略早于“真正开始聆听”。",
+    "flush(6)：P6 的 KEEP_LAST 只在 P12（回到聆听）处打印。手动静音（kListeningModeManualStop 走 kDeviceStateIdle）、或主循环 HandleStateChangedEvent 早于 lamba 执行等路径下，P6 可能记了但没有打印行；需要的话可再在 idle 分支补一个 flush。",
+    "include：“fw_stopwatch.h”按 main/ 目录解析（main/CMakeLists.txt 的 INCLUDE_DIRS 含 \".\"，即组件根 main/），三个文件都引同一路径，请不要改成相对路径。"
+  ]
+}
+```

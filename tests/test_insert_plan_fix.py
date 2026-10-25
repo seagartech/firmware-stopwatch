@@ -12,6 +12,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import pytest
+
 from fsw import instrument as ins
 from fsw.llm import FakeLLM
 from fsw.web.app import create_app
@@ -21,6 +23,12 @@ from tests.test_instrument import PLAN, STEPS, reply
 
 HERE = Path(__file__).parent / "fixtures" / "fullflow_multi_sentence"
 SRC = HERE / "src"
+
+@pytest.fixture(autouse=True)
+def _model_reset_only(monkeypatch):
+    """这里查的是 AI 写的位置怎么核对（码表找不到地方放清零时的老办法）：不让码表自己放清零（见 test_insert_reset_by_tool）。"""
+    monkeypatch.setattr(ins, "place_reset", lambda *a, **k: None)
+
 
 
 def saved():
