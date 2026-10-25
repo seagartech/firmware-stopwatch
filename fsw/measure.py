@@ -50,7 +50,8 @@ class Spec:
     @classmethod
     def from_scenario(cls, s):
         segs = {k: [g["from"], g["to"]] for k, g in s["segments"].items()}
-        lines = [{"name": l["name"], "segs": [segs[k] for k in l["segments"]]} for l in s["lines"]]
+        lines = [{"name": l["name"], "segs": [segs[k] for k in l["segments"]], **({"first": True} if l.get("first") else {})}
+                 for l in s["lines"]]
         names = dict(s.get("point_names") or {})
         names.setdefault(s["start"]["point"], s["start"]["name"])
         for p in (s.get("per_round") or {}).get("phases") or []:
@@ -252,7 +253,9 @@ class Collector:
             # 没走完的起点（后面没有点）补打出来照旧不算
             if m and m.group(1) not in self.spec.last:
                 ln, lus = m.group(1), int(m.group(2))
-                ok = (ln in self.spec.need and ln not in self.cur and self.started and not self.done
+                # 这一轮已经有它、但只有起点或前一步之前的那次（比如唤醒提示音的最后一段）：补打的这次才是这一轮的
+                fresh = ln not in self.cur or (ln != self.spec.start and self.spec.start in self.cur and not self._after(ln))
+                ok = (ln in self.spec.need and fresh and self.started and not self.done
                       and (self.spec.start in self.cur or (ln == self.spec.start and self._later_half(lus, self.occ))))
                 if not ok:
                     return []
@@ -368,23 +371,48 @@ class Collector:
         if self._complete():
             self.ready, self.ready_at = True, time.monotonic()
 
-    def _after(self, x):
-        """这一轮里计时点 x 记在起点之后（容差 STALE_US）的那几次，按时间先后。"""
+    def _after(self, x, _seen=None):
+        """这一轮里计时点 x 记在起点之后的那几次，按时间先后。
+        "记最后一次"的点和线的终点：只认它这一段起头那一步之后的（10-25 真测：唤醒提示音的"最后一段出声"比这一轮的起点早
+        0.29 秒，原来"记最后一次"的点放宽到起点前半秒，被当成这一轮回复的最后一段，整段播放算成 -5.72 秒）。
+        起头那一步这一轮没有（中途打断、只记了起点之前那次）就往前找，直到起点。
+        一次一记的中间点不卡先后（服务器两条消息先后会反，比如第一包声音比"开始说话"早几毫秒到，是要查的问题，不是插错）。"""
         t0 = self.cur[self.spec.start][0]
-        # 起点之前半秒内的也算（"记最后一次"的点，时间戳可能略早于起点）；一次一记的中间点必须在起点之后：
-        # 打断回答后服务器补发的"开始说话"早于你说完 0.44 秒，算进来就成了负数段（10-19 真测：一段 -0.94 秒）
-        tol = STALE_US if x in self.spec.marks or not self.spec.marks or x in self._line_ends() else 0
+        ends = self._line_ends()
+        # 老的场景（没标"记最后一次"）照旧：起点之前半秒内的也算；一次一记的中间点必须在起点之后
+        # （打断回答后服务器补发的"开始说话"早于你说完 0.44 秒，算进来就成了负数段，10-19 真测）
+        tol = 0 if x in self.spec.marks else STALE_US if not self.spec.marks or x in ends else 0
         got = sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - tol)
-        b = self._before_end(x)
-        # 前一步也是"记最后一次"的点（比如"收到合成结束"）：它和终点谁先谁后不一定（10-21 真测：一半的轮先放完、50 毫秒后才收到合成结束），
-        # 不拿它卡，往前找一个只记一次的步骤（比如"扬声器开始出声"）。两段的先后乱了由报告合成一段（见 judge.merge_overruns）
-        while b and b != self.spec.start and b in self.spec.marks:
-            b = next((g[0] for g in self.spec.segments.values() if g[1] == b), None)
-        if got and b and b != x:
-            # 线的终点（比如喇叭最后一声）中途可能多打一次（播放卡了一下）：只认它前一步之后的那次，前一步还没到就当还没收到
-            tb = [o[0] for o in ([self.cur[b]] if b == self.spec.start else self._after(b))] if b in self.cur else []
-            got = [o for o in got if o[0] >= tb[0]] if tb else []
-        return got
+        if not got or x == self.spec.start or not (x in self.spec.marks or x in ends):
+            return got
+        seen = (_seen or set()) | {x}
+        tb = None
+        for a in self._froms(x):
+            t = self._from_time(a, seen, x in ends)
+            if t is None:
+                return []
+            tb = t if tb is None else max(tb, t)
+        return [o for o in got if tb is None or o[0] >= tb]
+
+    def _froms(self, x):
+        return [g[0] for g in self.spec.segments.values() if g[1] == x and g[0] != x]
+
+    def _from_time(self, a, seen, strict=False):
+        """x 那一段起头的那一步 a 这一轮记到的时刻（起点之后的第一次）。a 是"记最后一次"的点时（它和下一步谁先谁后不一定，
+        10-21 真测：一半的轮先放完、50 毫秒后才收到合成结束），不拿它卡，往前找只记一次的那一步；这一轮没有 a 也往前找。
+        往前一直找到起点。strict（线的终点，比如喇叭最后一声中途多打一次）：前一步这一轮还一次都没到就返回 None，当这个终点还没收到；
+        前一步只有起点之前那次（比如唤醒词说完那一下就发出的第一包），往前找。"""
+        while a and a != self.spec.start and a not in seen:
+            seen = seen | {a}
+            if a not in self.spec.marks:
+                if a not in self.cur:
+                    if strict:
+                        return None
+                elif got := self._after(a, seen):
+                    return got[0][0]
+            prev = self._froms(a)
+            a = prev[0] if prev else self.spec.start
+        return self.cur[self.spec.start][0]
 
     def _line_ends(self):
         return {l["segs"][-1][1] for l in self.spec.lines if l["segs"]}
@@ -450,7 +478,8 @@ class Collector:
         等它的话下一句会被并进这一轮（10-21 真测："一加一等于几"说完第一个格子不变绿，第 1 轮放完记成 9.7 秒）。
         它晚到了照样算回这一轮。"""
         miss = set(self._miss_after()) if not self.ready and not self.done and self.spec.start in self.cur else set()
-        if miss and miss <= self.spec.last & self.spec.soft:
+        # ended：这一轮在试一次里已经结束（读到过结束标记），缺的只是"不判快慢"那条线上的点，后面也不会再来了：照样交出，那几段空着
+        if miss and (miss <= self.spec.last & self.spec.soft or (ended and miss <= self.spec.soft)):
             self.done = True
             r = self._ok_or_stale()
         elif not (self.ready and not self.done and (self.spec.last or ended)):  # ended：这一轮在试一次里已经结束（读到过结束标记）
@@ -526,13 +555,16 @@ class Collector:
         return gap
 
     def _latest_start(self):
-        """起点一轮里报了好几次（比如设备每听到一阵杂音停下就判一次"说完了"）：取紧挨着下一步之前的那一次，
-        不取第一次。不然人真正说完之前几十秒的那次杂音会被当成起点（真测第 31 次：说完到开口记成 41 秒）。"""
+        """起点一轮里报了好几次（设备每听到一阵杂音、或者唤醒词说完、说到一半停一下，都判一次"说完了"）：
+        取第一下感觉到的结果（比如收到识别文字）之前的最后一次，不取第一次。不然人真正说完之前的那次会被当成起点
+        （真测第 31 次：说完到开口记成 41 秒；10-25 真测：唤醒词说完那一下当了起点，早了 4 秒多）。
+        没有"第一下感觉到的结果"那条线时，取紧挨着起点下一步之前的那一次。"""
         st = self.spec.start
         occ = sorted(self.occ.get(st, []))
         if len(occ) < 2:
             return
-        nxt = {g[0][1] for g in (l["segs"] for l in self.spec.lines) if g and g[0][0] == st}  # 每条线起点之后的第一步
+        felt = [l["segs"][-1][1] for l in self.spec.lines if l.get("first") and l["segs"]]
+        nxt = set(felt) or {g[0][1] for g in (l["segs"] for l in self.spec.lines) if g and g[0][0] == st}  # 每条线起点之后的第一步
         ts = [o[0] for x in nxt for o in self.occ.get(x, []) if o[0] >= occ[0][0]]
         if not ts:
             return
