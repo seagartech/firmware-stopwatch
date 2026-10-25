@@ -772,14 +772,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     try:
                         job["calls"] += 1
                         talk["llm"] = _model()[1]
-                        text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
+                        text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("cut_note", None)), body.work,
                                                        on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     except llms.LLMError as e:
                         return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
             else:
                 job["calls"] += 1
                 try:
-                    text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs), body.work,
+                    text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("cut_note", None)), body.work,
                                              on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     talk["llm"] = model
                 except llms.LLMError as e:
@@ -949,6 +949,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             # 所以试一次不等起点：其余的有一轮收齐就算试通；起点留给多轮实测去核对（连着几轮没记到起点会点名，见 take）
             start_ids = {int(ins.point_id(x, a.steps)[1:]) for x in a.steps if x.get("line") == "start"} & want
             rounds = {"cur": set(), "best": set(), "seen": set(), "raw": set(), "start_us": None}  # 这一轮收到的、收得最多的那一轮、收到过的
+            # 每轮半路被清零：一轮有了起点、还没走到结束那一步就读到清零，清零后（下一个起点之前）又陆续来了这一轮后面的点
+            order = [int(ins.point_id(x, a.steps)[1:]) for x in a.steps]
+            end_s = ins.round_end(a.steps)
+            end_id = int(ins.point_id(end_s, a.steps)[1:]) if end_s else None
             full = lambda got: got >= want - start_ids
             shown = lambda got: got | (rounds["seen"] & start_ids)
             job["missing"] = []
@@ -961,12 +965,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             def feed(line):
                 p = meas.parse_line(line)
                 if line.strip().startswith("FSW,RESET"):
+                    cur = rounds["cur"]
+                    # 这一轮有起点、走过起点、还没到结束那一步、没收全就被清零：先记着，清零后真来了这一轮后面的点才算"半路被清零"
+                    rounds["maybe_cut"] = {"after": rounds.get("last_id"), "had": set(cur), "later": set()} \
+                        if start_ids and cur & start_ids and end_id is not None and end_id not in cur and not full(cur) \
+                        and rounds.get("last_id") is not None else None
                     if (rounds["cur"] & start_ids or not start_ids) and full(rounds["cur"]):
                         # 带起点、收全了的一轮读到了结束标记：记着，试通时交给多轮实测（带上这一轮最后补打的 LATE 行）
                         rounds["last_full"] = {"lines": list(rounds.get("tail") or []), "at": time.time()}
                         rounds["ended"] = True
                     rounds["prev"] = (rounds["cur"], p[1] if p else None, rounds["start_us"], list(rounds.get("tail") or []))
-                    rounds["cur"], rounds["raw"], rounds["start_us"] = set(), set(), None
+                    rounds["cur"], rounds["raw"], rounds["start_us"], rounds["last_id"] = set(), set(), None, None
                     rounds["tail"] = []
                     return
                 lm = meas.LATE.search(line)
@@ -984,11 +993,22 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     rounds["last_full"] = {"lines": pv[3] + [line], "at": time.time()}  # 这一轮已经结束：连同晚到的这一声交给多轮实测
                     rounds["ended"] = True
                     return
+                mc = rounds.get("maybe_cut")
+                if mc and p and st and rounds["start_us"] is None:
+                    if st[0] in start_ids:
+                        rounds["maybe_cut"] = None  # 下一轮开始了：没看到被切掉的那一截
+                    elif st[0] in want and st[0] not in mc["had"] and st[0] in order and mc["after"] in order \
+                            and order.index(st[0]) > order.index(mc["after"]):
+                        # 清零之后、下一个起点之前来的点：流程里排在被切断处后面、那一轮还没收到的，就是被切掉的那一截
+                        mc["later"].add(st[0])
+                        rounds["cut"] = mc
                 if st and st[0] in start_ids and rounds["start_us"] is None:
                     rounds["start_us"] = st[1]
                 rounds["raw"] |= raw
                 got = raw if counts(st, rounds["start_us"]) else set()
                 rounds["cur"] |= got
+                if rounds["cur"] - start_ids:  # 这一轮走到流程里最后面的那一步（半路被清零时说"在哪一步之后"）
+                    rounds["last_id"] = max(rounds["cur"] - start_ids, key=lambda k: order.index(k) if k in order else -1)
                 if (full(rounds["cur"]), len(rounds["cur"])) >= (full(rounds["best"]), len(rounds["best"])):
                     if full(rounds["cur"]) and not full(rounds["best"]):
                         rounds["full_at"] = time.time()
@@ -1045,6 +1065,18 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                              error=f"打不开调试口：{err}" if err else "没看到设备")
             got = shown(rounds["best"])  # 按收得最多的那一轮判（起点不要求）
             job["got"] = sorted(got)
+            cut = rounds.get("cut")
+            if cut and not full(got):
+                job["try_fails"] = job.get("try_fails", 0) + 1
+                at_n = names.get(f"P{cut['after']}") or f"P{cut['after']}"
+                rest = "」「".join(names.get(f"P{k}") or f"P{k}" for k in sorted(cut["later"], key=order.index))
+                note = (f"每轮清零那一句放错了：每一轮在「{at_n}」之后就被清零，后面的「{rest}」都算不进这一轮。"
+                        "清零要放在一轮结束、回到等待的地方，不能放在每次换状态、每一步都会走的地方")
+                fsw["cut_note"] = note  # 回到「插计时点」重插时告诉 AI
+                return _fail(job, "try", note + "。再试也一样，回到「插计时点」那一步重新插一次（码表会把这个问题告诉 AI）。",
+                             why="设备真的走完了这一轮（后面的点都打出来了），只是半路被清零，码表没法把它们算进同一轮。",
+                             error=f"（收到 {len(got)} / {len(want)} 个）", missing=[names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)],
+                             offer_restore=job["try_fails"] >= 2)
             if got and not full(got) and len(got) >= need_n:  # 差几个：不算试通，否则正式实测每一轮都会"没收全"
                 job["try_fails"] = job.get("try_fails", 0) + 1
                 miss = [names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)]
