@@ -873,3 +873,57 @@ def test_stage_two_prompt_leaves_segment_rules_to_the_tool():
     p = idf.build_prompt("全程", "", flow={"chain": []})
     assert "6. segments 按点发生的先后把相邻两点连起来就行；先后说不准的写进 doubts，怎么量由码表处理。" in p
     assert "不要串成前后相连的段" not in p and "每个都要有一段以它为终点" not in p
+
+
+# ---------- role 漏标也追问；逐包发送只标了首包或末包时码表补上另一个 ----------
+def _door_role(drop="最后结果", upload="上传首包、上传末包", rep="once"):
+    d = copy.deepcopy(DOOR_RESULT)
+    for c in d["chain"]:
+        c["role"] = str(c.get("role") or "").replace(drop, "").strip("、") if drop else c.get("role")
+    d["chain"][3]["role"], d["chain"][3]["repeat"] = upload, rep
+    return d
+
+
+def test_missing_role_is_asked_once_in_the_same_conversation(door):
+    m = FakeLLM(js(_door_role()), followups=[DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"] and len(m.asked) == 1 and "链里没标出：最后结果" in m.asked[0] and "不加新步骤" in m.asked[0]
+    assert [(x["kind"], x["ok"]) for x in r["followups"]] == [("fix", True)]
+
+
+def test_follow_up_answer_is_used_only_if_problems_decrease(door):
+    worse = _door_role()
+    worse["chain"][1]["code"] = "完全不是这一行"
+    worse["chain"][2].pop("func")
+    m = FakeLLM(js(_door_role()), followups=[js(worse)])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert not r["ok"] and r["kind"] == "bad_chain" and len(m.asked) == 1
+    assert r["problems"] == [p for p in r["followups"][0]["problems"]] and "chain_reply_first" not in r
+    assert len(r["followups"][0]["problems_after"]) > len(r["problems"])
+
+
+def test_missing_step_with_other_problem_is_not_asked(door):
+    d = _door_role()
+    d["chain"][2]["file"] = "main/nope.c"
+    m = FakeLLM(js(d), followups=[DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert not r["ok"] and not m.asked
+
+
+@pytest.mark.parametrize("upload,rep,fresh,ok", [
+    ("上传末包", "repeat", True, True), ("上传首包", "repeat", True, True),
+    ("上传末包", "once", True, False), ("上传末包", "repeat", False, False)])
+def test_repeated_send_with_one_upload_role_gets_both(door, upload, rep, fresh, ok):
+    flow, bad = idf.check_chain(door, _door_role(drop=None, upload=upload, rep=rep), "", [], fresh=fresh)
+    assert (not bad) is ok, bad
+    if ok:
+        assert set(flow["chain"][3]["role"]) >= {"上传首包", "上传末包"} and "逐包反复执行" in flow["repairs"][0]
+    else:
+        assert "repairs" not in flow
+
+
+def test_first_and_last_on_two_steps_is_not_merged_by_the_rule(door):
+    d = _door_role(drop=None, upload="上传首包", rep="repeat")
+    d["chain"][4]["role"] = "首个结果、上传末包"
+    flow, bad = idf.check_chain(door, d, "", [], fresh=True)
+    assert any("只能标在一步上" in b for b in bad) and "repairs" not in flow

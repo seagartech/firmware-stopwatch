@@ -343,6 +343,7 @@ def _where_code(root, file, line, code):
     return None, f"{_rel(root, file)} 第 {n} 行是「{real[:40]}」，和它抄的原文「{str(code).strip()[:40]}」对不上"
 
 
+UPLOAD_ROLES = ("上传首包", "上传末包")
 _RECOGNIZED = re.compile(r"识别|转写|stt|asr|transcri|recogni", re.I)
 _SILENCE = re.compile(r"静音|语音活动|说话结束|语音结束|vad|silence|end[ _-]?of[ _-]?speech|speech[ _-]?end", re.I)
 
@@ -438,6 +439,16 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
                       "code": check_location(root, c["file"], line)[0], "func": str(c["func"]).strip(), "role": role,
                       "branch": str(c.get("branch") or "").strip(), "repeat": rep, "after": str(c.get("after") or "").strip()})
     upload = str(data.get("upload") or "").strip()
+    repairs = []  # 码表按规则补上的（只对新回答）
+    if fresh and len(up_steps) == 1:
+        c = next(x for x in chain if x["n"] == up_steps[0])
+        have = [r for r in UPLOAD_ROLES if r in c["role"]]
+        other = [r for r in UPLOAD_ROLES if r not in roles]
+        if len(have) == 1 and len(other) == 1 and c["repeat"] == "repeat":
+            # 逐包反复执行的同一句发送只标了首包或末包：按提示词，这一句的第一次和最后一次执行就是首包和末包
+            c["role"].append(other[0])
+            roles.add(other[0])
+            repairs.append(f"第 {c['n']} 步是逐包反复执行的发送，只标了{have[0]}：同一句的第一次和最后一次执行就是首包和末包，补上{other[0]}")
     need = [r for r in ROLES if r not in roles and not (r.startswith("上传") and upload.lower().startswith(_NONE))]
     if len(up_steps) > 1:  # 同一次发送只标一处
         bad.append(f"上传首包、上传末包标在了第 {'、'.join(map(str, up_steps))} 步：只能标在一步上（真正发出数据的那一句）")
@@ -445,6 +456,9 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
             fixes.append({"bad": bad[-1], "text": f"上传首包、上传末包标在了第 {'、'.join(map(str, up_steps))} 步，只留一步（真正发出数据的那一句），其余步骤去掉这两个标记"})
     if raw and need:
         bad.append(f"事件链里没标出：{'、'.join(need)}（在对应步骤的 role 里写；确实不往外发数据的，upload 写「无」）")
+        if fixes is not None:  # 改 role 不用再读源码：步骤已经在链里的，追问时只补标记
+            fixes.append({"bad": bad[-1], "text": f"链里没标出：{'、'.join(need)}。这些步骤已经在链里的（比如 doubts 里已经说了是哪一步），"
+                                                   "只在那一步的 role 里补上，不加新步骤、不改别的"})
     if raw and str(category or "").strip() in NEED_DONE and DONE not in roles and not any(DONE in d for d in doubts):
         bad.append(f"事件链里没有「{DONE}」这一步（输出或播放队列放空这类信号所在的那一支）；代码里确实没有这种信号的，在 doubts 里写明\"没有{DONE}的信号\"和找过哪里")
     if (fresh and raw and str(category or "").strip() == "语音对话"
@@ -453,7 +467,7 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
         bad.append("语音类的链里没有「收到识别出的文字」这一步（设备收到识别结果的那一支）；协议里确实没有这种消息的，在 doubts 里写明\"没有识别文字的消息\"和找过哪里")
     flow = {"trigger": trigger, "upload": upload, "mode": mode, "detect": det, "chain": chain,
             "doubts": [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else [],
-            "tips": tips}  # 码表判断不了、放行的地方（比如 lambda 里写的函数名），只提醒
+            "tips": tips, **({"repairs": repairs} if repairs else {})}  # 码表判断不了、放行的地方（比如 lambda 里写的函数名），只提醒
     return flow, bad
 
 
@@ -670,10 +684,12 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
             took_retries("chain")
             if again is not None:
                 got2, bad2 = check_chain(root, _json_block(again), category, fresh=True)
-                followups.append({"stage": STAGES["chain"], "kind": "fix", "ok": not bad2, "problems": bad, "seconds": round(time.time() - t, 1)})
+                followups.append({"stage": STAGES["chain"], "kind": "fix", "ok": not bad2, "problems": bad, "problems_after": bad2,
+                                  "seconds": round(time.time() - t, 1)})
                 print(f"[识别] 理清流程有 {len(bad)} 处可指出改法的问题，追问一次只改这几处：{'好了' if not bad2 else '还是不对'}", file=sys.stderr, flush=True)
-                chain_first = chain_first or chain_reply
-                chain_reply, got, bad = again, got2, bad2
+                if len(bad2) < len(bad):  # 问题变少才用改过的那份
+                    chain_first = chain_first or chain_reply
+                    chain_reply, got, bad = again, got2, bad2
         if bad:  # 不合格就停下说明原因，不自动重试
             more = f"等 {len(bad)} 处" if len(bad) > 3 else ""
             return _fail("bad_chain", f"理清流程这一步的结果没通过码表检查：{'；'.join(bad[:3])}{more}。点\"重试\"再理一次，也可以到设置页换一个大模型。",
@@ -681,6 +697,8 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
                          **({"chain_reply_first": chain_first} if chain_first else {}),
                          seconds=round(time.time() - t0, 1), calls=calls)
         flow = got
+        for x in flow.get("repairs") or []:
+            print(f"[识别] 码表补上：{x}", file=sys.stderr, flush=True)
         state["stage"], text, t_stage[0] = "pick", [], time.time()
         report()
     try:
