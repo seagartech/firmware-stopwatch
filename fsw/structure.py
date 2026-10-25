@@ -56,12 +56,50 @@ def mask(text):
         else:
             i += 1
     lines = "".join(out).split("\n")
-    cont = False
+    cont, heads = False, {}
     for k, ln in enumerate(lines):
         if cont or ln.lstrip().startswith("#"):
+            if not cont:
+                heads[k] = k
             cont = ln.rstrip().endswith("\\")
             lines[k] = " " * len(ln)
+    _pp_branches(text.split("\n"), lines, heads)
     return "\n".join(lines)
+
+
+_PP = re.compile(r"\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b(.*)$")
+
+
+def _pp_branches(raw, lines, heads):
+    """编译开关（#if / #elif / #else）几支里的大括号对不上时，数括号会乱：
+    - #if 0 那一支本来就不编译，整支当空白；
+    - 同一组有好几支（#else / #elif），其中有一支多开（或多关）了括号（比如两支各写一个 `if (…) {`、共用后面一个 }）：
+      几支只会编进去一支，只留第一支（#if 那一支），其余几支当空白——相当于按其中一种配置看，括号就对上了。
+    每一支里括号都自己配好的照原样都留着（检查照样能看到每一支里的代码）。只改 lines（去注释后的代码），原文和行号不变。"""
+    stack = []
+    for k in sorted(heads):
+        s = raw[k].strip()
+        j = k
+        while s.endswith("\\") and j + 1 < len(raw):
+            j += 1
+            s = s[:-1] + " " + raw[j].strip()
+        m = _PP.match(s)
+        if not m:
+            continue
+        d, rest = m.group(1), re.sub(r"/\*.*?\*/|//.*$", "", m.group(2)).strip()
+        if d in ("if", "ifdef", "ifndef"):
+            stack.append({"zero": d == "if" and rest in ("0", "(0)"), "parts": [], "open": j + 1})
+        elif d in ("elif", "else") and stack:
+            stack[-1]["parts"].append((stack[-1]["open"], k))
+            stack[-1]["open"] = j + 1
+        elif d == "endif" and stack:
+            f = stack.pop()
+            parts = f["parts"] + [(f["open"], k)]
+            delta = [sum(lines[i].count("{") - lines[i].count("}") for i in range(a, b)) for a, b in parts]
+            blank = parts[:1] if f["zero"] else parts[1:] if len(parts) > 1 and any(delta) else []
+            for a, b in blank:
+                for i in range(a, b):
+                    lines[i] = " " * len(lines[i])
 
 
 class Source:
@@ -76,6 +114,7 @@ class Source:
         for ln in self.lines:
             self.starts.append(self.starts[-1] + len(ln) + 1)
         self.blocks = []
+        self.balanced = True  # 大括号能一一配上（多出来的 } 或没关上的 {：数括号说不准，结构检查不拦、记"没核对"）
         stack, depths = [], []
         last, paren = 0, 0  # last：上一个 ; { } 之后的位置，块头从这里开始；括号里的 ;（for 的三段）不算
         for i, ch in enumerate(self.code):
@@ -95,9 +134,13 @@ class Source:
                 if stack:
                     self.blocks[stack.pop()]["close"] = i
                     paren = depths.pop()
+                else:
+                    self.balanced = False
                 last = i + 1
             elif ch == ";" and paren == 0:
                 last = i + 1
+        if stack:
+            self.balanced = False
 
     def _in_function(self, b):
         p = b["parent"]
