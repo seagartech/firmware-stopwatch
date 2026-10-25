@@ -99,15 +99,31 @@ def _rule(rule, t, vals, segs, ends):
     return False
 
 
+def _path(segs):
+    """一条线从起点走到终点（最后一段的终点）经过的那几段。线里还有从同一个点分出去的段（比如从首段出声分出
+    "扬声器连续播放回复""判定播放队列放空""回到聆听" 三段，各量各的）：它们同时在走，不能加起来，只算通到终点的那一串
+    （10-25 真测：三段都加进"到回到聆听"，多算了 0.19 秒）。从终点往回接不到起点（线没接好）就照旧按全部段算。"""
+    if not segs:
+        return segs
+    start, x, path = segs[0][0], segs[-1][1], []
+    while x != start:
+        prev = next((g for g in reversed(segs) if g[1] == x and g not in path), None)
+        if prev is None:
+            return segs
+        path.insert(0, prev)
+        x = prev[0]
+    return path
+
+
 def compute(cur, spec):
     t = {p: us / 1_000_000 for p, (us, _) in cur.items()}
     vals = {p: v for p, (_, v) in cur.items()}
     segs = {k: (round(t[b] - t[a], 6) if a in t and b in t else None) for k, (a, b) in spec.segments.items()}
     ends = {}
     for l in spec.lines:
-        parts = [(t[b] - t[a]) if a in t and b in t else None for a, b in l["segs"]]
+        g = _path(l["segs"])
+        parts = [(t[b] - t[a]) if a in t and b in t else None for a, b in g]
         ends[l["name"]] = round(sum(parts), 6) if parts and None not in parts else None
-        g = l["segs"]
         if ends[l["name"]] is None and g and g[0][0] in t and g[-1][1] in t and all(g[i][1] == g[i + 1][0] for i in range(len(g) - 1)):
             # 中间缺一个点（比如打断回答后那一轮"收到开始说话"不是这一轮的）：一条线首尾相接，用时就是首尾两点之差，照样算
             ends[l["name"]] = round(t[g[-1][1]] - t[g[0][0]], 6)
@@ -533,7 +549,8 @@ class Collector:
             if after:
                 # 决策 123：起点之后的第一次才是这一轮的（比如进聆听时先换一次表情，回答来了再换）；
                 # 取最后一次的点（回答全部放完）中途停顿时会先报一次，取最后那次
-                self.cur[x] = after[-1] if x in self.spec.last else after[0]
+                # 记最后一次的点（marks，比如末段输出、全部放完）：回复分几句播时一轮里会报好几次（每句放完一次），取这一轮最后那次，量的是整段回复
+                self.cur[x] = after[-1] if x in self.spec.last or x in self.spec.marks else after[0]
             else:
                 stale.append(x)
         gap = self._gaps(stale)
