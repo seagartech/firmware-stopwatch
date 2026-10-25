@@ -32,7 +32,7 @@ def voice_flow():
         "mode": {"what": "协议由服务器下发配置决定", "file": "main/chat.cc", "line": 4,
                  "code": "if (!protocol_->OpenAudioChannel()) {", "config": "无相关开关",
                  "protocol": {"what": "服务器下发的通道", "file": "main/chat.cc", "line": 4, "code": "if (!protocol_->OpenAudioChannel()) {"}},
-        "detect": {"kind": "静音检测翻转（只用来切换显示也算）", "found": True},
+        "detect": {"kind": "收到服务器消息（这个小例子只看下行）", "found": True},
         "chain": [
             {"n": 1, "what": "收到服务器消息", "file": "main/chat.cc", "line": 18, "code": "auto type = json_get(root, \"type\");",
              "func": "Init 里交给 OnIncomingJson 的回调", "branch": "", "repeat": "repeat", "after": ""},
@@ -682,9 +682,100 @@ def test_last_result_measured_from_a_common_earlier_point_passes(tmp_path):
 
 def test_prompts_trace_input_to_the_send_and_connect_end_points():
     c = idf.build_chain_prompt("全程")
-    assert ("设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句，再挑步骤；"
+    assert ("设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句（起点仍按第 2 条，不从按键、触摸这类触发动作往下追），再挑步骤；"
             "有上传却缺了上传首包、末包或首个结果的链是错的。") in c
     p = idf.build_prompt("全程", "", flow={"chain": []})
     assert "标了最后结果、全部放完的点，每个都要有一段以它为终点。" in p
     for t in (c, p, idf.VOICE_HINT, idf.CARD_HINT):
         assert "xiaozhi" not in t.lower() and "application.cc" not in t
+
+
+# ---------- 起点钉在设备自己的输入结束检测；选点只差插在判断开头、输出缺首末点时追问一次 ----------
+def test_start_is_pinned_to_the_own_end_of_input_detection(voice):
+    flow = voice_flow()
+    flow["detect"] = {"kind": "按键松开", "found": True, "looked": "静音检测翻转只用来切指示灯"}
+    flow["chain"][0]["what"] = "按键松开，切换对话状态"
+    msg = "第 1 步却不是它"
+    assert any(msg in b for b in idf.check_chain(voice, flow, "", fresh=True)[1])
+    assert not any(msg in b for b in idf.check_chain(voice, flow, "")[1])  # 缓存里的旧流程不加这一条
+    flow["chain"][0]["what"] = "静音检测翻转（只用来切换显示）"
+    assert not any(msg in b for b in idf.check_chain(voice, flow, "", fresh=True)[1])
+    door = door_flow()  # 刷卡这类：detect 不提静音，不受影响
+    assert not any(msg in b for b in idf.check_chain(door_source(voice.parent / "d"), door, "", fresh=True)[1])
+
+
+def test_prompt_keeps_the_start_rule_when_tracing_the_input():
+    assert "先顺着输入从采集一直追到真正把它发出去的那一句（起点仍按第 2 条，不从按键、触摸这类触发动作往下追），再挑步骤；" in idf.build_chain_prompt("全程")
+
+
+def _if_project(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir(exist_ok=True)
+    (tmp_path / "main/a.c").write_text("void Run(void) {\n    begin();\n    if (state == 2) {\n        finish();\n    }\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 2}, {"n": 2, "file": "main/a.c", "line": 3, "role": "最后结果"}]
+    pts = [{"id": "P1", "chain_step": 1, "name": "开始", "file": "main/a.c", "line": 2, "where": "before", "once": "once", "line_of": "start", "loc_ok": True},
+           {"id": "P2", "chain_step": 2, "name": "结束", "file": "main/a.c", "line": 3, "where": "before", "once": "once", "line_of": "main", "loc_ok": True}]
+    return structure, chain, pts
+
+
+def test_if_head_anchor_gives_a_follow_up_with_the_branch_body(tmp_path):
+    structure, chain, pts = _if_project(tmp_path)
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
+    items = structure.pick_fixes(tmp_path, pts, chain)
+    assert len(items) == 1 and "第 4 行「finish();」" in items[0] and "4:         finish();" in items[0]
+    pts[1]["chain_step"] = 1  # 再加一个别的硬失败（不在那一步那一支）：不追问
+    pts[1]["line"] = 99
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
+    assert structure.pick_fixes(tmp_path, pts, chain) is None
+
+
+@pytest.mark.parametrize("strict,level", [(True, "fail"), (False, "tip")])
+def test_output_step_needs_first_and_last(tmp_path, strict, level):
+    structure, chain, pts = _if_project(tmp_path)
+    chain[0]["role"] = "输出"
+    pts[1]["line"] = 4
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=strict)
+    got = [c for c in pts[0]["chk"] if c["kind"] == "output"]
+    assert [c["level"] for c in got] == [level] and "first、last" in got[0]["text"]
+    pts[0]["once"] = "first"
+    pts.append({**pts[0], "id": "P3", "once": "last", "line_of": "main"})
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P3"}, {"from": "P3", "to": "P2"}], chain=chain, strict=strict)
+    assert not [c for p in pts for c in p["chk"] if c["kind"] == "output"]
+
+
+def _door_output(missing_last=True):
+    d = copy.deepcopy(DOOR_RESULT)
+    d["chain"][5]["role"] = "最后结果、输出"
+    d["steps"][4]["once"] = "first"
+    if not missing_last:
+        d["steps"].append({**d["steps"][4], "id": "P6", "name": "开锁最后一次", "once": "last"})
+        d["segments"].append({"from": "P5", "to": "P6", "name": "开锁动作"})
+    return d
+
+
+def test_pick_follow_up_fixes_only_those_points(door):
+    m = FakeLLM(js(_door_output()), followups=[js(_door_output(False))])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"] and len(m.asked) == 1 and "流程第 6 步标了输出" in m.asked[0] and "不要再读源码" in m.asked[0]
+    f = [x for x in r["followups"] if x["stage"] == "选计时点"]
+    assert len(f) == 1 and f[0]["kind"] == "fix" and f[0]["ok"] and f[0]["fails_before"] == 1 and f[0]["fails_after"] == 0
+    assert any(s["id"] == "P6" for s in r["steps"]) and r["reply_first"] == js(_door_output())
+
+
+def test_pick_follow_up_that_makes_it_worse_keeps_the_first_answer(door):
+    worse = _door_output()
+    worse["steps"][0]["file"] = "main/net_auth.c"
+    m = FakeLLM(js(_door_output()), followups=[js(worse)])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"] and len(m.asked) == 1 and not any(s["id"] == "P6" for s in r["steps"])
+    assert [(x["kind"], x["ok"]) for x in r["followups"]] == [("fix", False)]
+    assert r["steps"][0]["file"] == "main/rfid_task.c"
+
+
+def test_no_pick_follow_up_for_wrong_file(door):
+    d = _door_output(False)
+    d["steps"][1]["file"] = "main/net_auth.c"
+    d["steps"][1]["line"] = 180
+    m = FakeLLM(js(d), followups=[DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"] and not m.asked and not r["followups"]

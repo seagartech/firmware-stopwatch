@@ -808,6 +808,67 @@ def chain_no_line(c):
         return None
 
 
+def check_output(steps, by_n):
+    """流程里标了输出的那一步：首段、末段输出用它的第一次和最后一次执行，点要有 first 和 last 两个。返回 [(点 id, 说明)]。"""
+    out = []
+    for n, c in by_n.items():
+        if "输出" not in str(c.get("role") or ""):
+            continue
+        mine = [x for x in steps if x.get("chain_step") == n and x.get("line_of") != "side"]
+        if not mine:
+            continue
+        have = {str(x.get("once") or "").strip().lower() for x in mine}
+        miss = [w for w in ("first", "last") if w not in have]
+        if miss:
+            out.append((mine[0].get("id"), f"流程第 {n} 步标了输出，这一步的点缺 once 写 {'、'.join(miss)} 的：首段、末段输出要用它的第一次和最后一次执行，"
+                                           "两个点都放在这一步（同一行），并接进段里"))
+    return out
+
+
+def _branch_text(src, line, limit=12):
+    """判断或循环开头那一行后面那一支：(第一句的行号, 第一句原文, [(行号, 原文)…最多 limit 行])。"""
+    n, first = _next_code(src, line)
+    if not n or first == "}":
+        return None, "", []
+    rows, depth = [], 0
+    for k in range(line - 1, min(len(src.lines), line - 1 + 60)):
+        c = src.clines[k]
+        if k >= line:
+            rows.append((k + 1, src.lines[k].rstrip()))
+        depth += c.count("{") - c.count("}")
+        if k >= line - 1 and depth <= 0 and k > line - 1:
+            break
+        if len(rows) >= limit:
+            break
+    return n, src.lines[n - 1].strip(), rows
+
+
+def pick_fixes(root, steps, chain):
+    """选点结果的硬失败如果全是能指出改法的（插在判断或循环开头那一行、标了输出的那一步缺 first 或 last），返回追问时要说的话；
+    还有别的硬失败（文件不对、不在那一步、段是负的……）就返回 None，照旧不追问。"""
+    proj = Project(root)
+    items, fails = [], 0
+    for s in steps:
+        for c in s.get("chk") or []:
+            if c["level"] != "fail":
+                continue
+            fails += 1
+            if c["kind"] == "anchor" and "是条件或循环的开头" in c["text"]:
+                src = proj.file(s["file"])
+                n, first, rows = _branch_text(src, int(s["line"])) if src else (None, "", [])
+                if not n:
+                    return None
+                body = "\n".join(f"    {k}: {t}" for k, t in rows)
+                items.append(f"{s['id']}「{s.get('name')}」放在 {s['file']} 第 {s['line']} 行「{src.lines[int(s['line']) - 1].strip()}」，"
+                             f"这是判断或循环的开头，点会落在整个判断外面。这一支大括号里的第一句是第 {n} 行「{first}」；这一支的内容：\n{body}\n"
+                             "  line 改成你要的那一支里的第一句，where 写 before")
+            elif c["kind"] == "output":
+                items.append(f"{s['id']}：{c['text']}")
+            else:
+                return None
+    return items if fails and items else None
+
+
 END_ROLES = ("最后结果", "全部放完")
 
 
@@ -876,6 +937,13 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
     except Exception as e:
         for s in steps[-1:]:
             s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查先后说不准的段时出错（{type(e).__name__}），请自己核对"})
+    try:
+        for sid, t in check_output(steps, by_n):
+            if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):
+                by[sid]["chk"].append({"level": "fail" if strict else "tip", "kind": "output", "text": t})
+    except Exception as e:
+        for s in steps[-1:]:
+            s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查输出那一步的首末点时出错（{type(e).__name__}），请自己核对"})
     try:
         for sid, t in check_dangling(steps, [g for g in list(segments or []) + list(side_segments or []) if isinstance(g, dict)], by_n):
             if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):

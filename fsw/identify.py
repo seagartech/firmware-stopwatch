@@ -94,7 +94,7 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 
 ## 要做的事
 理清连续使用时的第二轮里，从设备察觉人做完输入，到最后一个结果（比如回复全部播完、门完全打开），设备依次做了哪些事。
-1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。从处理这个输入事件的函数开始，沿真实的调用关系往下追（谁调用了谁、事件交给了谁），不能挑一个名字像的函数就用。设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句，再挑步骤；有上传却缺了上传首包、末包或首个结果的链是错的。
+1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。从处理这个输入事件的函数开始，沿真实的调用关系往下追（谁调用了谁、事件交给了谁），不能挑一个名字像的函数就用。设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句（起点仍按第 2 条，不从按键、触摸这类触发动作往下追），再挑步骤；有上传却缺了上传首包、末包或首个结果的链是错的。
 2. 第一步用设备自己能察觉人做完输入的检测（比如静音或语音活动检测翻转、读卡完成、按键松开）。哪怕它只用来切换显示、指示灯，不上报，也算设备察觉到了，第一步就用它。确实找不到，在 detect 里写明找过哪里。
 3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；定不下来的写进 doubts。
 4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面；和上一步谁先谁后说不准的，after 写"不确定"。
@@ -257,6 +257,7 @@ def _json_block(text):
     return None
 
 
+PICK_FIX_AGAIN = "码表核对你选的计时点时发现下面几处不对，其余都对：\n{items}\n不要再读源码，只改这几个点（id 不变，段照旧连好），把完整的结果重新输出一个 ```json 代码块。"
 FIX_AGAIN = "码表核对你的流程时发现下面几处不对，其余都对：\n{items}\n不要再读源码，只改这几处，把完整的结果重新输出一个 ```json 代码块。"
 FORMAT_AGAIN = "你上一条回答最后的 JSON 码表读不懂（格式不对，比如少了引号或逗号）。不要再读源码，只按要求的格式把同样的内容重新输出一个 ```json 代码块。"
 
@@ -342,7 +343,10 @@ def _where_code(root, file, line, code):
     return None, f"{_rel(root, file)} 第 {n} 行是「{real[:40]}」，和它抄的原文「{str(code).strip()[:40]}」对不上"
 
 
-def check_chain(root, data, category="", fixes=None):
+_SILENCE = re.compile(r"静音|语音活动|说话结束|语音结束|vad|silence|end[ _-]?of[ _-]?speech|speech[ _-]?end", re.I)
+
+
+def check_chain(root, data, category="", fixes=None, fresh=False):
     """两次调用之间码表检查理清的流程（只做做得可靠的）：
     文件、行号、原文对不对得上；必填项有没有写；第一步有没有写明是哪种输入结束检测。
     返回 (整理好的流程, 问题列表)；问题列表不空就是不合格。"""
@@ -381,6 +385,13 @@ def check_chain(root, data, category="", fixes=None):
         bad.append("第一步没写明用的是哪种输入结束检测")
     if det.get("found") in (False, "false", "否") and not str(det.get("looked") or "").strip():
         bad.append("说找不到输入结束检测，但没写找过哪里")
+    det_text = f"{det.get('kind') or ''} {det.get('looked') or ''}"
+    first = next((c for c in data.get("chain") or [] if isinstance(c, dict)), None) if isinstance(data.get("chain"), list) else None
+    if (fresh and first and det.get("found") not in (False, "false", "否") and _SILENCE.search(det_text)
+            and not _SILENCE.search(f"{first.get('what') or ''} {first.get('code') or ''} {first.get('func') or ''}")):
+        # 设备自己有说话结束一类的检测（静音、语音活动检测翻转）：第 1 步就得是它，不从按键、触摸这类触发动作往下追
+        bad.append("detect 里写着设备有自己的输入结束检测（静音、语音活动检测翻转），第 1 步却不是它：第 1 步要用这个检测翻转的那一行"
+                   "（只用来切换显示、指示灯也算），不从按键、触摸往下追")
     raw = [c for c in data.get("chain") or [] if isinstance(c, dict)] if isinstance(data.get("chain"), list) else []
     if len(raw) < 2:
         bad.append("事件链不到 2 步")
@@ -641,7 +652,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
             return failed(e, "chain")
         took_retries("chain")
         fixes = []
-        got, bad = check_chain(root, _json_block(chain_reply), category, fixes)
+        got, bad = check_chain(root, _json_block(chain_reply), category, fixes, fresh=True)
         if bad and len(fixes) == len(bad) and not any(x["stage"] == STAGES["chain"] for x in followups):
             # 只差抄错的原文、首包末包标了多步这类码表能指出改法的：同一段对话里追问一次，只改这几处（每一步最多追问一次）
             t = time.time()
@@ -651,7 +662,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
                 return failed(e, "chain")
             took_retries("chain")
             if again is not None:
-                got2, bad2 = check_chain(root, _json_block(again), category)
+                got2, bad2 = check_chain(root, _json_block(again), category, fresh=True)
                 followups.append({"stage": STAGES["chain"], "kind": "fix", "ok": not bad2, "problems": bad, "seconds": round(time.time() - t, 1)})
                 print(f"[识别] 理清流程有 {len(bad)} 处可指出改法的问题，追问一次只改这几处：{'好了' if not bad2 else '还是不对'}", file=sys.stderr, flush=True)
                 chain_first = chain_first or chain_reply
@@ -678,6 +689,26 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
         return failed(e, "pick")
     took_retries("pick")
     r = parse(reply, root, chain=flow["chain"], strict=True)
+    pick_fixes = structure.pick_fixes(root, r.get("steps") or [], flow["chain"]) if r.get("ok") else None
+    if pick_fixes and not any(x["stage"] == STAGES["pick"] for x in followups):
+        # 选点只差插在判断或循环开头、标了输出的那一步缺 first 或 last：同一段对话追问一次，只改这几个点（不读源码）
+        t = time.time()
+        try:
+            again = llm.followup(PICK_FIX_AGAIN.format(items="\n".join(f"- {x}" for x in pick_fixes)))
+        except LLMError as e:
+            return failed(e, "pick")
+        took_retries("pick")
+        if again is not None:
+            r2 = parse(again, root, chain=flow["chain"], strict=True)
+            before = sum(1 for x in r["steps"] for c in x["chk"] if c["level"] == "fail")
+            after = sum(1 for x in r2.get("steps") or [] for c in x["chk"] if c["level"] == "fail") if r2.get("ok") else None
+            ok = after == 0
+            followups.append({"stage": STAGES["pick"], "kind": "fix", "ok": ok, "problems": pick_fixes, "fails_before": before,
+                              "fails_after": after, "seconds": round(time.time() - t, 1)})
+            print(f"[识别] 选计时点有 {len(pick_fixes)} 个点能指出改法，追问一次只改这几个点：{'好了' if ok else '还是不对'}", file=sys.stderr, flush=True)
+            if after is not None and after < before:  # 改好了或者少了，用新的；更糟就留原来那份
+                reply_first = reply_first or reply
+                r, reply = r2, again
     r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick", chain_category=category or "",
              retries=retries, followups=followups)
     if reply_first:
