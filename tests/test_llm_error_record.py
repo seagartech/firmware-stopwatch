@@ -3,6 +3,7 @@
 
 import io
 import json
+import re
 import socket
 import ssl
 import urllib.error
@@ -220,3 +221,78 @@ def test_successful_retries_are_kept_in_the_result(monkeypatch, tmp_path):
     r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门")
     assert r["ok"] and [(x["stage"], x["request_no"], x["retry"]) for x in r["retries"]] == [("理清流程", 1, 1), ("选计时点", 1, 1)]
     assert "HTTPError 503" in r["retries"][1]["why"]
+
+
+# ---------- 回答的 JSON 格式坏了：同一段对话里追问一次"只按格式重新输出"，不读源码；结果里记下追问过 ----------
+def _broken(reply):
+    head, block = reply.split("```json", 1)
+    return head + "```json" + re.sub(r'",(\s*\n)', r'"\1', block, count=1)  # 少一个逗号：JSON 读不懂
+
+
+def test_bad_json_in_each_stage_is_asked_once_to_reoutput(tmp_path, capsys):
+    from fsw.llm import FakeLLM
+    from tests.identify_fixtures import DOOR_REPLY
+    door = door_source(tmp_path / "door")
+    assert idf._json_block(_broken(DOOR_REPLY)) is None
+    m = FakeLLM(_broken(DOOR_REPLY), followups=[DOOR_REPLY, DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"] and [(x["stage"], x["ok"]) for x in r["followups"]] == [("理清流程", True), ("选计时点", True)]
+    assert m.asked == [idf.FORMAT_AGAIN] * 2 and "不要再读源码" in idf.FORMAT_AGAIN
+    assert r["calls"] == 2 and r["reply_first"] == _broken(DOOR_REPLY)
+    assert "理清流程的回答格式不对，追问一次重新输出：好了" in capsys.readouterr().err
+
+
+def test_followup_at_most_once_and_failure_is_recorded(tmp_path):
+    from fsw.llm import FakeLLM
+    from tests.identify_fixtures import DOOR_REPLY
+    door = door_source(tmp_path / "door")
+    m = FakeLLM(_broken(DOOR_REPLY), followups=[_broken(DOOR_REPLY), DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert not r["ok"] and r["kind"] == "bad_chain" and len(m.asked) == 1
+    assert r["followups"] == [{"stage": "理清流程", "ok": False, "seconds": r["followups"][0]["seconds"]}]
+    assert r["chain_reply_first"] == _broken(DOOR_REPLY)
+
+
+def test_no_followup_when_json_is_fine_or_unsupported(tmp_path):
+    from fsw.llm import FakeLLM
+    from tests.identify_fixtures import DOOR_REPLY
+    door = door_source(tmp_path / "door")
+    m = FakeLLM(DOOR_REPLY, followups=[])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"] and r["followups"] == [] and m.asked == []
+    r = idf.identify(FakeLLM(_broken(DOOR_REPLY)), door, "从刷卡到开门")  # 不支持追问：照旧停下
+    assert r["kind"] == "bad_chain" and r["followups"] == []
+
+
+def test_deepseek_followup_continues_the_same_conversation_without_tools(monkeypatch, tmp_path):
+    bodies = []
+    replies = iter([{"choices": [{"message": {"role": "assistant", "content": "坏的"}}]},
+                    {"choices": [{"message": {"role": "assistant", "content": "好的"}}]}])
+
+    def urlopen(req, timeout=None):
+        bodies.append(json.loads(req.data))
+        return Resp(next(replies))
+    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    m = DeepSeek(KEY)
+    assert m.investigate("读一读", tmp_path) == "坏的"
+    assert m.followup("只按格式重新输出") == "好的"
+    last = bodies[-1]
+    assert "tools" not in last and [x["role"] for x in last["messages"]] == ["user", "assistant", "user"]
+    assert last["messages"][1]["content"] == "坏的" and last["messages"][2]["content"] == "只按格式重新输出"
+
+
+# ---------- 单次请求上限 180 秒；读回答超时写清楚，不重发 ----------
+def test_deepseek_request_timeout_is_180s_and_read_timeout_is_clear(monkeypatch, tmp_path):
+    seen = []
+
+    def urlopen(req, timeout=None):
+        seen.append(timeout)
+        return Resp(None, fail_read=TimeoutError("The read operation timed out"))
+    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    m = DeepSeek(KEY)
+    with pytest.raises(LLMError) as got:
+        m.investigate("读一读", tmp_path)
+    e = got.value
+    assert seen == [180] and e.kind == "slow" and e.info["timeout_limit"] == 180
+    assert "等回答超时：单次请求上限 180 秒" in e.detail and "一次请求等了 180 秒还没回完" in e.message
+    assert "TimeoutError" not in e.message

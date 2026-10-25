@@ -98,9 +98,13 @@ class LLM:
             "not_installed": "这台电脑上没找到 Claude Code。装好并登录后再选这一项，或者改用填密钥的方式。",
             "not_logged_in": "找到了 Claude Code，但还没登录：在终端里运行 claude，按提示登录一次。",
             "timeout": f"{self.name}太久没读完（超过 {getattr(self, 'timeout', 900) // 60} 分钟），码表先停下了。点重试再来一次。",
-            "slow": f"{self.name}太久没有回复，码表先停下了：可能是网络慢或服务器忙，过一会儿点重试。",
+            "slow": f"{self.name}太久没有回复{self._limit_text()}，码表先停下了：可能是网络慢或服务器忙，过一会儿点重试。",
             "dropped": f"和{self.name}的连接中途断了：看看网络稳不稳，再点重试。",
         }.get(kind, f"{self.name}返回了错误：{detail[:200]}")
+
+    def _limit_text(self):
+        t = getattr(self, "request_timeout", None)
+        return f"（一次请求等了 {t} 秒还没回完）" if t else ""
 
     def fail(self, kind, detail="", **info):
         return LLMError(kind, self._say(kind, redact(detail)), detail, **info)
@@ -109,6 +113,10 @@ class LLM:
         """读回复途中出的错（超时、断连、坏行）：归成大模型错误，原始报错留在 detail 里。"""
         detail = f"{type(e).__name__}: {e}"
         if isinstance(e, TimeoutError):
+            t = getattr(self, "request_timeout", None)
+            if t:  # 写明是读回答超时、上限多少：和"连不上"分开
+                detail += f"（等回答超时：单次请求上限 {t} 秒）"
+                return LLMError("slow", self._say("slow"), detail, timeout_limit=t)
             return LLMError("slow", self._say("slow"), detail)
         if isinstance(e, (OSError, http.client.HTTPException)):
             return LLMError("dropped", self._say("dropped"), detail)
@@ -117,6 +125,11 @@ class LLM:
     def investigate(self, prompt, root, on_text=None, on_tool=None):
         """自己读源码目录（只读）再回答，返回最后的完整回答。on_text 收到一段段文字，on_tool 收到"读了什么"。"""
         raise NotImplementedError
+
+    def followup(self, text):
+        """在上一次 investigate 的同一段对话里再问一句（不给读代码的工具），返回回答。
+        接法不支持（比如 Claude Code 命令行）就返回 None。"""
+        return None
 
     def test(self):
         t = time.time()
@@ -131,9 +144,16 @@ class FakeLLM(LLM):
     """录好回复的假模型，给自动测试用，不花钱、不联网。"""
     name = "假模型"
 
-    def __init__(self, reply, chunk=8, test_kind=None, tool_calls=None):
+    def __init__(self, reply, chunk=8, test_kind=None, tool_calls=None, followups=None):
         self.reply, self.chunk, self.test_kind, self.prompts = reply, chunk, test_kind, []
         self.tool_calls = tool_calls or []
+        self.followups, self.asked = followups, []  # followups：追问时依次给的回答（None 表示不支持追问）
+
+    def followup(self, text):
+        if self.followups is None:
+            return None
+        self.asked.append(text)
+        return self.followups.pop(0) if self.followups else ""
 
     def stream(self, prompt, system=None):
         self.prompts.append(prompt)
@@ -212,6 +232,7 @@ class ClaudeAPI(LLM):
             uses = [b for b in msg.content if b.type == "tool_use"]
             if not uses:
                 final = texts
+                self._talk = messages + [{"role": "assistant", "content": "".join(texts) or "（空）"}]
                 break
             messages.append({"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in msg.content]})
             results = []
@@ -220,6 +241,16 @@ class ClaudeAPI(LLM):
                 results.append({"type": "tool_result", "tool_use_id": u.id, "content": tools.call(u.name, u.input)})
             messages.append({"role": "user", "content": results})
         return "".join(final)
+
+    def followup(self, text):
+        if not getattr(self, "_talk", None):
+            return None
+        messages = self._talk + [{"role": "user", "content": text}]
+        with self._errors():
+            msg = self.client.messages.create(model=self.model, max_tokens=16000, messages=messages)
+        out = "".join(b.text for b in msg.content if b.type == "text")
+        self._talk = messages + [{"role": "assistant", "content": out or "（空）"}]
+        return out
 
     def stream(self, prompt, system=None):
         kw = {"system": system} if system else {}
@@ -244,8 +275,11 @@ class DeepSeek(LLM):
     name = "DeepSeek"
     site = " DeepSeek 开放平台（platform.deepseek.com）"
 
-    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=600, retry_wait=(1, 2)):
+    # 单次请求的上限：以前的复测里一次请求一般 2-4 秒，最长的（写最终结果那次）约 34 秒；
+    # 180 秒给长回答留了 5 倍余量，卡住的请求也不会白等 10 分钟。
+    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=180, retry_wait=(1, 2)):
         self.key, self.model, self.base_url, self.timeout = key, model, base_url.rstrip("/"), timeout
+        self.request_timeout = timeout
         self.retry_wait = retry_wait  # 第 1、2 次重发前各等几秒
         self.retry_log = []  # 这次调用里重发过的请求：[{request_no, retry, why, wait}]，成功的也记，看得出网络稳不稳
         self._req_no = None
@@ -313,6 +347,7 @@ class DeepSeek(LLM):
                 on_text and on_text(msg["content"])
             calls = msg.get("tool_calls") or []
             if not calls:
+                self._talk = messages + [{"role": "assistant", "content": msg.get("content") or "（空）"}]
                 return msg.get("content") or ""
             messages.append({k: v for k, v in msg.items() if v is not None})
             for tc in calls:
@@ -323,6 +358,24 @@ class DeepSeek(LLM):
                 on_tool and on_tool(describe(tc["function"]["name"], args))
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": tools.call(tc["function"]["name"], args)})
         return ""
+
+    def followup(self, text):
+        if not getattr(self, "_talk", None):
+            return None
+        messages, sent = self._talk + [{"role": "user", "content": text}], time.time()
+        self._req_no = "追问"
+        try:
+            with self._post({"model": self.model, "messages": messages}) as resp:
+                try:
+                    msg = json.loads(resp.read())["choices"][0]["message"]
+                except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
+                    raise self._read_error(e) from e
+        except LLMError as e:
+            e.info.update(request_no="追问", request_seconds=round(time.time() - sent, 1))
+            raise
+        out = msg.get("content") or ""
+        self._talk = messages + [{"role": "assistant", "content": out or "（空）"}]
+        return out
 
     def stream(self, prompt, system=None):
         msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]

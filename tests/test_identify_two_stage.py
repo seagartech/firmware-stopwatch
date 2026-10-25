@@ -360,7 +360,7 @@ def test_no_lambda_no_change(tmp_path):
 def test_new_hint_and_pick_lines():
     v = idf.build_chain_prompt("全程", "", "语音对话")
     for key in ["协议里有回复开始和回复结束这一对消息的，两条都要进链（本地合成、一次性返回的没有就不写）",
-                "上传末包写真正发出最后一包的那一句，不写循环头、不写判断行", "不要把两步都标成末包",
+                "上传首包、末包写真正发出数据的那一句，不写循环头、不写判断行；每一包都走同一句发送的，这一句同时标上传首包、上传末包",
                 "声音全部播完，这一轮就结束；之后恢复聆听、开始下一轮都不进链"]:
         assert key in v, key
     p = idf.build_prompt("全程", "", flow={"chain": []})
@@ -368,3 +368,32 @@ def test_new_hint_and_pick_lines():
     assert "这条线的点可以不在事件链里" in p
     for bad in ["小智", "xiaozhi", "Application", "afe", "Schedule", "OnIncoming", "websocket"]:
         assert bad not in idf.VOICE_HINT and bad not in idf.CARD_HINT, bad
+
+
+# ---------- 同一句发送同时标上传首包、上传末包（第一次和最后一次执行），不用猜哪一包是最后一包 ----------
+def test_one_send_step_can_be_both_first_and_last_upload(door):
+    f = door_flow()
+    for c in f["chain"]:
+        c["role"] = "、".join(r for r in idf.ROLES if r in str(c.get("role") or "") and not r.startswith("上传"))
+    f["chain"][3]["role"] = "上传首包、上传末包"  # 一句发送反复执行：第一次、最后一次
+    f["chain"][3]["repeat"] = "repeat"
+    f["doubts"] = ["哪一包是最后一包，代码里没有标记"]  # 写了拿不准也不冲突
+    got, bad = idf.check_chain(door, f)
+    assert bad == [] and set(got["chain"][3]["role"]) == {"上传首包", "上传末包"}
+    f["chain"][3]["role"] = "上传首包"
+    assert any("没标出：上传末包" in b for b in idf.check_chain(door, f)[1])
+
+
+def test_prompts_explain_first_and_last_on_one_send_statement():
+    c = idf.build_chain_prompt("全程")
+    assert "逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包。" in c
+    assert "不要把两步都标成末包" not in idf.build_chain_prompt("全程", "", "语音对话")
+    p = idf.build_prompt("全程", "", flow={"chain": []})
+    assert "同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last。" in p
+    assert "同一句只放一个点（上面第 2 条的首包、末包除外）" in p
+
+
+def test_two_points_first_and_last_on_one_repeated_step_pass_the_check(voice):
+    pts = [{"id": "P1", "chain_step": 1, "file": "main/chat.cc", "line": 18, "where": "before", "once": "first", "line_of": "main"},
+           {"id": "P2", "chain_step": 1, "file": "main/chat.cc", "line": 18, "where": "before", "once": "last", "line_of": "main"}]
+    assert _pick(voice, pts) == [[], []]
