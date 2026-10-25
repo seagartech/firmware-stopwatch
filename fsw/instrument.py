@@ -62,6 +62,7 @@ __attribute__((weak)) int64_t fsw_last_us[FSW_MAX_ID];      // "记最后一次"
 __attribute__((weak)) int32_t fsw_last_n[FSW_MAX_ID];       // "记最后一次"：这一轮发生了几次
 __attribute__((weak)) unsigned char fsw_armed;              // 这一轮是否已经"武装"
 __attribute__((weak)) unsigned char fsw_started;            // 这一轮的起点到了没有
+__attribute__((weak)) unsigned char fsw_pre[FSW_MAX_ID];    // 起点之前打过没有：起点之前每个点最多打一次
 
 static inline int fsw_ok(int id) { return id >= 0 && id < FSW_MAX_ID; }
 
@@ -69,20 +70,45 @@ static inline void fsw_print(int id, int64_t us, int32_t v) {
     printf("FSW,P%d,%lld,%ld\n", id, (long long)us, (long)v);
 }
 
+// 这一轮的起点到了：之前暂存的"记最后一次"都是这一轮开始之前的（比如唤醒提示音的最后一段），清掉，不算进这一轮
 static inline void fsw_seen(int id) {
-    if (id == FSW_START_ID) __atomic_store_n(&fsw_started, (unsigned char)1, __ATOMIC_RELAXED);
+    if (id != FSW_START_ID || __atomic_exchange_n(&fsw_started, (unsigned char)1, __ATOMIC_RELAXED)) return;
+    for (int i = 0; i < FSW_MAX_ID; i++) {
+        if (i == FSW_START_ID) continue;
+        __atomic_store_n(&fsw_last_us[i], (int64_t)0, __ATOMIC_RELAXED);
+        __atomic_store_n(&fsw_last_n[i], (int32_t)0, __ATOMIC_RELAXED);
+    }
+}
+
+// 起点还没到（知道起点是哪个时）：别的点照常打印，但每个点只打一次（比如聆听时每发一包都走到的点，不刷屏）
+static inline int fsw_before_start(int id) {
+    return FSW_START_ID >= 0 && id != FSW_START_ID && !__atomic_load_n(&fsw_started, __ATOMIC_RELAXED);
+}
+static inline void fsw_print_pre(int id, int32_t v) {
+    if (!__atomic_exchange_n(&fsw_pre[id], (unsigned char)1, __ATOMIC_RELAXED)) fsw_print(id, esp_timer_get_time(), v);
 }
 
 // 每次都记
-static inline void fsw_mark(int id, int32_t v) { fsw_seen(id); fsw_print(id, esp_timer_get_time(), v); }
+static inline void fsw_mark(int id, int32_t v) {
+    if (!fsw_ok(id)) return;
+    fsw_seen(id);
+    if (fsw_before_start(id)) { fsw_print_pre(id, v); return; }
+    fsw_print(id, esp_timer_get_time(), v);
+}
 
-// 一轮只记第一次。这一轮的起点还没到时照常打印、但不算"记过"：上一轮的尾巴（比如打断回答后上一句的结束消息）
-// 在新一轮开始后才到，不能把这一轮真正的那一次吞掉（码表按起点之前的不算，丢掉它）
+// 一轮只记第一次。这一轮的起点还没到时打印一次、但不算"记过"：上一轮的尾巴（比如打断回答后上一句的结束消息）
+// 在新一轮开始后才到，不能把这一轮真正的那一次吞掉（码表按起点之前的不算，丢掉它）。
+// 起点本身每次都记：唤醒词说完、话说到一半停一下都会判一次"说完"，码表取第一下感觉到的结果之前的最后一次
 static inline void fsw_mark_once(int id, int32_t v) {
     if (!fsw_ok(id)) return;
     fsw_seen(id);
-    if (FSW_START_ID >= 0 && id != FSW_START_ID && !__atomic_load_n(&fsw_started, __ATOMIC_RELAXED)) {
+    if (id == FSW_START_ID) {
+        __atomic_store_n(&fsw_done[id], (unsigned char)1, __ATOMIC_RELAXED);
         fsw_print(id, esp_timer_get_time(), v);
+        return;
+    }
+    if (fsw_before_start(id)) {
+        fsw_print_pre(id, v);
         return;
     }
     if (!__atomic_exchange_n(&fsw_done[id], (unsigned char)1, __ATOMIC_RELAXED)) {
@@ -109,20 +135,22 @@ static inline void fsw_keep_last(int id) {
     __atomic_store_n(&fsw_last_us[id], esp_timer_get_time(), __ATOMIC_RELAXED);
     __atomic_fetch_add(&fsw_last_n[id], 1, __ATOMIC_RELAXED);
 }
+// 起点之前不打印（那是这一轮开始之前的，比如唤醒提示音放完）
 static inline void fsw_flush_last(int id) {
     if (!fsw_ok(id)) return;
     int64_t us = __atomic_exchange_n(&fsw_last_us[id], (int64_t)0, __ATOMIC_RELAXED);
     int32_t n = __atomic_exchange_n(&fsw_last_n[id], (int32_t)0, __ATOMIC_RELAXED);
-    if (us) fsw_print(id, us, n);
+    if (us && !fsw_before_start(id)) fsw_print(id, us, n);
 }
 
-// 一轮开始：清零（"记最后一次"还没打印的先补打一行 LATE，不然这一轮就少了这个点）
+// 一轮开始：清零（"记最后一次"还没打印的先补打一行 LATE，不然这一轮就少了这个点；这一轮连起点都没有就不补打）
 static inline void fsw_round_reset(void) {
     for (int i = 0; i < FSW_MAX_ID; i++) {
         __atomic_store_n(&fsw_done[i], (unsigned char)0, __ATOMIC_RELAXED);
+        __atomic_store_n(&fsw_pre[i], (unsigned char)0, __ATOMIC_RELAXED);
         int64_t us = __atomic_exchange_n(&fsw_last_us[i], (int64_t)0, __ATOMIC_RELAXED);
         int32_t n = __atomic_exchange_n(&fsw_last_n[i], (int32_t)0, __ATOMIC_RELAXED);
-        if (us) printf("FSW,LATE,P%d,%lld,%ld\n", i, (long long)us, (long)n);
+        if (us && !fsw_before_start(i)) printf("FSW,LATE,P%d,%lld,%ld\n", i, (long long)us, (long)n);
     }
     __atomic_store_n(&fsw_armed, (unsigned char)0, __ATOMIC_RELAXED);
     __atomic_store_n(&fsw_started, (unsigned char)0, __ATOMIC_RELAXED);

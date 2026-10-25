@@ -38,10 +38,12 @@ def test_old_header_without_start_behaves_as_before(tmp_path):
 
 
 @cc
-def test_button_device_where_start_is_mark_once_is_unchanged(tmp_path):
-    """刷卡：起点 P1 本身是"只记第一次"，后面的点在起点之后，打印和以前一模一样。"""
+def test_button_device_where_start_is_mark_once(tmp_path):
+    """刷卡：起点 P1 本身是"只记第一次"，后面的点在起点之后照旧只记一次；起点每次都记（10-25 起：码表取第一下感觉到的结果之前的最后一次）。
+    老的插法（不知道起点）和以前一样。"""
     body = "FSW_ROUND_RESET();FSW_MARK_ONCE(1,0);FSW_MARK_ONCE(2,0);FSW_MARK_ONCE(2,0);FSW_MARK_ONCE(1,0);FSW_MARK_ONCE(3,0);"
-    assert run_c(tmp_path, body, start=1) == run_c(tmp_path, body) == ["RESET", "P1", "P2", "P3"]
+    assert run_c(tmp_path, body, start=1) == ["RESET", "P1", "P2", "P1", "P3"]
+    assert run_c(tmp_path, body) == ["RESET", "P1", "P2", "P3"]
 
 
 def test_plan_knows_the_start_point_and_writes_it_into_the_header(tmp_path):
