@@ -223,6 +223,7 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
   提示音、上一轮剩下的不会被算进这一轮；要"某一步之后才记"就用 FSW_MARK_ONCE_AFTER，不写判断。
 - 不要插在宏定义、多行语句、if 条件、初始化列表的中间；插在 return / break 之后的执行不到。
 - 表里写"这一句之前"的，插在那一句的紧前面、和它同一层（after_line 就是它上一行）；写"这一句之后"的，插在那一句（块里最后一句）的紧后面、同一层。不要跨过 }}、else 或判断那一行，跨过就到了别的分支或块外。
+- 计时点必须和它对应的那一句在同一个代码块里：插的位置和那一句之间不能隔着 }}、{{、else、case 或 default（差一行就可能进了旁边另一支，永远走不到）。
 - 每个位置都要亲自打开文件核对行号。
 
 ## 最后输出
@@ -392,6 +393,71 @@ def _once_place(root, rel, after, lines, steps):
     return None
 
 
+_CROSS = re.compile(r"[{}]|\belse\b|\bcase\b|\bdefault\s*:")
+
+
+def _crosses(code):
+    """一段代码（已去掉注释、字符串）里有没有跨出或跨进代码块：出现没配对的 } 或 {、或同一层的 else / case / default。
+    中间夹着一整个配对好的 {…}（比如旁边一个完整的 if 块）不算跨。返回跨过的那个记号，没有就 None。"""
+    depth = 0
+    for m in _CROSS.finditer(code):
+        tok = m.group().strip()
+        if tok == "{":
+            depth += 1
+        elif tok == "}":
+            depth -= 1
+            if depth < 0:
+                return "}"
+        elif depth == 0:
+            return tok.rstrip(":").strip()
+    return "{" if depth > 0 else None
+
+
+def _same_block(root, rel, after, s, cache):
+    """计时点有对应的那一句（表里的第几行、之前/之后）：插的位置要和那一句在同一个代码块里，中间不能隔着 { } else case default。
+    返回 None（没问题、或看不懂不拦）或 (说明, 该挪到第几行后面 / None=说不准、要问 AI)。只看结构，不认文件名、函数名。"""
+    from fsw import structure
+    if (s.get("path") or s.get("f")) != rel:
+        return None  # AI 放到别的文件：这里不判
+    try:
+        line, where = int(s.get("l")), (s.get("where") or "before")
+    except (TypeError, ValueError):
+        return None
+    try:
+        if rel not in cache:
+            cache[rel] = structure.Project(root).file(rel)
+        src = cache[rel]
+        if src is None or not 1 <= line <= len(src.lines) or not 0 <= after <= len(src.lines):
+            return None
+        first = structure.stmt_start(src, line) if where != "after" else line
+        c = src.clines[first - 1].strip()
+        if not c or re.match(r"(?:\}|else\b|case\b|default\s*:)", c) or src.lines[first - 1].strip().startswith("#"):
+            return None  # 那一句本身是 } / else / case 开头、空行、编译开关：怎么算同一块说不清，不拦
+        tgt = src.pos(first, "before") if where != "after" else src.pos(line, "after")
+        ins = src.starts[after] if after else 0  # 插在第 after 行后面 = 第 after+1 行的开头
+        lo, hi = sorted((ins, tgt))
+        crossed = _crosses(src.code[lo:hi])
+        if not crossed and src.chain(ins)[:1] == src.chain(tgt)[:1]:
+            return None
+        what = "之前" if where != "after" else "之后"
+        tl = src.lines[line - 1].strip()
+        why = (f"{rel} 第 {after} 行后面插的「{s.get('n')}」和它对应的第 {line} 行「{tl[:60]}」不在同一个代码块里"
+               f"（中间隔着「{crossed or '块的边界'}」），会落进旁边另一支或块外，可能永远走不到；"
+               f"要插在第 {line} 行{what}、同一层")
+        if where != "after":
+            to = first - 1 if structure.real_stmt(src, first) or structure.call_in_if(src.clines[first - 1]) else None
+        else:
+            to = line if structure.real_stmt(src, line) and not structure._UNFINISHED.search(c) else None
+        if to is not None:
+            t2 = src.starts[to] if to else 0
+            a, b = sorted((t2, tgt))
+            if _crosses(src.code[a:b]) or src.chain(t2)[:1] != src.chain(tgt)[:1]:
+                to = None
+        return why, to
+    except Exception:  # 结构读不懂：不拦
+        return None
+
+
 def parse_plan(text, root, steps, needs=None):
     """读 AI 给的插入清单，逐条核对。只能插计时点语句、注释和 #include，别的代码一行都不插。
     不合规的那几条（比如夹带了 if 判断）：去掉以后每个计时点都还在、留下的都能照常工作，就只去掉这几条，其余照插，
@@ -406,7 +472,7 @@ def parse_plan(text, root, steps, needs=None):
             or root not in (root / header).resolve().parents:
         header = default_header(root)
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
-    out, problems, bad = [], [], []
+    out, problems, bad, moved, srcs = [], [], [], [], {}
 
     def reject(x, why):
         problems.append(why)
@@ -447,7 +513,16 @@ def parse_plan(text, root, steps, needs=None):
         if where:
             reject(x, where)
             continue
-        out.append({"step": step, "file": p.relative_to(root).as_posix(), "after_line": after, "lines": lines})
+        rel2 = p.relative_to(root).as_posix()
+        off = _same_block(root, rel2, after, ids[step], srcs) if step in ids else None
+        if off and off[1] is None:
+            reject(x, off[0])
+            continue
+        if off:  # 对应的那一句清楚：码表自己挪到那一句紧前面（或紧后面），不用问 AI
+            moved.append({"kind": "moved", "step": step, "file": rel2, "after_line": after, "to": off[1],
+                          "lines": [str(l) for l in lines], "why": re.sub(r"<[^>]+>", "", off[0])})
+            after = off[1]
+        out.append({"step": step, "file": rel2, "after_line": after, "lines": lines})
     whole = []  # 去掉不合规的几条之后还缺的（缺了就不能只去掉）
     missing = [s["n"] for k, s in ids.items() if not any(x["step"] == k for x in out)]
     if missing:
@@ -460,8 +535,9 @@ def parse_plan(text, root, steps, needs=None):
     if whole or (problems and not out):
         return _fail("bad_plan", "AI 给的插入清单不对，码表没有用，一个文件都没改：" + "；".join((problems + whole)[:4]) +
                      "。只能加计时点、注释和 #include。点\"重新插入\"再试一次。", bad=bad, lost=whole)
-    fixes = [{"kind": "dropped", **b} for b in bad]  # 只去掉不合规的那几条，其余照插
+    fixes = [{"kind": "dropped", **b} for b in bad] + moved  # 只去掉不合规的那几条，其余照插；挪了位置的也记下
     notes = [str(n) for n in data.get("notes") or [] if n]
+    notes += [f"码表把 {m['step']} 从 {m['file']} 第 {m['after_line']} 行后面挪到第 {m['to']} 行后面：{m['why']}" for m in moved]
     notes += [f"码表去掉了 AI 多加的一处（{b['file']} 第 {b['after_line']} 行后面，{b['step']}）：{b['why']}。"
               "只能插计时点、注释和 #include；去掉后每个计时点都还在" for b in bad]
     said = {str(v.get("step")): v for v in data.get("values") or [] if isinstance(v, dict)}
@@ -486,6 +562,7 @@ PLAN_FIX = """你给的插入清单里有几条码表不能用（一个文件都
 不写判断，也不要套在 if 里用 FSW_ARM()。
 清零（FSW_ROUND_RESET）、武装（FSW_ARM）只能放在一轮只经过一次的地方（比如进入聆听状态的那一支、读到卡），
 不能放在主循环、事件循环的循环体里，也不能放在逐帧、逐包、定时执行的地方；放错的请挪到这种地方。
+计时点必须和表里对应的那一句在同一个代码块里，插的位置和那一句之间不能隔着 }}、{{、else、case 或 default。
 
 不能用的是这几条：
 {items}

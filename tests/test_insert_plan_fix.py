@@ -59,7 +59,9 @@ def test_follow_up_once_rewrites_only_the_bad_entry_and_plan_is_used():
     assert len(llm.asked) == 1
     q = llm.asked[0]
     assert "if (task.playback_id == 0) FSW_ARM();" in q and "不能加 if" in q and "FSW_MARK_ONCE_AFTER" in q
-    assert [f["kind"] for f in plan["fixes"]] == ["rewritten"] and plan["fixes"][0]["step"] == "arm"
+    assert [f["kind"] for f in plan["fixes"]][:1] == ["rewritten"] and plan["fixes"][0]["step"] == "arm"
+    # 这份回答里「播放全部放完」写在 if 外面（对应的那一句在 if 里）：码表自己挪进去（见 test_insert_same_block）
+    assert [(f["kind"], f["step"], f["to"]) for f in plan["fixes"][1:]] == [("moved", "P11", 373)]
     assert not any("if" in l for x in plan["inserts"] for l in x["lines"] if not l.strip().startswith("//"))
     assert "追问它改了一次" in plan["notes"][0]
 
@@ -90,7 +92,7 @@ def test_bad_entry_that_nothing_needs_is_just_dropped(door=None):
     llm = FakeLLM("", followups=[])
     plan, again = ins.fix_plan(llm, t2, SRC, steps)
     assert plan["ok"] and again is None and llm.asked == []
-    assert [(f["kind"], f["step"]) for f in plan["fixes"]] == [("dropped", "arm")]
+    assert [(f["kind"], f["step"]) for f in plan["fixes"]] == [("dropped", "arm"), ("moved", "P11")]
     assert not any(x["step"] == "arm" for x in plan["inserts"])
     assert any("码表去掉了 AI 多加的一处" in n for n in plan["notes"])
 

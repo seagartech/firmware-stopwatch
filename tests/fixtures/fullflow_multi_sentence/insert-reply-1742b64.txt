@@ -1,0 +1,162 @@
+```json
+{
+  "header": "main/fw_stopwatch.h",
+  "inserts": [
+    {
+      "step": "include",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 14,
+      "lines": [
+        "#include \"fw_stopwatch.h\"",
+        "// 计时点头文件：计时点宏定义"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/application.cc",
+      "after_line": 13,
+      "lines": [
+        "#include \"fw_stopwatch.h\"",
+        "// 计时点头文件：计时点宏定义"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 3,
+      "lines": [
+        "#include \"fw_stopwatch.h\"",
+        "// 计时点头文件：计时点宏定义"
+      ]
+    },
+    {
+      "step": "P1",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 480,
+      "lines": [
+        "        // 计时点 P1：说话结束",
+        "        FSW_MARK_ONCE(1, 0);"
+      ]
+    },
+    {
+      "step": "P2",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 481,
+      "lines": [
+        "        // 计时点 P2：静音状态回调",
+        "        FSW_MARK_ONCE(2, 0);"
+      ]
+    },
+    {
+      "step": "P5",
+      "file": "main/application.cc",
+      "after_line": 240,
+      "lines": [
+        "            // 计时点 P5：上传首包",
+        "            FSW_MARK_ONCE(5, 0);"
+      ]
+    },
+    {
+      "step": "P6",
+      "file": "main/application.cc",
+      "after_line": 240,
+      "lines": [
+        "            // 计时点 P6：上传末包",
+        "            FSW_KEEP_LAST(6);"
+      ]
+    },
+    {
+      "step": "P8",
+      "file": "main/application.cc",
+      "after_line": 625,
+      "lines": [
+        "                    // 计时点 P8：回复开始",
+        "                    FSW_MARK_ONCE(8, 0);"
+      ]
+    },
+    {
+      "step": "P7",
+      "file": "main/application.cc",
+      "after_line": 663,
+      "lines": [
+        "                    // 计时点 P7：收到识别结果",
+        "                    FSW_MARK_ONCE(7, 0);"
+      ]
+    },
+    {
+      "step": "P12",
+      "file": "main/application.cc",
+      "after_line": 633,
+      "lines": [
+        "                        // 计时点 P12：回到聆听",
+        "                        FSW_MARK_ONCE(12, 0);"
+      ]
+    },
+    {
+      "step": "P13",
+      "file": "main/application.cc",
+      "after_line": 672,
+      "lines": [
+        "                    // 计时点 P13：换表情",
+        "                    FSW_MARK_ONCE(13, 0);"
+      ]
+    },
+    {
+      "step": "reset",
+      "file": "main/application.cc",
+      "after_line": 1029,
+      "lines": [
+        "            // 一轮开始：进入聆听状态，清零“只记第一次”标记",
+        "            FSW_ROUND_RESET();"
+      ]
+    },
+    {
+      "step": "P9",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 350,
+      "lines": [
+        "        // 计时点 P9：首段出声",
+        "        FSW_MARK_ONCE(9, 0);"
+      ]
+    },
+    {
+      "step": "P10",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 350,
+      "lines": [
+        "        // 计时点 P10：末段出声",
+        "        FSW_KEEP_LAST(10);"
+      ]
+    },
+    {
+      "step": "P11",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 372,
+      "lines": [
+        "        // 计时点 P11：播放全部放完",
+        "        FSW_MARK(11, 0);"
+      ]
+    },
+    {
+      "step": "flush",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 378,
+      "lines": [
+        "        // 计时点结束：输出任务停机前打印 P10 最后一次记录",
+        "        FSW_FLUSH_LAST(10);"
+      ]
+    }
+  ],
+  "notes": [
+    "P10 用的是 FSW_KEEP_LAST，不做打印；唯一的 flush 放在 AudioOutputTask 任务退出（service_stopped_ 停机）时，所以 P10 只在任务结束时落盘一次。因为这条路径上没有任何一轮结束的计时点，如果让 P9/P10（或在“回到聆听”处）flush 10，会把上一轮最后一包声音错算到下一轮，因此没有那样做。若码表允许“新一轮第一包到达时 flush”，可另加挂载点，会更及时。",
+    "P10/P11 会记录到提示音（如播放开始的 OGG_POPUP）：P11 用 FSW_MARK，每次都会记；提示音放完也可能过一次。",
+    "P11 的另一处相同分支在 OnOutputIdle() 里（约 line 187），没有插。",
+    "P1/P2 在 AFE 语音处理线程逐帧执行，只记第一次，开销很小，不会影响处理实时性。",
+    "P5/P6 在主循环 SEND_AUDIO 分支逐包执行：P5 只记第一次，P6 只写内存，开销都很小。",
+    "P12 只覆盖 tts stop 的“回复结束→自动聆听”这一路径；手动停止模式（走 Idle）以及唤醒进入聆听（SetListeningMode）都不经过该行，这两种情况由 HandleStateChangedEvent 里的 FSW_ROUND_RESET 覆盖。每轮只经过一次 P12（都在忙碌状态里），不会把仍要重发/重放的一轮误清零。",
+    "P1/P2 依赖设备侧 VAD；只有 CONFIG_USE_AUDIO_PROCESSOR 开启时才会走这段代码。",
+    "P5/P6 所在的 while 循环体里 SendAudio 失败会 break，但插在那个 if 之前，不会因为 break 而跳过。",
+    "P13 按 emotion 消息的到达顺序记录（每收到一条 emotion 都会插一条消息）；FSW_MARK_ONCE 保证只取本轮第一次。"
+  ]
+}
+```
