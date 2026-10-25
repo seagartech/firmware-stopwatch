@@ -627,6 +627,201 @@ def _calls_via(proj, src, line, name):
     return False
 
 
+# ---------- 码表自己找：全部放完那一支、每段输出都经过的那一句 ----------
+def real_stmt(src, line):
+    """这一行能不能当插点参照：一句真正的语句（不是判断或循环开头、else/case、只有分号或大括号、编译开关、上一句的接续）。"""
+    if src is None or not 1 <= line <= len(src.clines):
+        return False
+    c = src.clines[line - 1].strip()
+    if not c or c == ";" or re.fullmatch(r"[{}]+;?", c) or src.lines[line - 1].strip().startswith("#"):
+        return False
+    if re.match(r"(?:\}\s*)?(?:else\b|if\b|while\b|for\b|switch\b|do\b|case\b|default\s*:)", c):
+        return False
+    return not _UNFINISHED.search(_prev_code(src, line))
+
+
+def stmt_start(src, line):
+    """第 line 行所在那一整句的第一行（上一行没写完就一直往上找）。"""
+    k = line
+    while k > 1 and _UNFINISHED.search(_prev_code(src, k)):
+        k -= 1
+        while k > 1 and not src.clines[k - 1].strip():
+            k -= 1
+    return k
+
+
+def _blocks(src, line):
+    return src.chain(src.pos(line, "before"))
+
+
+def _first_in_block(src, bi):
+    b = src.blocks[bi]
+    start, end = src.line_of(b["open"]), src.line_of(b["close"])
+    for k in range(start + (1 if src.clines[start - 1].rstrip().endswith("{") else 0), end + 1):
+        c = src.clines[k - 1].strip()
+        if c and not re.fullmatch(r"\{", c):
+            return k if k < end or c != "}" else None
+    return None
+
+
+def _in_func(src, line):
+    return func_at(src, line)[0] is not None or bool(func_at(src, line)[1])
+
+
+def _sites(proj, pattern, word, skip=None):
+    """项目里匹配 pattern 的行（在函数里、不是函数定义那一行、不是判断或循环开头）：[(文件, 行)]。"""
+    rx = re.compile(pattern)
+    out = []
+    for rel in proj.sources():
+        try:
+            raw = (proj.root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if word not in raw:
+            continue
+        src = proj.file(rel)
+        if src is None:
+            continue
+        for k, c in enumerate(src.clines, 1):
+            if not rx.search(c) or (skip and skip.search(c)) or _CTRL_AFTER.match(c.strip()):
+                continue
+            if any(src.blocks[i]["kind"] == "function" for i in _opened_on(src, k)) or not _in_func(src, k):
+                continue
+            out.append((rel, k))
+    return out
+
+
+def _pick(proj, sites, prefer):
+    """几处里挑一处：只有一处就用它；不然用和 prefer（文件, 函数名）同一个函数里的那一处；还挑不出就 None。"""
+    if len(sites) == 1:
+        return sites[0]
+    if prefer:
+        same = [x for x in sites if x[0] == prefer[0] and func_at(proj.file(x[0]), x[1])[0] == prefer[1]]
+        if len(same) == 1:
+            return same[0]
+    return None
+
+
+_ASSIGN = re.compile(r"^(?:[\w:<>]+\s+)*([A-Za-z_]\w*)\s*=(?!=)")
+
+
+def locate_done(proj, rel, line, prefer=None, depth=0):
+    """从流程里标了全部放完的那一行出发，顺着通知往回找判断出放完的那一支里的第一句：
+    转发事件位的处理 → 置这个事件位的地方；回调 lambda 里 → 调用这个回调的地方；
+    把判断结果存进变量 → 紧接着检查这个变量的那一支；在一个只被一处调用的函数里 → 调用它的地方。
+    最后停在某个 if 那一支里的一句真正的语句。找不准就返回 None（不改模型的答案）。"""
+    src = proj.file(rel)
+    if depth > 6 or src is None or not 1 <= line <= len(src.clines):
+        return None
+    c = src.clines[line - 1].strip()
+    if re.match(r"(?:\}\s*)?(?:else\s+)?if\b", c) and c.endswith("{"):
+        bi = next((i for i in _opened_on(src, line) if src.blocks[i]["kind"] == "branch"), None)
+        k = _first_in_block(src, bi) if bi is not None else None
+        return locate_done(proj, rel, k, prefer, depth + 1) if k else None
+    chain = _blocks(src, line)
+    for bi in chain:  # 事件位：if (位 & 某个常量) 那一支 → 置这个常量的那一句
+        b = src.blocks[bi]
+        if b["kind"] != "branch":
+            continue
+        for name in re.findall(r"&\s*([A-Z][A-Z0-9_]{3,})\b|\b([A-Z][A-Z0-9_]{3,})\s*&(?!&)", b["head"]):
+            name = name[0] or name[1]
+            sites = [x for x in _sites(proj, rf"\w\s*\([^;]*\b{name}\b", name) if x != (rel, line)]
+            got = _pick(proj, sites, None)
+            if got:
+                return locate_done(proj, got[0], got[1], prefer, depth + 1)
+    inner = next((i for i in chain if src.blocks[i]["kind"] in ("function", "lambda")), None)
+    if inner is not None and src.blocks[inner]["kind"] == "lambda":  # 回调 lambda → 调用这个回调的地方
+        m = re.search(r"([A-Za-z_]\w*)\s*=\s*\[[^\]]*\]\s*\([^)]*\)[^=]*$", src.blocks[inner]["head"])
+        if not m:
+            return None
+        got = _pick(proj, _sites(proj, rf"(?:\.|->)\s*{m.group(1)}\s*\(", m.group(1), re.compile(rf"\b{m.group(1)}\s*=")), prefer)
+        return locate_done(proj, got[0], got[1], prefer, depth + 1) if got else None
+    a = _ASSIGN.match(c)
+    if a and chain:  # 判断结果存进变量 → 同一块里紧接着检查它的那一支
+        end = src.line_of(src.blocks[chain[0]]["close"])
+        for k in range(line + 1, end):
+            ck = src.clines[k - 1].strip()
+            if re.match(r"if\b", ck) and re.search(rf"\b{a.group(1)}\b", ck) and ck.endswith("{"):
+                return locate_done(proj, rel, k, prefer, depth + 1)
+    if chain and src.blocks[chain[0]]["kind"] == "branch":
+        return (rel, line) if real_stmt(src, line) else None
+    fn = src.blocks[inner]["name"] if inner is not None else None
+    if fn and depth < 6:  # 只被一处调用的函数 → 调用它的地方
+        short = _short(fn)
+        got = _pick(proj, [x for x in _sites(proj, rf"(?<![\w]){re.escape(short)}\s*\(", short) if x != (rel, line)], prefer)
+        if got:
+            return locate_done(proj, got[0], got[1], prefer, depth + 1)
+    return None
+
+
+def _class_of(head):
+    m = re.search(r"(\w+)::~?\w+\s*\(", head or "")
+    return m.group(1) if m else None
+
+
+def _bases(proj, cls, seen=None):
+    seen = seen if seen is not None else set()
+    if not cls or cls in seen:
+        return seen
+    seen.add(cls)
+    for rel, k in _sites_any(proj, rf"\b(?:class|struct)\s+{cls}\b[^;{{]*:", cls):
+        src = proj.file(rel)
+        for b in re.findall(r"(?:public|protected|private)?\s*(\w+)\s*(?:,|\{|$)", src.clines[k - 1].split(":", 1)[1]):
+            _bases(proj, b, seen)
+    return seen
+
+
+def _sites_any(proj, pattern, word):
+    rx = re.compile(pattern)
+    out = []
+    for rel in proj.sources():
+        try:
+            raw = (proj.root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if word not in raw or not rx.search(raw):
+            continue
+        src = proj.file(rel)
+        out += [(rel, k) for k, c in enumerate(src.clines, 1) if rx.search(c)]
+    return out
+
+
+def locate_output(proj, rel, line):
+    """逐段反复执行的输出：从流程里标了输出的那一行往外找，直到落在逐段循环里的那一句（每段输出都经过的那一句）。
+    外层调用只有一处才往外走（类的方法：同一个类或它的父类里不带对象直接调用的优先）。找不准返回 None。"""
+    cur = (rel, line)
+    for _ in range(5):
+        src = proj.file(cur[0])
+        if src is None or not real_stmt(src, cur[1]):
+            return None
+        loops, inner, _o = src.context(src.pos(cur[1], "before"))
+        if loops:
+            return cur
+        if inner is None or src.blocks[inner]["kind"] != "function":
+            return None
+        b = src.blocks[inner]
+        short, cls = _short(b["name"]), _class_of(b["head"])
+        sites = [x for x in _sites(proj, rf"(?<![\w]){re.escape(short)}\s*\(", short) if x != cur]
+        plain = [x for x in sites if not re.search(rf"(?:\.|->|::)\s*{re.escape(short)}\s*\(", proj.file(x[0]).clines[x[1] - 1])]
+        if cls:
+            fam = _bases(proj, cls)
+            mine = [x for x in plain if _class_of(_func_head(proj, x)) in fam]
+            objs = [x for x in sites if x not in plain]
+            sites = mine or objs
+        if len(sites) != 1:
+            return None
+        cur = sites[0]
+    return None
+
+
+def _func_head(proj, at):
+    src = proj.file(at[0])
+    for i in src.chain(src.pos(at[1], "before")):
+        if src.blocks[i]["kind"] == "function":
+            return src.blocks[i]["head"]
+    return ""
+
+
 def check_order(proj, steps, segments):
     """一段从某处的"最后一次"（last）连到同一件事另一处的"第一次"（first）：比如同一次发送的外层一句和它调用的那一句各放了 first、last，
     外层末 → 内层首这一段是负的。返回 [(段的终点 id, 说明)]。"""
@@ -666,7 +861,8 @@ def check_uncertain(steps, segments, by_n):
         if not ca or not cb or na == nb:
             continue
         # 两步都标了最后结果（比如结束消息和放空，说不准谁先）。放空和它引起的收尾这种有因果先后的，只有一头标最后结果，不算
-        both_last = "最后结果" in str(ca.get("role") or "") and "最后结果" in str(cb.get("role") or "")
+        both_last = ("最后结果" in str(ca.get("role") or "") and "最后结果" in str(cb.get("role") or "")
+                     and str(a.get("once") or "").lower() != "first")  # 从第一次出发的不算（第一段一定在前）
         unsure = _uncertain(cb.get("after")) and isinstance(na, int) and isinstance(nb, int) and na == nb - 1
         if not both_last and not unsure:
             continue
@@ -1013,6 +1209,12 @@ def pick_fixes(root, steps, chain):
                 why = f"，而且在第 {fail[0]} 行「{_cond_text(fail[1])}」那一支里，是出错、失败才走的" if fail else ""
                 items.append(f"{s['id']}「{s.get('name')}」放在 {s['file']} 第 {s['line']} 行，这一行只有一个分号（空循环体）{why}：不能放在这里，"
                              "去掉这个点，或者放回流程里那一步那一行")
+            elif c["kind"] == "anchor" and "是上一行那句话的接续" in c["text"]:
+                src = proj.file(s["file"])
+                if src is not None:
+                    k = stmt_start(src, int(s["line"]))
+                    items.append(f"{s['id']}「{s.get('name')}」放在 {s['file']} 第 {s['line']} 行，这一行是上一句没写完接着写的，插在这里会把一句话拆开。"
+                                 f"这一整句从第 {k} 行「{src.lines[k - 1].strip()}」开始：line 改成 {k}（where 写 before），或者放进别的一句真正的语句")
             elif c["kind"] in ("output", "line_of"):
                 items.append(f"{s['id']}：{c['text']}")
             elif c["kind"] == "chain" and ("不是那一步的位置" in c["text"] or "不在那一行所在的那一支里" in c["text"]):
@@ -1161,6 +1363,24 @@ def repair_segments(root, steps, segments, chain):
         segs.append({"from": base.get("id"), "to": target.get("id"), "name": f"到{target.get('name')}", "who": "", "outside": False, "added": True})
         ends.add(target.get("id"))
         notes.append(f"补上「{base.get('name')}」→「{target.get('name')}」：标了最后结果或全部放完的这一点原来没有段量到它")
+    first_out = next((x for x in steps if x.get("line_of") in ("start", "main") and str(x.get("once") or "").lower() == "first"
+                      and "输出" in str((by_n.get(x.get("chain_step")) or {}).get("role") or "")), None)
+    if first_out is not None and isinstance(first_out.get("chain_step"), int):
+        no = first_out["chain_step"]
+        for p in steps:  # 最后结果、全部放完：一律从首段输出量起，不顺着模型连的链
+            n = p.get("chain_step")
+            if p.get("line_of") not in ("start", "main") or not _end_role(p, by_n) or not isinstance(n, int) or n <= no:
+                continue
+            inc = [g for g in segs if g.get("to") == p.get("id")]
+            if inc and all(g.get("from") == first_out["id"] for g in inc):
+                continue
+            nm = inc[0].get("name") if inc else f"到{p.get('name')}"
+            for g in inc:
+                segs.remove(g)
+            segs.append({**(inc[0] if inc else {"who": "", "outside": False, "added": True}), "from": first_out["id"], "to": p["id"], "name": nm})
+            was = "、".join(f"「{name(g.get('from'))}」" for g in inc)
+            notes.append(f"「{nm}」改成从「{name(first_out['id'])}」量到「{name(p['id'])}」" + (f"（原来从{was}）" if inc else "（原来没有段量到它）")
+                         + "：最后结果、全部放完一律从首段输出量起")
     used = {g.get("from") for g in segs} | {g.get("to") for g in segs}
     for p in steps:
         if p.get("line_of") not in ("start", "main") or p.get("id") in used or str(p.get("once") or "").lower() != "last":

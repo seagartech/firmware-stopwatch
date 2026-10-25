@@ -349,13 +349,14 @@ _RECOGNIZED = re.compile(r"识别|转写|stt|asr|transcri|recogni", re.I)
 _SILENCE = re.compile(r"静音|语音活动|说话结束|语音结束|vad|silence|end[ _-]?of[ _-]?speech|speech[ _-]?end", re.I)
 
 
-def check_chain(root, data, category="", fixes=None, fresh=False):
+def check_chain(root, data, category="", fixes=None, fresh=False, apply=False):
     """两次调用之间码表检查理清的流程（只做做得可靠的）：
     文件、行号、原文对不对得上；必填项有没有写；第一步有没有写明是哪种输入结束检测。
     返回 (整理好的流程, 问题列表)；问题列表不空就是不合格。"""
     if not isinstance(data, dict):
         return None, ["回答的格式不对，码表看不懂"]
     bad, tips, roles, proj, up_steps, out_steps = [], [], set(), structure.Project(root), [], []
+    repairs = []  # 码表按规则补上、改过的（只对新回答）
     trigger = str(data.get("trigger") or "").strip()
     if not trigger:
         bad.append("没写选定的触发路径")
@@ -393,6 +394,8 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
                 mode = {**mode, "protocol": {**proto, "file": _rel(root, proto.get("file")), "line": n}}
         elif not pwhat.lower().startswith(_NONE) and not any(w in d.lower() for d in doubts for w in ("协议", "通道", "protocol")):
             bad.append("没写决定协议或通道的那一行（mode.protocol；只有一种写「无」，定不下来在 doubts 里说明）")
+    if fresh:
+        mode = _mode_line_fixes(proj, mode, fixes, repairs if apply else None)
     det = data.get("detect") if isinstance(data.get("detect"), dict) else {}
     if not str(det.get("kind") or "").strip():
         bad.append("第一步没写明用的是哪种输入结束检测")
@@ -452,7 +455,6 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
                       "code": check_location(root, c["file"], line)[0], "func": str(c["func"]).strip(), "role": role,
                       "branch": str(c.get("branch") or "").strip(), "repeat": rep, "after": str(c.get("after") or "").strip()})
     upload = str(data.get("upload") or "").strip()
-    repairs = []  # 码表按规则补上的（只对新回答）
     if fresh and len(up_steps) == 1:
         c = next(x for x in chain if x["n"] == up_steps[0])
         have = [r for r in UPLOAD_ROLES if r in c["role"]]
@@ -475,10 +477,11 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
         bad.append(f"输出标在了第 {'、'.join(map(str, same_out))} 步，它们是同一次输出（调用和被调用）：只能标在一步上")
         if fixes is not None:
             fixes.append({"bad": bad[-1], "text": f"输出标在了第 {'、'.join(map(str, same_out))} 步，它们是同一次输出（调用和被调用），只留一步（真正把输出送出去、且一轮里每段都经过的那一句），其余步骤去掉这个标记"})
+    located = _locate(proj, chain, fixes, repairs, apply) if fresh else set()
     done_at = next((c for c in chain if DONE in c["role"]), None)
     said = [c["n"] for c in chain if done_at and c["n"] < done_at["n"] and DONE not in c["role"]
             and _DRAIN_WORD.search(re.split(r"[（(]", c["what"])[0])]
-    if fresh and said:
+    if fresh and said and DONE not in located:
         # 前面的步骤已经写的是放空、放完：全部放完要标在判断出放完的那一支，不标在之后转发、处理这个通知的地方
         bad.append(f"全部放完标在了第 {done_at['n']} 步，可前面第 {'、'.join(map(str, said))} 步写的已经是放空、放完：要标在判断出放完的那一支里那一步")
         if fixes is not None:
@@ -500,6 +503,143 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
             "doubts": [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else [],
             "tips": tips, **({"repairs": repairs} if repairs else {})}  # 码表判断不了、放行的地方（比如 lambda 里写的函数名），只提醒
     return flow, bad
+
+
+def _else_if_head(src, line):
+    """第 line 行是 else if：往上找这一串判断最前面那个 if 那一行（同样缩进）。找不到返回 None。"""
+    raw = src.lines[line - 1]
+    ind = len(raw) - len(raw.lstrip())
+    for k in range(line - 1, 0, -1):
+        r = src.lines[k - 1]
+        c = src.clines[k - 1].strip()
+        if not c or len(r) - len(r.lstrip()) != ind:
+            continue
+        if re.match(r"if\b", c):
+            return k
+        if not re.match(r"\}?\s*else\b", c) and c != "}":
+            return None
+    return None
+
+
+def _mode_line_fixes(proj, mode, fixes, repairs):
+    """模式、协议写在了 else if 那一行（几支判断里选其一的要写最前面那个 if）、模式写在了拿它和取值比较的判断上：
+    能找到最前面那个 if 的，追问时给出来，还不改就由码表改；只是比较的，追问一次，不改就照旧（不挡）。"""
+    def one(d, label, key):
+        if not isinstance(d, dict) or not d.get("file") or not isinstance(d.get("line"), int):
+            return d
+        src = proj.file(d["file"])
+        if src is None or not 1 <= d["line"] <= len(src.clines):
+            return d
+        c = src.clines[d["line"] - 1].strip()
+        if re.match(r"\}?\s*else\s+if\b", c):
+            k = _else_if_head(src, d["line"])
+            if k:
+                t = (f"{label}写的是 {d['file']} 第 {d['line']} 行「{src.lines[d['line'] - 1].strip()}」，这是 else if 那一支；几支判断里选其一的，"
+                     f"写最前面那个 if：第 {k} 行「{src.lines[k - 1].strip()}」。{key} 的 line、code 改成它")
+                if fixes is not None:
+                    fixes.append({"bad": t, "text": t, "soft": True})
+                if repairs is not None:
+                    repairs.append(f"{label}从第 {d['line']} 行（else if）改成同一串判断最前面的第 {k} 行")
+                    return {**d, "line": k, "code": src.lines[k - 1].strip()}
+        elif key == "mode" and re.match(r"(?:if|while)\b", c) and re.search(r"[=!]=", c):
+            t = (f"模式写的是 {d['file']} 第 {d['line']} 行「{src.lines[d['line'] - 1].strip()}」，这是在拿已经定下来的模式和某个取值比较，"
+                 "不是决定它的那一句：mode 的 file、line、code 改成运行时给它赋值、或算出它的那一句")
+            if fixes is not None:
+                fixes.append({"bad": t, "text": t, "soft": True})
+        return d
+    mode = one(mode, "模式", "mode")
+    if isinstance(mode, dict) and isinstance(mode.get("protocol"), dict):
+        mode = {**mode, "protocol": one(mode["protocol"], "协议或通道", "mode.protocol")}
+    return mode
+
+
+def _locate(proj, chain, fixes, repairs, apply):
+    """码表自己找全部放完和输出那一句，和模型写的对一对：不一样就追问一次（不挡），还不一样由码表改（apply）。
+    找不准的不管，照旧用模型的。返回找准了的角色集合。"""
+    got = set()
+    out = next((c for c in chain if OUTPUT in c["role"]), None)
+    prefer = None
+
+    def text_of(f, k):
+        src = proj.file(f)
+        return src.lines[k - 1].strip() if src is not None else ""
+
+    def move(c, role, at, why):
+        tgt = next((x for x in chain if (x["file"], x["line"]) == at), None)
+        if fixes is not None:
+            if tgt is not None and tgt is not c:
+                t = (f"第 {c['n']} 步标了{role}，写的是 {c['file']} 第 {c['line']} 行；{why}是第 {tgt['n']} 步（{at[0]} 第 {at[1]} 行「{text_of(*at)}」）："
+                     f"把{role}标到第 {tgt['n']} 步，第 {c['n']} 步去掉这个标记")
+            else:
+                t = (f"第 {c['n']} 步标了{role}，写的是 {c['file']} 第 {c['line']} 行；{why}是 {at[0]} 第 {at[1]} 行「{text_of(*at)}」："
+                     f"这一步的 file、line、code 改成它（role 照旧）")
+            fixes.append({"bad": t, "text": t, "soft": True})
+        if not apply:
+            return
+        if tgt is not None and tgt is not c:
+            c["role"] = [r for r in c["role"] if r != role]
+            if role not in tgt["role"]:
+                tgt["role"].append(role)
+            repairs.append(f"{role}从第 {c['n']} 步挪到第 {tgt['n']} 步（{at[0]}:{at[1]}，{why}）")
+        else:
+            src = proj.file(at[0])
+            old = f"{c['file']}:{c['line']}"
+            c.update(file=at[0], line=at[1], code=text_of(*at), func=structure.func_at(src, at[1])[0] or c.get("func"))
+            repairs.append(f"第 {c['n']} 步（{role}）从 {old} 改成 {at[0]}:{at[1]}（{why}）")
+
+    if out is not None:
+        try:
+            at = structure.locate_output(proj, out["file"], out["line"]) if out["repeat"] == "repeat" else None
+        except Exception:
+            at = None
+        if at:
+            got.add(OUTPUT)
+            if at != (out["file"], out["line"]):
+                move(out, OUTPUT, at, "顺着调用往外找，逐段循环里每段输出都经过的那一句")
+                if apply:
+                    out = next((c for c in chain if OUTPUT in c["role"]), out)
+            for c in [x for x in chain if OUTPUT in x["role"] and (x["file"], x["line"]) != at]:
+                if c is out and not apply:
+                    continue  # 上面已经问过这一步
+                try:
+                    same = c["repeat"] == "repeat" and structure.locate_output(proj, c["file"], c["line"]) == at
+                except Exception:
+                    same = False
+                if same:  # 别的步骤也标了输出，往外找落在同一句：是同一次输出的里层，去掉这个标记
+                    t = f"第 {c['n']} 步也标了输出，它和 {at[0]} 第 {at[1]} 行是同一次输出（调用和被调用）：去掉这个标记"
+                    if fixes is not None:
+                        fixes.append({"bad": t, "text": t, "soft": True})
+                    if apply:
+                        c["role"] = [r for r in c["role"] if r != OUTPUT]
+                        repairs.append(f"第 {c['n']} 步去掉输出（和 {at[0]}:{at[1]} 是同一次输出）")
+        src = proj.file(at[0] if at else out["file"])
+        prefer = (at or (out["file"], out["line"]))
+        prefer = (prefer[0], structure.func_at(src, prefer[1])[0]) if src is not None else None
+    dones = [c for c in chain if DONE in c["role"]]
+    if dones:
+        try:
+            at = structure.locate_done(proj, dones[0]["file"], dones[0]["line"], prefer)
+        except Exception:
+            at = None
+        if at:
+            got.add(DONE)
+            if at != (dones[0]["file"], dones[0]["line"]):
+                move(dones[0], DONE, at, "顺着放空通知往回找，判断出放完的那一支里的那一句")
+            for c in dones[1:]:  # 别的步骤也标了全部放完：多半是之后转发、处理这个通知的地方
+                if (c["file"], c["line"]) == at:
+                    continue
+                try:
+                    same = structure.locate_done(proj, c["file"], c["line"], prefer) == at
+                except Exception:
+                    same = False
+                if same:
+                    t = f"第 {c['n']} 步也标了全部放完，它是之后转发、处理放空通知的地方：去掉这个标记（属于下一轮的事就整步去掉）"
+                    if fixes is not None:
+                        fixes.append({"bad": t, "text": t, "soft": True})
+                    if apply:
+                        c["role"] = [r for r in c["role"] if r != DONE]
+                        repairs.append(f"第 {c['n']} 步去掉全部放完（它是之后转发、处理放空通知的地方）")
+    return got
 
 
 def chain_no(v):
@@ -709,7 +849,9 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
         took_retries("chain")
         fixes = []
         got, bad = check_chain(root, _json_block(chain_reply), category, fixes, fresh=True)
-        if bad and len(fixes) == len(bad) and not any(x["stage"] == STAGES["chain"] for x in followups):
+        soft = [f for f in fixes if f.get("soft")]  # 码表自己找到了更准的那一行：问一次，不挡
+        hard = [f for f in fixes if not f.get("soft")]
+        if ((bad and len(hard) == len(bad)) or (not bad and soft)) and not any(x["stage"] == STAGES["chain"] for x in followups):
             # 只差抄错的原文、首包末包标了多步这类码表能指出改法的：同一段对话里追问一次，只改这几处（每一步最多追问一次）
             t = time.time()
             try:
@@ -718,11 +860,14 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
                 return failed(e, "chain")
             took_retries("chain")
             if again is not None:
-                got2, bad2 = check_chain(root, _json_block(again), category, fresh=True)
-                followups.append({"stage": STAGES["chain"], "kind": "fix", "ok": not bad2, "problems": bad, "problems_after": bad2,
-                                  "seconds": round(time.time() - t, 1)})
-                print(f"[识别] 理清流程有 {len(bad)} 处可指出改法的问题，追问一次只改这几处：{'好了' if not bad2 else '还是不对'}", file=sys.stderr, flush=True)
-                if len(bad2) < len(bad):  # 问题变少才用改过的那份
+                fixes2 = []
+                got2, bad2 = check_chain(root, _json_block(again), category, fixes2, fresh=True)
+                soft2 = [f["text"] for f in fixes2 if f.get("soft")]
+                followups.append({"stage": STAGES["chain"], "kind": "fix", "ok": not bad2 and not soft2, "problems": bad + [f["text"] for f in soft],
+                                  "problems_after": bad2 + soft2, "seconds": round(time.time() - t, 1)})
+                print(f"[识别] 理清流程有 {len(bad) + len(soft)} 处可指出改法的问题，追问一次只改这几处：{'好了' if not bad2 and not soft2 else '还是不对'}",
+                      file=sys.stderr, flush=True)
+                if (len(bad2), len(soft2)) < (len(bad), len(soft)):  # 问题变少才用改过的那份（码表能自己改的少了也算）
                     chain_first = chain_first or chain_reply
                     chain_reply, got, bad = again, got2, bad2
         if bad:  # 不合格就停下说明原因，不自动重试
@@ -731,7 +876,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
                          found=[], stage="chain", problems=bad, chain_reply=chain_reply, retries=retries, followups=followups,
                          **({"chain_reply_first": chain_first} if chain_first else {}),
                          seconds=round(time.time() - t0, 1), calls=calls)
-        flow = got
+        flow = check_chain(root, _json_block(chain_reply), category, fresh=True, apply=True)[0]  # 还对不上的那几行由码表改
         for x in flow.get("repairs") or []:
             print(f"[识别] 码表补上：{x}", file=sys.stderr, flush=True)
         state["stage"], text, t_stage[0] = "pick", [], time.time()

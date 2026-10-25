@@ -808,8 +808,8 @@ def test_tool_repairs_uncertain_negative_and_dangling_segments(tmp_path):
     pairs = [(g["from"], g["to"]) for g in fixed]
     assert ("P3", "P4") not in pairs and ("P1", "P4") in pairs  # 先后说不准：从上一步之前的那个点量起（和上一步各自量）
     assert ("P8", "P9") not in pairs and ("P6", "P9") in pairs  # 两个最后结果：从前面最近的、不是"最后一次"的点量起
-    assert ("P7", "P8") in pairs  # 放空在末段输出之后，有因果先后的不动
-    assert len(notes) == 2
+    assert ("P6", "P8") in pairs and ("P7", "P8") not in pairs  # 全部放完也一律从首段输出量起
+    assert len(notes) == 3
     structure.check(tmp_path, pts, fixed, chain=chain, strict=True)
     assert not [c for p in pts for c in p["chk"] if c["level"] == "fail"]
 
@@ -1144,3 +1144,131 @@ def test_round3_prompt_sentences():
     c = idf.build_chain_prompt("全程")
     assert "两样分别找到运行时真正决定它的那一行代码（不是变量的默认初始值），再查" in c
     assert "链里标了角色的步骤上的点都是主线，写 main" in idf.PICK_PROMPT
+
+
+# ---------- 第 4 轮：码表自己找全部放完、输出那一句；终点从首段输出量起；续行追问；else if / 比较行 ----------
+MINI = {
+    "main/svc.cc": "void Svc::OutTask() {\n    while (true) {\n        auto t = pop();\n        codec_->Emit(t);\n        bool done = false;\n"
+                   "        done = MarkDone();\n        if (done && cbs_.on_done) {\n            cbs_.on_done();\n        }\n    }\n}\n"
+                   "bool Svc::MarkDone() {\n    if (!Empty()) {\n        return false;\n    }\n    notified_ = true;\n    return true;\n}\n"
+                   "void Svc::Other() {\n    bool done = MarkDone();\n    if (done && cbs_.on_done) {\n        cbs_.on_done();\n    }\n}\n",
+    "main/codec.cc": "void Codec::Emit(int t) {\n    Write(t);\n}\n",
+    "main/board.cc": "class BoardCodec : public Codec {\n};\nint BoardCodec::Write(int t) {\n    if (on_) {\n        hw_write(t);\n    }\n    return 0;\n}\n",
+    "main/osc.cc": "class Oscillator {\n};\nvoid Oscillator::Go() {\n    Write(1);\n}\n",
+    "main/net.cc": "void Net::Put(int x) {\n    http->Write(x);\n}\n",
+    "main/app.cc": "#define EV_DONE (1 << 3)\nvoid App::Init() {\n    cbs.on_done = [this]() {\n        SetBits(group_, EV_DONE);\n    };\n"
+                   "    if (UseA()) {\n        proto_ = MakeA();\n    } else if (UseB()) {\n        proto_ = MakeB();\n    }\n}\n"
+                   "void App::Run() {\n    while (true) {\n        auto bits = WaitBits(group_,\n            EV_A | EV_DONE);\n"
+                   "        if (bits & EV_DONE) {\n            if (Idle()) {\n                Notify();\n            }\n        }\n"
+                   "        if (mode_ != kFast) {\n            Slow();\n        }\n        Show([this, x]() {\n            Draw(x);\n        });\n    }\n}\n",
+}
+
+
+def _mini(tmp_path):
+    for rel, text in MINI.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def ln(rel, text):
+    return next(i for i, l in enumerate(MINI[rel].split("\n"), 1) if text in l)
+
+
+def test_tool_locates_the_done_branch_through_callbacks_bits_and_callers(tmp_path):
+    from fsw import structure
+    proj = structure.Project(_mini(tmp_path))
+    want = ("main/svc.cc", ln("main/svc.cc", "cbs_.on_done();"))
+    pref = ("main/svc.cc", "OutTask")
+    for rel, text in (("main/app.cc", "Notify();"), ("main/app.cc", "SetBits(group_, EV_DONE);"), ("main/svc.cc", "notified_ = true;"),
+                      ("main/svc.cc", "done = MarkDone();"), ("main/svc.cc", "if (done && cbs_.on_done)"), ("main/svc.cc", "cbs_.on_done();")):
+        assert structure.locate_done(proj, rel, ln(rel, text), pref) == want, text
+    assert structure.locate_done(proj, "main/app.cc", ln("main/app.cc", "Notify();"), None) is None  # 回调有两处调用、没法挑：不管
+
+
+def test_tool_locates_the_shared_output_statement(tmp_path):
+    from fsw import structure
+    proj = structure.Project(_mini(tmp_path))
+    want = ("main/svc.cc", ln("main/svc.cc", "codec_->Emit(t);"))
+    assert structure.locate_output(proj, "main/board.cc", ln("main/board.cc", "hw_write(t);")) == want  # 板子那层 → 父类里直接调用 → 逐段循环
+    assert structure.locate_output(proj, "main/codec.cc", 2) == want
+    assert structure.locate_output(proj, *want) == want
+
+
+def _mini_flow():
+    return {"trigger": "t", "upload": "无", "mode": {"what": "无"}, "detect": {"kind": "按键松开", "found": True},
+            "chain": [{"n": 1, "what": "取一段", "file": "main/svc.cc", "line": 3, "code": "auto t = pop();", "func": "OutTask", "repeat": "repeat", "after": ""},
+                      {"n": 2, "what": "写出", "file": "main/board.cc", "line": 5, "code": "hw_write(t);", "func": "Write", "role": "首个结果、输出", "repeat": "repeat", "after": "调用"},
+                      {"n": 3, "what": "处理通知", "file": "main/app.cc", "line": ln("main/app.cc", "Notify();"), "code": "Notify();", "func": "Run",
+                       "role": "全部放完、最后结果", "repeat": "once", "after": "通知"}]}
+
+
+def test_mismatch_is_a_soft_follow_up_and_the_tool_applies_it(tmp_path):
+    root = _mini(tmp_path)
+    fixes = []
+    _, bad = idf.check_chain(root, _mini_flow(), "", fixes, fresh=True)
+    soft = [f["text"] for f in fixes if f.get("soft")]
+    assert bad == [] and len(soft) == 2 and any("main/svc.cc 第 4 行「codec_->Emit(t);」" in t for t in soft)
+    assert any("第 8 行「cbs_.on_done();」" in t for t in soft)
+    flow = idf.check_chain(root, _mini_flow(), "", fresh=True, apply=True)[0]
+    assert [(c["file"], c["line"]) for c in flow["chain"]][1:] == [("main/svc.cc", 4), ("main/svc.cc", 8)]
+    assert len(flow["repairs"]) == 2
+    old = []  # 旧结果（不是新回答）不找
+    idf.check_chain(root, _mini_flow(), "", old)
+    assert not old
+
+
+def test_else_if_protocol_and_compare_mode_lines(tmp_path):
+    root = _mini(tmp_path)
+    f = _mini_flow()
+    f["mode"] = {"what": "快", "file": "main/app.cc", "line": ln("main/app.cc", "if (mode_ != kFast)"), "code": "if (mode_ != kFast) {",
+                 "protocol": {"what": "B", "file": "main/app.cc", "line": ln("main/app.cc", "} else if (UseB())"), "code": "} else if (UseB()) {"}}
+    fixes = []
+    _, bad = idf.check_chain(root, f, "", fixes, fresh=True)
+    soft = [x["text"] for x in fixes if x.get("soft")]
+    assert bad == [] and any("和某个取值比较" in t for t in soft) and any(f"写最前面那个 if：第 {ln('main/app.cc', 'if (UseA())')} 行" in t for t in soft)
+    flow = idf.check_chain(root, copy.deepcopy(f), "", fresh=True, apply=True)[0]
+    assert flow["mode"]["protocol"]["line"] == ln("main/app.cc", "if (UseA())") and flow["mode"]["line"] == ln("main/app.cc", "if (mode_ != kFast)")
+
+
+class _SeqLLM(FakeLLM):
+    def __init__(self, replies, followups):
+        super().__init__("", followups=followups)
+        self.seq = list(replies)
+
+    def investigate(self, prompt, root, on_text=None, on_tool=None):
+        self.prompts.append(prompt)
+        return self.seq.pop(0) if self.seq else ""
+
+
+def test_identify_asks_once_then_the_tool_moves_the_lines(tmp_path):
+    root = _mini(tmp_path)
+    m = _SeqLLM([js(_mini_flow()), js({"steps": []})], followups=[js(_mini_flow())])  # 追问后原样不改
+    r = idf.identify(m, root, "从取一段到全部放完")
+    assert len(m.asked) == 1 and "codec_->Emit(t);" in m.asked[0]
+    assert r["followups"][0]["stage"] == idf.STAGES["chain"] and r["followups"][0]["ok"] is False
+    assert "main/svc.cc:8" in m.prompts[1] or "main/svc.cc 第 8 行" in m.prompts[1] or ("main/svc.cc" in m.prompts[1] and "cbs_.on_done();" in m.prompts[1])
+
+
+def test_continuation_anchor_is_asked_with_the_statement_start(tmp_path):
+    from fsw import structure
+    root = _mini(tmp_path)
+    k = ln("main/app.cc", "EV_A | EV_DONE);")
+    chain = [{"n": 1, "file": "main/app.cc", "line": k - 1}]
+    pts = [{"id": "P1", "chain_step": 1, "name": "等", "file": "main/app.cc", "line": k, "where": "before", "once": "once", "line_of": "start", "loc_ok": True}]
+    structure.check(root, pts, [], chain=chain, strict=True)
+    items = structure.pick_fixes(root, pts, chain)
+    assert items and f"这一整句从第 {k - 1} 行「auto bits = WaitBits(group_,」开始：line 改成 {k - 1}" in items[0]
+
+
+def test_end_points_are_measured_from_the_first_output(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P1", "to": "P4"}, {"from": "P4", "to": "P5"}, {"from": "P5", "to": "P6"},
+            {"from": "P6", "to": "P7"}, {"from": "P7", "to": "P8"}, {"from": "P8", "to": "P9"}]
+    fixed, notes = structure.repair_segments(tmp_path, pts, segs, chain)
+    pairs = [(g["from"], g["to"]) for g in fixed]
+    assert ("P6", "P8") in pairs and ("P6", "P9") in pairs and ("P7", "P8") not in pairs and ("P8", "P9") not in pairs
+    assert any("一律从首段输出量起" in t for t in notes)
+    structure.check(tmp_path, pts, fixed, chain=chain, strict=True)
+    assert not [c for p in pts for c in p["chk"] if c["level"] == "fail"]
