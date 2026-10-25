@@ -123,7 +123,7 @@ def test_identify_prompt_states_the_purpose_and_is_sent_to_the_model(door, what)
     assert second == idf.build_prompt(what, "芯片 ESP32-S3", flow=r["flow"]) and what in second
     for key in ["每一轮每个点恰好记到一次", "不含人操作、等人的时间", "上一步已经理清了一轮的流程",
                 "## 已理清的流程", "触发路径：刷卡", "输入结束检测：读卡完成", "1. 读卡芯片报告有卡靠近｜main/rfid_task.c:88",
-                "计时点只能从事件链里选：每个点都写 chain_step", "链里标了上传首包、上传末包、首个结果、最后结果的步骤都要有点",
+                "计时点只能从事件链里选：每个点都写 chain_step", "链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点",
                 "链外不加点", "那一行所在的那一支里",
                 "它每圈都执行，不能写 once", "不写 every", "确实会被用上",
                 "if、while、for、switch、else、case 那一行不能当 line", "函数 rfid_task", "标为：最后结果", "往外发的数据：卡号发给服务器校验",

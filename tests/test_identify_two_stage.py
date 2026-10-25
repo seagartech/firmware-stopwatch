@@ -386,10 +386,10 @@ def test_one_send_step_can_be_both_first_and_last_upload(door):
 
 def test_prompts_explain_first_and_last_on_one_send_statement():
     c = idf.build_chain_prompt("全程")
-    assert "逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包。" in c
+    assert "逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；外层一句和它调用的那一句是同一次发送的，首包、末包只标在其中一处。" in c
     assert "不要把两步都标成末包" not in idf.build_chain_prompt("全程", "", "语音对话")
     p = idf.build_prompt("全程", "", flow={"chain": []})
-    assert "同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last。" in p
+    assert "同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last；" in p
     assert "同一句只放一个点（上面第 2 条的首包、末包除外）" in p
 
 
@@ -421,8 +421,94 @@ def test_call_inside_if_condition_on_the_chain_line_is_allowed(voice):
 def test_prompts_say_results_go_inside_the_branch_not_the_dispatch_entry():
     c = idf.build_chain_prompt("全程")
     assert "首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。" in c
-    assert "\"最后\"一类优先用整段真正结束的那一句（比如结束消息、输出或播放队列放空），不用逐包、逐帧执行的那一行。" in c
+    assert "\"最后\"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。" in c
     p = idf.build_prompt("全程", "", flow={"chain": []})
     assert "首个结果、最后结果这类点也放在认出是这种消息之后那一支里，不放在消息分发入口。发送或调用本身写在 if 条件里的（比如 if (!send(x))），只能写 if 这一行、where 写 before。" in p
     for bad in ["小智", "xiaozhi", "Application", "afe", "OnIncoming", "websocket", "mqtt", "SendAudio", "stt"]:  # 没有固件、文件、函数名
         assert bad not in idf.CHAIN_PROMPT + idf.PICK_PROMPT + idf.VOICE_HINT, bad
+
+
+# ---------- 同一次发送只在一处放 first、last：外层末 → 内层首这种负的段要标出来 ----------
+SEND_SRC = """#include "net.h"
+
+int net_write(int x);
+
+int send_pkt(int x) {
+    return net_write(x);
+}
+
+int other(int x) {
+    return x + 1;
+}
+
+void run(void) {
+    while (1) {
+        if (!send_pkt(1)) {
+            break;
+        }
+        other(2);
+    }
+}
+"""
+
+
+def _order(tmp_path, pts, segs, strict=True):
+    from fsw import structure
+    root = tmp_path / "send"
+    (root / "main").mkdir(parents=True, exist_ok=True)
+    (root / "main/a.c").write_text(SEND_SRC, encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 15}, {"n": 2, "file": "main/a.c", "line": 6}, {"n": 3, "file": "main/a.c", "line": 18}]
+    for p in pts:
+        p.update(file="main/a.c", where="before", line_of="main", loc_ok=True)
+    structure.check(root, pts, segs, chain=chain, strict=strict)
+    return {p["id"]: [c["level"] for c in p["chk"] if c["kind"] == "order"] for p in pts}
+
+
+def test_last_to_first_of_the_same_send_is_flagged(tmp_path):
+    pts = [{"id": "P1", "chain_step": 1, "line": 15, "once": "first", "name": "外层首"},
+           {"id": "P2", "chain_step": 1, "line": 15, "once": "last", "name": "外层末"},
+           {"id": "P3", "chain_step": 2, "line": 6, "once": "first", "name": "内层首"},
+           {"id": "P4", "chain_step": 2, "line": 6, "once": "last", "name": "内层末"}]
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P3", "to": "P4"}]
+    got = _order(tmp_path, pts, segs)
+    assert got == {"P1": [], "P2": [], "P3": ["fail"], "P4": []}
+    assert _order(tmp_path, [dict(p) for p in pts], segs, strict=False)["P3"] == ["tip"]  # 旧结果只提醒
+
+
+def test_last_to_first_of_unrelated_points_is_not_flagged(tmp_path):
+    pts = [{"id": "P1", "chain_step": 1, "line": 15, "once": "last", "name": "上传末包"},
+           {"id": "P2", "chain_step": 3, "line": 18, "once": "first", "name": "别的事第一次"},
+           {"id": "P3", "chain_step": 3, "line": 18, "once": "last", "name": "别的事最后一次"}]
+    got = _order(tmp_path, pts, [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}])
+    assert got == {"P1": [], "P2": [], "P3": []}
+
+
+# ---------- "全部放完"单独一步：语音类必须有，或在 doubts 里写明没有这种信号 ----------
+def test_voice_category_needs_a_done_step_or_a_doubt(voice):
+    f = voice_flow()
+    _, bad = idf.check_chain(voice, f, "语音对话")
+    assert any("没有「全部放完」这一步" in b for b in bad), bad
+    assert idf.check_chain(voice, f)[1] == []  # 没认出类别：不要求
+    g = voice_flow()
+    g["chain"][2]["role"] = "最后结果、全部放完"
+    got, bad = idf.check_chain(voice, g, "语音对话")
+    assert bad == [] and "全部放完" in got["chain"][2]["role"]
+    h = voice_flow()
+    h["doubts"] = ["没有全部放完的信号：找过播放队列和输出任务"]
+    assert idf.check_chain(voice, h, "语音对话")[1] == []
+
+
+def test_card_category_does_not_require_done_step(door):
+    assert idf.check_chain(door, door_flow(), "门禁")[1] == []
+
+
+def test_prompts_for_one_send_one_mark_and_done_step():
+    c = idf.build_chain_prompt("全程")
+    assert "外层一句和它调用的那一句是同一次发送的，首包、末包只标在其中一处。" in c
+    assert ("代码里有输出或播放队列放空、动作完成这类\"全部放完\"信号的，单独列一步，写判断出放完的那一支里的语句，role 标全部放完；"
+            "最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明\"没有全部放完的信号\"和找过哪里。") in c
+    assert "播放全部放完（播放队列放空的那一支）" in idf.VOICE_HINT
+    assert "门锁动作或提示音有\"真正做完\"信号的（比如动作到位、提示音放完），这一步标全部放完。" in idf.CARD_HINT
+    p = idf.build_prompt("全程", "", flow={"chain": []})
+    assert "链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点" in p
+    assert "外层一句和它调用的那一句是同一次发送的，只在一处放 first、last。" in p

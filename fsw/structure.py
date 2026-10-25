@@ -562,6 +562,45 @@ def check_segments(proj, steps, segments):
 
 
 
+def _calls(src, line, name):
+    """第 line 行有没有调用函数 name（只看函数名最后一段，比如 A::Send → Send）。"""
+    short = re.split(r"::|\.", str(name or ""))[-1].strip()
+    return bool(short) and re.search(rf"(?<![\w]){re.escape(short)}\s*\(", src.clines[line - 1]) is not None
+
+
+def _same_thing(proj, a, b):
+    """两点是不是同一件事的两处：同一步、同一行，或一处那一行直接调用另一处所在的函数（调用和被调用）。"""
+    if a.get("chain_step") is not None and a.get("chain_step") == b.get("chain_step"):
+        return True
+    if a.get("file") == b.get("file") and str(a.get("line")) == str(b.get("line")):
+        return True
+    sa, sb = proj.file(a["file"]), proj.file(b["file"])
+    if sa is None or sb is None:
+        return False
+    la, lb = int(a["line"]), int(b["line"])
+    fa, fb = func_at(sa, la)[0], func_at(sb, lb)[0]
+    return bool((fb and _calls(sa, la, fb)) or (fa and _calls(sb, lb, fa)))
+
+
+def check_order(proj, steps, segments):
+    """一段从某处的"最后一次"（last）连到同一件事另一处的"第一次"（first）：比如同一次发送的外层一句和它调用的那一句各放了 first、last，
+    外层末 → 内层首这一段是负的。返回 [(段的终点 id, 说明)]。"""
+    by = {s["id"]: s for s in steps}
+    out = []
+    for g in segments or []:
+        if not isinstance(g, dict):
+            continue
+        a, b = by.get(g.get("from")), by.get(g.get("to"))
+        if not a or not b or str(a.get("once")).lower() != "last" or str(b.get("once")).lower() != "first":
+            continue
+        if not all(x.get("file") and x.get("line") and x.get("loc_ok", True) for x in (a, b)) or not _same_thing(proj, a, b):
+            continue
+        seg = f"「{g.get('name')}」这一段" if g.get("name") else "这一段"
+        out.append((b["id"], f"{seg}从「{a.get('name')}」（一轮里最后一次）连到「{b.get('name')}」（一轮里第一次），两处是同一件事（同一句，或调用和被调用）："
+                             "第一次早于最后一次，这一段是负的。同一次发送只在一处放 first、last"))
+    return out
+
+
 # ---------- 两步识别：事件链每一步写的函数、计时点在不在链里那一步 ----------
 def _line_at(src, line):
     """这一行第一个真正的字（跳过开头的空白和 }，免得算进上一支）的位置。"""
@@ -755,6 +794,14 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
     for sid, t in found:
         if not any(c["text"] == t for c in by[sid]["chk"]):
             by[sid]["chk"].append({"level": "tip", "kind": "timing", "text": t})
+    try:
+        for sid, t in check_order(proj, steps, [g for g in list(segments or []) + list(side_segments or []) if isinstance(g, dict)]):
+            if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):
+                # 两步识别的新结果算失败（段肯定是负的）；旧结果、演示数据只提醒
+                by[sid]["chk"].append({"level": "fail" if strict else "tip", "kind": "order", "text": t})
+    except Exception as e:
+        for s in steps[-1:]:
+            s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查段的先后时出错（{type(e).__name__}），请自己核对"})
     for s in steps:
         s["struct_ok"] = not any(c["level"] == "fail" for c in s["chk"])
         if not s["struct_ok"]:
