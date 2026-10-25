@@ -1522,12 +1522,25 @@ const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',hea
 function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;try{sessionStorage.setItem('fsw-ui',s)}catch(e){}  // 这个标签页自己也存一份：别的标签页开了新的一轮，这里刷新也不丢
  clearTimeout(uiT);uiT=setTimeout(()=>{uiT=null;uiSend(s)},250)}
 window.addEventListener('pagehide',()=>{if(!uiT)return;clearTimeout(uiT);uiT=null;try{navigator.sendBeacon('/api/ui?key='+encodeURIComponent(DEMO),new Blob([uiLast],{type:'application/json'}))}catch(e){uiSend(uiLast)}});
+// 按后台的流程进度拼一份页面进度（和 uiSnap 同样的字段）；old：网页自己存的那份（别的源码），设置类的选择沿用
+function srvSnap(S,old){const o=old&&old.v===1?old:{};
+ return {v:1,scene:SCENES[o.scene]?o.scene:scene,page:S.page,mode:'boss',flow:'first',flowMax:S.stage,hStage:1,hSrc:S.hSrc,hSay:S.what,pName:S.pName,hBoardQ:S.hBoardQ,
+  REAL:S.REAL,bgSrc:S.bg?S.hSrc:'',alsoFace:true,dropped:[],added:[],ed:{},mapSel:o.mapSel,diffOk:S.stage>=2&&S.fsw!=='inserted',flashVar:'b',colVar:'b',adv:null,
+  rtCase:o.rtCase,remeasure:false,last:''}}
 async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return r.ok?await r.json():null}catch(e){return null}};
  const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),J=(U&&U.jobs)||{};let u=U&&U.ui;
- if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')||'null');if(m&&m.v===1)u=m}catch(e){}}
+ let own=false;if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')||'null');if(m&&m.v===1){u=m;own=true}}catch(e){}}
+ // 后台知道的流程进度（U.server）：流程不是从网页走的（比如按接口走完），网页存的那份是空的或是别的源码，就按后台的接上；
+ // 同一份源码、后台走得更远就跟到后台那一步。不再停在首页、像回到了老界面（10-25 真机）。
+ // 这个标签页自己存的那份（刷新）照旧优先：别的标签页开了新的一轮，这里刷新也不丢
+ const S=U&&U.server;let fromSrv=false;
+ if(S&&S.REAL&&S.stage>=1&&!own){const same=u&&u.v===1&&u.REAL&&u.REAL.work===S.work;
+  if(!same){u=srvSnap(S,u);fromSrv=true}else if((u.flowMax||0)<S.stage||u.hSay!==S.what){u={...u,flow:'first',flowMax:Math.max(u.flowMax||0,S.stage),hSay:S.what,page:S.page};fromSrv=true}}
+ if(u&&u.v===1&&!SCENES[u.scene]&&fromSrv)u.scene=scene;
  if(!u||u.v!==1||!SCENES[u.scene]){page=HASH0==='settings'?'settings':'home';return}
- // 关了浏览器或标签页再打开：算新的一轮，从空白首页开始；只有实测、烧录还在后台跑着时才接上，首页顶上给「接着看」
- if(FRESH){const cj=await get('/api/collect'),fj=await get('/api/fsw'),run=x=>!!x&&['running','waiting_device'].includes(x.status);if(!run(cj)&&!run(fj)){page='home';return}}
+ // 关了浏览器或标签页再打开：算新的一轮，从空白首页开始；只有实测、烧录还在后台跑着时，或者流程不是从这个网页走的（按后台接上的），
+ // 才接上，首页顶上给「接着看」
+ if(FRESH&&!fromSrv){const cj=await get('/api/collect'),fj=await get('/api/fsw'),run=x=>!!x&&['running','waiting_device'].includes(x.status);if(!run(cj)&&!run(fj)){page='home';return}}
  scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
  REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;remeasure=!!u.remeasure;
  const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;

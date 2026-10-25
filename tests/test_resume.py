@@ -77,7 +77,7 @@ def test_fresh_open_goes_home_with_a_way_back():
     # 在首页刷新，「接着看」还在
     assert "last:page==='home'?LASTP:''" in JS
     # 关了浏览器再打开（不带 #）：没有实测、烧录在跑，就从空白首页开始新的一轮
-    assert "if(FRESH){const cj=await get('/api/collect'),fj=await get('/api/fsw')" in body
+    assert "if(FRESH&&!fromSrv){const cj=await get('/api/collect'),fj=await get('/api/fsw')" in body  # 流程不是从网页走的另算（test_resume_from_server）
     assert "if(!run(cj)&&!run(fj)){page='home';return}" in body
     # 刷新和重新打开靠 sessionStorage 分：关了标签页、浏览器就没了
     assert "sessionStorage.getItem('fsw-open')" in JS

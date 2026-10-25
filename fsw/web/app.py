@@ -584,6 +584,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     # ---- 插计时点 → 确认 → 编译（只重编改过的）→ 烧录（没插就等）→ 试一次；撤掉一处；还原 ----
     device = device or EspDevice(idf_finder)
     fsw = {"job": None, "args": None, "plan": None}
+    last_src = {}  # 最近选好的源码（/api/source/inspect 的结果）
 
     def _fsw_dirs(a):
         pd = Path(a.project_dir)
@@ -2260,12 +2261,41 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             bg["job"] = None  # 源码改过（或副本重新复制过）：上次在后台编的原版不算数，要按改过的源码再编（决策 134）
         if r.get("status") == "changed" and fsw["args"] and fsw["args"].work == r.get("work"):
             fsw["plan"] = None  # 上次的插入方案是按旧源码定的行号
+        if r.get("ok") and r.get("work"):  # 最近选的源码：网页没存过页面进度（流程不是从这个网页走的）时，按它和各任务接上（见 /api/ui）
+            last_src.update(r=r, body=body.model_dump(include={"path", "upload"}, exclude_none=True), at=time.time())
         if r.get("project_dir"):
             if not (T().path and T().path.parent == Path(r["project_dir"]) and "identify" not in T().data["stages"]):
                 tline["cur"] = tln.Timeline(Path(r["project_dir"]) / "timeline.json")  # 新的一次测量
                 T().begin("source")
             T().count("clicks")
         return r
+
+    def server_flow():
+        """后台自己知道的流程进度（不靠网页存的）：最近选的源码，和给它做的找关键步骤、插点烧录、多轮实测走到哪一步。
+        10-25：流程是按接口走完的（没有网页存过进度），新开网页只看自己存的那份，停在首页、像回到了老界面，只好从头再走一遍。"""
+        r = last_src.get("r")
+        if not r:
+            return None
+        work, proj = r.get("work"), r.get("project_dir") or ""
+        ia, fa = ident["args"], fsw["args"]
+        ij, fj, cj = ident["job"] or {}, fsw["job"] or {}, col["job"] or {}
+        what = getattr(ia, "what", "") if getattr(ia, "work", None) == work else ""
+        stage = 0
+        if what and ij.get("state") in ("running", "done"):
+            stage = 1
+        if stage and getattr(fa, "work", None) == work and fj.get("status") not in (None, "idle"):
+            stage = 2
+        if stage == 2 and cj.get("status") not in (None, "idle") and not cj.get("demo") and proj and str(cj.get("raw_log") or "").startswith(proj):
+            stage = 3
+        body = last_src.get("body") or {}
+        info = r.get("info") or {}
+        label = body.get("path") or ""
+        return {"work": work, "stage": stage, "page": ["home", "steps", "flash", "collect"][stage], "what": what,
+                "fsw": fj.get("status") if stage >= 2 else None, "at": last_src.get("at"),
+                "REAL": {**info, "body": body, "label": label, "work": work, "project_dir": r.get("project_dir"),
+                         "fingerprint": r.get("fingerprint"), "ai": []},
+                "hSrc": label, "pName": (info.get("name") or "") + (f"（{info['board']}）" if info.get("board") else ""),
+                "hBoardQ": info.get("board") or "", "bg": (bg["job"] or {}).get("work") == work}
 
     # ---- 页面进度：刷新、新开标签页时按它接着做（D 组） ----
     # 网页把"选了哪份源码、要测什么、走到哪一步、核对时改过什么"这些只在网页里的东西存到这里（只在内存，码表重开就没了）；
@@ -2291,7 +2321,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         """页面进度，加上各后台任务是给哪份复制好的源码做的：网页只接上同一份源码的任务。"""
         work = lambda a: getattr(a, "work", None)
         return {"ui": ui.get(key[:40]), "jobs": {"identify": work(ident["args"]), "fsw": work(fsw["args"]),
-                                                 "bgbuild": (bg["job"] or {}).get("work")}}
+                                                 "bgbuild": (bg["job"] or {}).get("work")},
+                "server": server_flow() if not key else None}  # 真流程才有（演示数据的页面进度用 key 分开存）
 
     @app.middleware("http")
     async def no_stale_page(request, call_next):
