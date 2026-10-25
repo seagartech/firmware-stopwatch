@@ -34,11 +34,11 @@ PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是�
 {flow}
 ## 怎么选点
 1. 计时点只能从事件链里选：每个点都写 chain_step（第几步），点就插在那一步那一行，或那一行所在的那一支里；链外不加点。起点是第 1 步（line_of 写 start）。
-2. 链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点；第一下感觉到的结果也要有。同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last；外层一句和它调用的那一句是同一次发送的，只在一处放 first、last。
+2. 链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点；第一下感觉到的结果也要有。同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last；外层一句和它调用的那一句是同一次发送的，只在一处放 first、last。标了输出的那一步也放 first、last 两个点。
 3. 点所在那一层是循环体（或逐帧、逐包反复调用的函数）时，它每圈都执行，不能写 once：要么放进循环里判断出"就是这一次"的那一支（这时写 once），要么写 first 或 last。不写 every。首包、首个结果这类，放在判断出"确实会被用上"之后。
 4. 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。if、while、for、switch、else、case 那一行不能当 line：点会落在整个判断或循环外面，不在你想要的那一支里。只有 {{ 或 }} 的行、#if/#else/#endif 也不能写；只有放在块里最后一句之后才写 after；同一句只放一个点（上面第 2 条的首包、末包除外）。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。条件成立才执行的那一句（比如调用回调、发出数据），点写在 if 大括号里的第一句，不写在 if 那一行；首个结果、最后结果这类点也放在认出是这种消息之后那一支里，不放在消息分发入口。发送或调用本身写在 if 条件里的（比如 if (!send(x))），只能写 if 这一行、where 写 before。
 5. 点放在链写明的那一支里，出错、失败、重试那一支不放。外面套着条件、可能不走的，always 写 false，除非在 why 里说明正常每轮都满足。
-6. 链里先后写着"不确定"的，不要串成前后相连的段，写进 doubts。
+6. 链里先后写着"不确定"的、两步都标了最后结果的，不要串成前后相连的段：各自从前面同一个点量起，写进 doubts。
 7. 顺带发现的线（比如播放回复前先切换表情、开门前先亮灯）也列出来；它的分段除了从主线分出的那个点，用的点都要属于这条线本身（line_of 写 side；这条线的点可以不在事件链里）。同一件事有"收到"和"真正生效"两个时刻的，两个都列。
 {known}
 ## 边找边报
@@ -96,19 +96,20 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 理清连续使用时的第二轮里，从设备察觉人做完输入，到最后一个结果（比如回复全部播完、门完全打开），设备依次做了哪些事。
 1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。从处理这个输入事件的函数开始，沿真实的调用关系往下追（谁调用了谁、事件交给了谁），不能挑一个名字像的函数就用。
 2. 第一步用设备自己能察觉人做完输入的检测（比如静音或语音活动检测翻转、读卡完成、按键松开）。哪怕它只用来切换显示、指示灯，不上报，也算设备察觉到了，第一步就用它。确实找不到，在 detect 里写明找过哪里。
-3. 运行时走哪种模式、哪种协议：找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode。
-4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面。
+3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；定不下来的写进 doubts。
+4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面；和上一步谁先谁后说不准的，after 写"不确定"。
 5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
-6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；外层一句和它调用的那一句是同一次发送的，首包、末包只标在其中一处。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句，role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
+6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；外层一句和它调用的那一句是同一次发送的，首包、末包只标在其中一处。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句，role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
 7. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道），以及注册回调、初始化这类不在这一轮运行时执行的代码，不进链。
 {hint}
 ## 最后输出
 只输出一个 ```json 代码块（中文）：
 ```json
 {{"trigger": "选定的触发路径", "upload": "设备往外发什么数据；不往外发写：无",
- "mode": {{"what": "运行时走哪种模式、哪种协议；不用选的写：无", "file": "决定它的那一行所在文件", "line": 123, "code": "那一行的原文", "config": "相关配置和取值"}},
+ "mode": {{"what": "运行时走哪种模式；不用选的写：无", "file": "决定模式的那一行所在文件", "line": 123, "code": "那一行的原文", "config": "相关配置和取值",
+   "protocol": {{"what": "哪种协议或通道；只有一种的写：无", "file": "决定它的那一行所在文件", "line": 123, "code": "那一行的原文"}}}},
  "detect": {{"kind": "第一步用的是哪种输入结束检测，比如：静音检测翻转、读卡完成、按键松开", "found": true, "looked": "找不到时写找过哪里"}},
- "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "相对源码根目录的路径", "line": 123, "code": "这一行的原文", "func": "这一行所在的函数名", "role": "上传首包 / 上传末包 / 首个结果 / 最后结果 / 全部放完，可写几个，用、隔开；其余空", "branch": "走哪一支或哪个条件成立才走，没有就空", "repeat": "once / repeat", "after": "为什么排在上一步后面：哪段代码、文档或注释；没有就写 不确定（第 1 步空着）"}}],
+ "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "相对源码根目录的路径", "line": 123, "code": "这一行的原文", "func": "这一行所在的函数名", "role": "上传首包 / 上传末包 / 首个结果 / 最后结果 / 输出 / 全部放完，可写几个，用、隔开；其余空", "branch": "走哪一支或哪个条件成立才走，没有就空", "repeat": "once / repeat", "after": "为什么排在上一步后面：哪段代码、文档或注释；没有就写 不确定（第 1 步空着）"}}],
  "doubts": ["拿不准的地方"]}}
 ```
 行号必须是你亲自打开文件核对过的，code 照抄那一行。
@@ -308,7 +309,8 @@ def check_location(root, file, line):
 
 
 _NONE = ("无", "没有", "不用", "不需要", "none", "-")
-ROLES = ("上传首包", "上传末包", "首个结果", "最后结果")  # 事件链里必须标出的几步（不往外发数据的不要上传两项）
+ROLES = ("上传首包", "上传末包", "首个结果", "最后结果")
+OUTPUT = "输出"  # 真正把输出送出去的那一句（第二步放 first、last 两个点）  # 事件链里必须标出的几步（不往外发数据的不要上传两项）
 DONE = "全部放完"  # 输出或播放队列放空、动作完成这类信号所在的那一步
 NEED_DONE = {"语音对话"}  # 这些类别：链里要有"全部放完"这一步，或者在 doubts 里写明没有这种信号
 
@@ -361,6 +363,18 @@ def check_chain(root, data, category=""):
             mode = {**mode, "file": _rel(root, mode.get("file")), "line": n}
     elif not mwhat.lower().startswith(_NONE):
         bad.append("写了运行时走哪种模式、哪种协议，但没写真正决定它的那一行代码")
+    doubts = [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else []
+    if mwhat and not mwhat.lower().startswith(_NONE):  # 有模式要选：协议或通道也要单独写出决定它的那一行（或在 doubts 里说明）
+        proto = mode.get("protocol") if isinstance(mode.get("protocol"), dict) else {}
+        pwhat = str(proto.get("what") or "").strip()
+        if proto.get("file") or proto.get("line"):
+            n, why = _where_code(root, proto.get("file"), proto.get("line"), proto.get("code"))
+            if why:
+                bad.append(f"决定协议或通道的那一行：{why}")
+            else:
+                mode = {**mode, "protocol": {**proto, "file": _rel(root, proto.get("file")), "line": n}}
+        elif not pwhat.lower().startswith(_NONE) and not any(w in d.lower() for d in doubts for w in ("协议", "通道", "protocol")):
+            bad.append("没写决定协议或通道的那一行（mode.protocol；只有一种写「无」，定不下来在 doubts 里说明）")
     det = data.get("detect") if isinstance(data.get("detect"), dict) else {}
     if not str(det.get("kind") or "").strip():
         bad.append("第一步没写明用的是哪种输入结束检测")
@@ -381,7 +395,7 @@ def check_chain(root, data, category=""):
         rep = str(c.get("repeat") or "").strip().lower()  # 只看开头：允许后面带说明，比如「once（每次翻转）」
         rep = ("repeat" if rep.startswith(("repeat", "反复", "every")) else
                "once" if rep.startswith(("once", "一次", "只执行一次", "一轮一次", "只一次")) else "")
-        role = [r for r in ROLES + (DONE,) if r in str(c.get("role") or "")]
+        role = [r for r in ROLES + (OUTPUT, DONE) if r in str(c.get("role") or "")]
         roles.update(role)  # 先记下角色：这一步别处有问题，也不会被误报成"没标出"
         if not rep:
             miss.append("是否反复执行")
@@ -408,7 +422,6 @@ def check_chain(root, data, category=""):
     need = [r for r in ROLES if r not in roles and not (r.startswith("上传") and upload.lower().startswith(_NONE))]
     if raw and need:
         bad.append(f"事件链里没标出：{'、'.join(need)}（在对应步骤的 role 里写；确实不往外发数据的，upload 写「无」）")
-    doubts = [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else []
     if raw and str(category or "").strip() in NEED_DONE and DONE not in roles and not any(DONE in d for d in doubts):
         bad.append(f"事件链里没有「{DONE}」这一步（输出或播放队列放空这类信号所在的那一支）；代码里确实没有这种信号的，在 doubts 里写明\"没有{DONE}的信号\"和找过哪里")
     flow = {"trigger": trigger, "upload": upload, "mode": mode, "detect": det, "chain": chain,

@@ -30,7 +30,8 @@ def voice_flow():
     return {
         "trigger": "喊唤醒词后连续对话", "upload": "无（这个小例子只看下行）",
         "mode": {"what": "协议由服务器下发配置决定", "file": "main/chat.cc", "line": 4,
-                 "code": "if (!protocol_->OpenAudioChannel()) {", "config": "无相关开关"},
+                 "code": "if (!protocol_->OpenAudioChannel()) {", "config": "无相关开关",
+                 "protocol": {"what": "服务器下发的通道", "file": "main/chat.cc", "line": 4, "code": "if (!protocol_->OpenAudioChannel()) {"}},
         "detect": {"kind": "静音检测翻转（只用来切换显示也算）", "found": True},
         "chain": [
             {"n": 1, "what": "收到服务器消息", "file": "main/chat.cc", "line": 18, "code": "auto type = json_get(root, \"type\");",
@@ -512,3 +513,73 @@ def test_prompts_for_one_send_one_mark_and_done_step():
     p = idf.build_prompt("全程", "", flow={"chain": []})
     assert "链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点" in p
     assert "外层一句和它调用的那一句是同一次发送的，只在一处放 first、last。" in p
+
+
+# ---------- mode 分两样写：模式那一行、协议或通道那一行（或在 doubts 里说明） ----------
+def test_mode_needs_its_own_protocol_line_or_a_doubt(voice):
+    f = voice_flow()
+    del f["mode"]["protocol"]
+    _, bad = idf.check_chain(voice, f)
+    assert any("没写决定协议或通道的那一行" in b for b in bad), bad
+    f["mode"]["protocol"] = {"what": "无"}  # 只有一种
+    assert idf.check_chain(voice, f)[1] == []
+    del f["mode"]["protocol"]
+    f["doubts"] = ["走哪种协议由服务器下发的配置决定，源码里定不下来"]
+    assert idf.check_chain(voice, f)[1] == []
+    g = voice_flow()
+    g["mode"]["protocol"]["line"] = 30  # 行号对不上
+    assert any("决定协议或通道的那一行" in b for b in idf.check_chain(voice, g)[1])
+    assert idf.check_chain(voice, voice_flow())[0]["mode"]["protocol"]["line"] == 4
+
+
+def test_door_mode_none_needs_no_protocol(door):
+    assert idf.check_chain(door, door_flow())[1] == []
+
+
+def test_output_role_is_kept(voice):
+    f = voice_flow()
+    f["chain"][1]["role"] = "首个结果、输出"
+    got, bad = idf.check_chain(voice, f)
+    assert bad == [] and got["chain"][1]["role"] == ["首个结果", "输出"]
+
+
+# ---------- 先后说不准的两步不串成一段 ----------
+def _uncertain_check(tmp_path, chain_extra, segs):
+    from fsw import structure
+    root = tmp_path / "send"
+    (root / "main").mkdir(parents=True, exist_ok=True)
+    (root / "main/a.c").write_text(SEND_SRC, encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 15, "role": ["最后结果"], "after": ""},
+             {"n": 2, "file": "main/a.c", "line": 18, "role": [], "after": "第 1 步之后"},
+             {"n": 3, "file": "main/a.c", "line": 6, "role": [], "after": "第 2 步之后"}]
+    for c in chain:
+        c.update(chain_extra.get(c["n"], {}))
+    pts = [{"id": f"P{c['n']}", "chain_step": c["n"], "file": "main/a.c", "line": c["line"], "where": "before", "once": "once",
+            "line_of": "main", "loc_ok": True, "name": f"第{c['n']}步"} for c in chain]
+    structure.check(root, pts, segs, chain=chain, strict=True)
+    return {p["id"]: [c["level"] for c in p["chk"] if c["kind"] == "order"] for p in pts}
+
+
+def test_two_last_result_steps_are_not_chained(tmp_path):
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}]
+    assert _uncertain_check(tmp_path, {2: {"role": ["最后结果"]}}, segs)["P2"] == ["fail"]
+    assert _uncertain_check(tmp_path, {}, segs) == {"P1": [], "P2": [], "P3": []}
+    # 放空和它引起的收尾：只有一头标最后结果，有因果先后，不拦
+    assert _uncertain_check(tmp_path, {1: {"role": ["全部放完"]}, 2: {"role": ["最后结果"]}}, segs)["P2"] == []
+
+
+def test_step_with_uncertain_order_is_not_chained_to_the_previous_step(tmp_path):
+    extra = {3: {"after": "排序不确定：两条消息谁先到取决于服务器"}}
+    assert _uncertain_check(tmp_path, extra, [{"from": "P2", "to": "P3"}])["P3"] == ["fail"]
+    assert _uncertain_check(tmp_path, extra, [{"from": "P1", "to": "P3"}])["P3"] == []  # 从更早的同一个点量起：可以
+
+
+def test_prompts_for_uncertain_order_output_and_two_mode_lines():
+    c = idf.build_chain_prompt("全程")
+    assert "运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；定不下来的写进 doubts。" in c
+    assert "和上一步谁先谁后说不准的，after 写\"不确定\"。" in c
+    assert "真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。" in c
+    assert '"protocol": {"what": "哪种协议或通道；只有一种的写：无"' in c
+    p = idf.build_prompt("全程", "", flow={"chain": []})
+    assert "链里先后写着\"不确定\"的、两步都标了最后结果的，不要串成前后相连的段：各自从前面同一个点量起，写进 doubts。" in p
+    assert "标了输出的那一步也放 first、last 两个点。" in p

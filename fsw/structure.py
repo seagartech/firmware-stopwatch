@@ -601,6 +601,37 @@ def check_order(proj, steps, segments):
     return out
 
 
+def _uncertain(text):
+    return any(w in str(text or "") for w in ("不确定", "说不准", "不清楚"))
+
+
+def check_uncertain(steps, segments, by_n):
+    """先后说不准的两步被串成了前后相连的一段：两头都标了最后结果，或者后一步写明和上一步先后不确定、前一头正是那上一步。
+    这样的段可能是负的，应各自从前面同一个点量起。返回 [(段的终点 id, 说明)]。"""
+    by = {s["id"]: s for s in steps}
+    out = []
+    for g in segments or []:
+        if not isinstance(g, dict):
+            continue
+        a, b = by.get(g.get("from")), by.get(g.get("to"))
+        if not a or not b:
+            continue
+        na, nb = a.get("chain_step"), b.get("chain_step")
+        ca, cb = by_n.get(na), by_n.get(nb)
+        if not ca or not cb or na == nb:
+            continue
+        # 两步都标了最后结果（比如结束消息和放空，说不准谁先）。放空和它引起的收尾这种有因果先后的，只有一头标最后结果，不算
+        both_last = "最后结果" in str(ca.get("role") or "") and "最后结果" in str(cb.get("role") or "")
+        unsure = _uncertain(cb.get("after")) and isinstance(na, int) and isinstance(nb, int) and na == nb - 1
+        if not both_last and not unsure:
+            continue
+        why = "两步都标了最后结果" if both_last else f"流程里写着第 {nb} 步和上一步谁先谁后不确定"
+        seg = f"「{g.get('name')}」这一段" if g.get("name") else "这一段"
+        out.append((b["id"], f"{seg}从「{a.get('name')}」到「{b.get('name')}」：{why}，先后说不准，这一段可能是负的。"
+                             "这两个点应各自从前面同一个点量起，不要串成前后相连的段"))
+    return out
+
+
 # ---------- 两步识别：事件链每一步写的函数、计时点在不在链里那一步 ----------
 def _line_at(src, line):
     """这一行第一个真正的字（跳过开头的空白和 }，免得算进上一支）的位置。"""
@@ -794,6 +825,13 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
     for sid, t in found:
         if not any(c["text"] == t for c in by[sid]["chk"]):
             by[sid]["chk"].append({"level": "tip", "kind": "timing", "text": t})
+    try:
+        for sid, t in check_uncertain(steps, [g for g in list(segments or []) + list(side_segments or []) if isinstance(g, dict)], by_n):
+            if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):
+                by[sid]["chk"].append({"level": "fail" if strict else "tip", "kind": "order", "text": t})
+    except Exception as e:
+        for s in steps[-1:]:
+            s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查先后说不准的段时出错（{type(e).__name__}），请自己核对"})
     try:
         for sid, t in check_order(proj, steps, [g for g in list(segments or []) + list(side_segments or []) if isinstance(g, dict)]):
             if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):
