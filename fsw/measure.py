@@ -183,7 +183,8 @@ class Collector:
         结束标记之后 LATE_US 内到的这几个点算回这一轮（实测：最后一声放完比结束标记晚约 0.13 秒）。"""
         ends = {l["segs"][-1][1] for l in self.spec.lines if l["segs"]}
         miss = self._miss_after()
-        if not miss or len(miss) > LATE_MAX or not set(miss) <= ends:  # 只等线的终点（最后一声）：别的点缺了照常判没收全
+        # 只等线的终点（最后一声），或"记最后一次"的点（设备可能在清零之后才补打，见 fw_stopwatch.h 的 FSW_TAIL_MASK）：别的点缺了照常判没收全
+        if not miss or len(miss) > LATE_MAX or not set(miss) <= ends | self.spec.marks:
             return False
         self.prev = {"cur": self.cur, "occ": self.occ, "reset_us": self.reset_us, "miss": set(miss), "until": us + LATE_US,
                      "at": time.monotonic()}
@@ -239,7 +240,7 @@ class Collector:
             self.cur, self.occ, self.reset_us = mine
             self.prev = None
 
-    def _prev_late(self, name, us, val):
+    def _prev_late(self, name, us, val, tail=False):
         """这一行是不是上一轮的尾巴：是就记回上一轮，收齐了交出上一轮。返回 (算上一轮的吗, 交出的结果)。"""
         pv = self.prev
         if us > pv["until"]:
@@ -247,7 +248,7 @@ class Collector:
         if pv.get("carry") and self.spec.start in self.cur:  # 试一次带过来的那一轮：下一句已经开始，之后放的声音都是下一句的
             return False, self._prev_close()
         if pv.get("ready"):  # 已经收齐、在等"取最后一次"的终点的尾巴：结束标记之后才报出来的最后一声算回上一轮
-            if name in self.spec.last and self._before_end(name) not in self.cur:
+            if (name in self.spec.last or tail) and self._before_end(name) not in self.cur:
                 pv["occ"].setdefault(name, []).append((us, val))
                 return True, self._prev_update()
             return False, []
@@ -267,6 +268,15 @@ class Collector:
             # 当"取最后一次"的终点用（比如设备先回到等待、后放空声音的最后一声）。起点和别的要的点补打出来：
             # 这一轮后面的点大半都到了才算（10-19 真测：回答被打断、设备回到聆听时才补打出"你说完"，整句当成没记到起点）；
             # 没走完的起点（后面没有点）补打出来照旧不算
+            pv = self.prev
+            # 上一轮清零之后 LATE_US 内补打的"记最后一次"（设备上可能晚到的点，见 fw_stopwatch.h 的 FSW_TAIL_MASK）：
+            # 是上一轮这个点更晚的那一次，交给上一轮（见 _prev_late：已收齐的更新最后那次，差这个终点的补上）；
+            # 上一轮不要就不要，不记进这一轮（它比这一轮的起点早）。晚过 LATE_US 的照旧不算（试一次会点名）
+            tail = bool(m and pv and m.group(1) in self.spec.marks and m.group(1) not in self.spec.last
+                        and pv["until"] - LATE_US <= int(m.group(2)) <= pv["until"])
+            if tail:
+                late, got = self._prev_late(m.group(1), int(m.group(2)), int(m.group(3)), tail=True)
+                return got
             if m and m.group(1) not in self.spec.last:
                 ln, lus = m.group(1), int(m.group(2))
                 # 这一轮已经有它、但只有起点或前一步之前的那次（比如唤醒提示音的最后一段）：补打的这次才是这一轮的
@@ -611,7 +621,7 @@ class Collector:
         mine = (self.cur, self.occ, self.reset_us)
         self.cur, self.occ, self.reset_us = self.prev["cur"], self.prev["occ"], self.prev["reset_us"]
         try:
-            for x in self.spec.last:
+            for x in self.spec.last | self.spec.marks:  # 记最后一次的点（含清零后补打的尾巴）都取这一轮最后那次
                 after = self._after(x)
                 if after:
                     self.cur[x] = after[-1]
