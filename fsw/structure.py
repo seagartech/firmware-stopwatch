@@ -705,20 +705,69 @@ def _pick(proj, sites, prefer):
 _ASSIGN = re.compile(r"^(?:[\w:<>]+\s+)*([A-Za-z_]\w*)\s*=(?!=)")
 
 
+_EXIT = re.compile(r"(?:return|break|continue|goto)\b")
+
+
+def _not_done_branch(src, bi):
+    """这一支是不是"还没做完、还有数据"那条路：条件是取反或出错一类，或者大括号里只有 return/break/continue 这类提前退出。"""
+    b = src.blocks[bi]
+    m = re.match(r"(?:\}\s*)?(?:else\s+)?if\s*\((.*)\)\s*$", b["head"].strip())
+    if m and _FAIL_COND.search(m.group(1)):
+        return True
+    start, end = src.line_of(b["open"]), src.line_of(b["close"])
+    body = [src.clines[k - 1].strip() for k in range(start, end + 1)]
+    body = [re.sub(r"^.*\{\s*$", "", x) if k == 0 else x for k, x in enumerate(body)]
+    code = [x.strip("{} ") for x in body if x.strip("{} ")]
+    return bool(code) and all(_EXIT.match(x) for x in code)
+
+
+def _after_block(src, header_line):
+    """第 header_line 行开头的整个判断（含 else 各支）后面的第一句：(行号) 或 None（后面就是函数结尾）。"""
+    end = _block_end(src, header_line)
+    if not end:
+        return None
+    k, c = _next_code(src, end)
+    return k if k and c != "}" else None
+
+
 def locate_done(proj, rel, line, prefer=None, depth=0):
-    """从流程里标了全部放完的那一行出发，顺着通知往回找判断出放完的那一支里的第一句：
+    """从流程里标了全部放完的那一行出发，顺着通知往回找判断出放完的那一支里的那一句：
     转发事件位的处理 → 置这个事件位的地方；回调 lambda 里 → 调用这个回调的地方；
-    把判断结果存进变量 → 紧接着检查这个变量的那一支；在一个只被一处调用的函数里 → 调用它的地方。
-    最后停在某个 if 那一支里的一句真正的语句。找不准就返回 None（不改模型的答案）。"""
+    把判断结果存进变量 → 紧接着检查这个变量的那一支；在一个只被一处调用的函数里（或这里只是返回）→ 调用它的地方。
+    "还没放完、还有数据"那一支（条件取反、出错，或者只有 return 这类提前退出）不进、不选，跳到这个判断后面接着找；
+    return/break/continue 这类不当插点。最后停在放完那一支里的一句真正的语句。找不准就返回 None（不改模型的答案）。"""
     src = proj.file(rel)
-    if depth > 6 or src is None or not 1 <= line <= len(src.clines):
+    if depth > 8 or src is None or not line or not 1 <= line <= len(src.clines):
         return None
     c = src.clines[line - 1].strip()
+
+    def callers():
+        inner = next((i for i in _blocks(src, line) if src.blocks[i]["kind"] in ("function", "lambda")), None)
+        if inner is None or src.blocks[inner]["kind"] != "function":
+            return None
+        short = _short(src.blocks[inner]["name"])
+        got = _pick(proj, [x for x in _sites(proj, rf"(?<![\w]){re.escape(short)}\s*\(", short) if x != (rel, line)], prefer)
+        return locate_done(proj, got[0], got[1], prefer, depth + 1) if got else None
+
+    def skip_branch(header_line):  # 不进这一支：到整个判断后面去；后面没有了就是这个函数做完了 → 调用它的地方
+        k = _after_block(src, header_line)
+        return locate_done(proj, rel, k, prefer, depth + 1) if k else callers()
+
     if re.match(r"(?:\}\s*)?(?:else\s+)?if\b", c) and c.endswith("{"):
         bi = next((i for i in _opened_on(src, line) if src.blocks[i]["kind"] == "branch"), None)
-        k = _first_in_block(src, bi) if bi is not None else None
+        if bi is None:
+            return None
+        if _not_done_branch(src, bi):
+            return None if re.match(r"\}", c) else skip_branch(line)
+        k = _first_in_block(src, bi)
         return locate_done(proj, rel, k, prefer, depth + 1) if k else None
     chain = _blocks(src, line)
+    branch = chain[0] if chain and src.blocks[chain[0]]["kind"] == "branch" else None
+    if branch is not None and _not_done_branch(src, branch):  # 在"还没放完"那一支里：跳到这个判断后面
+        hl = src.line_of(src.blocks[branch]["open"])
+        return None if re.match(r"\}", src.clines[hl - 1].strip()) else skip_branch(hl)
+    if _EXIT.match(c):  # 只是返回、跳出：不当插点，到调用它的地方去
+        return callers()
     for bi in chain:  # 事件位：if (位 & 某个常量) 那一支 → 置这个常量的那一句
         b = src.blocks[bi]
         if b["kind"] != "branch":
@@ -743,15 +792,9 @@ def locate_done(proj, rel, line, prefer=None, depth=0):
             ck = src.clines[k - 1].strip()
             if re.match(r"if\b", ck) and re.search(rf"\b{a.group(1)}\b", ck) and ck.endswith("{"):
                 return locate_done(proj, rel, k, prefer, depth + 1)
-    if chain and src.blocks[chain[0]]["kind"] == "branch":
+    if branch is not None:
         return (rel, line) if real_stmt(src, line) else None
-    fn = src.blocks[inner]["name"] if inner is not None else None
-    if fn and depth < 6:  # 只被一处调用的函数 → 调用它的地方
-        short = _short(fn)
-        got = _pick(proj, [x for x in _sites(proj, rf"(?<![\w]){re.escape(short)}\s*\(", short) if x != (rel, line)], prefer)
-        if got:
-            return locate_done(proj, got[0], got[1], prefer, depth + 1)
-    return None
+    return callers()
 
 
 def _class_of(head):
@@ -1394,6 +1437,28 @@ def repair_segments(root, steps, segments, chain):
     return segs, notes
 
 
+def check_side_order(steps, side_segments, by_n):
+    """旁线段的终点在流程里排在起点前面（两头都对应流程里的步骤，也都没写先后不确定）：先后多半反了，这一段可能是负的。
+    只提醒，不改。返回 [(段的终点 id, 说明)]。"""
+    by = {s.get("id"): s for s in steps}
+    out = []
+    for g in side_segments or []:
+        if not isinstance(g, dict):
+            continue
+        a, b = by.get(g.get("from")), by.get(g.get("to"))
+        if not a or not b:
+            continue
+        na, nb = a.get("chain_step"), b.get("chain_step")
+        if not (isinstance(na, int) and isinstance(nb, int)) or nb >= na or na not in by_n or nb not in by_n:
+            continue
+        if any(_uncertain((by_n.get(n) or {}).get("after")) for n in range(nb + 1, na + 1)):
+            continue
+        seg = f"旁线段「{g.get('name')}」" if g.get("name") else "这一段旁线"
+        out.append((b["id"], f"{seg}从「{a.get('name')}」（流程第 {na} 步）连到「{b.get('name')}」（流程第 {nb} 步，排在前面）："
+                             "终点在流程里比起点早，先后多半反了，量出来可能是负的，请核对"))
+    return out
+
+
 def check_dangling(steps, segments, by_n):
     """流程里标了最后结果、全部放完的那一步，它的点至少要有一段量到它（作为某一段的终点；先后说不准的从前面同一个点量起）。
     一段都没连上的点量不出来，等于白放。返回 [(点 id, 说明)]，每一步只报一次。"""
@@ -1484,6 +1549,13 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
     except Exception as e:
         for s in steps[-1:]:
             s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查段的先后时出错（{type(e).__name__}），请自己核对"})
+    try:
+        for sid, t in check_side_order(steps, side_segments, by_n):
+            if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):
+                by[sid]["chk"].append({"level": "tip", "kind": "order", "text": t})
+    except Exception as e:
+        for s in steps[-1:]:
+            s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查旁线段的先后时出错（{type(e).__name__}），请自己核对"})
     for s in steps:
         s["struct_ok"] = not any(c["level"] == "fail" for c in s["chk"])
         if not s["struct_ok"]:

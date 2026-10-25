@@ -1272,3 +1272,38 @@ def test_end_points_are_measured_from_the_first_output(tmp_path):
     assert any("一律从首段输出量起" in t for t in notes)
     structure.check(tmp_path, pts, fixed, chain=chain, strict=True)
     assert not [c for p in pts for c in p["chk"] if c["level"] == "fail"]
+
+
+# ---------- 第 4 轮补：全部放完不进"还没放完"那一支、不选 return；旁线段先后反了提醒 ----------
+NOT_DONE = {
+    "main/q.cc": "void Q::Task() {\n    while (true) {\n        out_->Emit(pop());\n        bool done = false;\n        done = MarkDone();\n"
+                 "        if (done && cbs_.on_done) {\n            cbs_.on_done();\n        }\n    }\n}\n"
+                 "bool Q::MarkDone() {\n    if (!Empty() || notified_) {\n        return false;\n    }\n    notified_ = true;\n    return true;\n}\n"
+                 "void Q::Wait() {\n    while (true) {\n        if (HasData()) {\n            continue;\n        }\n        break;\n    }\n}\n",
+}
+
+
+def test_done_locator_skips_the_not_finished_branch_and_returns(tmp_path):
+    from fsw import structure
+    for rel, text in NOT_DONE.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    proj = structure.Project(tmp_path)
+    lines = NOT_DONE["main/q.cc"].split("\n")
+    at = lambda t: next(i for i, l in enumerate(lines, 1) if t in l)
+    want = ("main/q.cc", at("cbs_.on_done();"))
+    for t in ("if (!Empty() || notified_)", "return false;", "notified_ = true;", "return true;", "done = MarkDone();", "if (done && cbs_.on_done)"):
+        assert structure.locate_done(proj, "main/q.cc", at(t), ("main/q.cc", "Task")) == want, t
+    assert structure.locate_done(proj, "main/q.cc", at("continue;"), None) is None  # 只能返回、找不准：不管
+
+
+def test_reversed_side_segment_gets_a_tip(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    side = [{"id": "S1", "chain_step": 5, "name": "旁", "file": "main/a.c", "line": 6, "where": "before", "once": "first", "line_of": "side", "loc_ok": True}]
+    structure.check(tmp_path, pts + side, [], [{"from": "S1", "to": "P5", "name": "反"}], chain=chain, strict=True)
+    tips = [c for c in pts[4]["chk"] if c["kind"] == "order"]
+    assert tips and tips[0]["level"] == "tip" and "先后多半反了" in tips[0]["text"]
+    chain[4]["after"] = "不确定"  # 写明先后不确定的：不提醒
+    structure.check(tmp_path, pts + side, [], [{"from": "S1", "to": "P5"}], chain=chain, strict=True)
+    assert not [c for c in pts[4]["chk"] if c["kind"] == "order"]
