@@ -1,0 +1,165 @@
+{
+  "steps": [
+    {
+      "p": "P1",
+      "n": "说话结束",
+      "path": "main/audio/engines/afe_audio_engine.cc",
+      "l": 482,
+      "line": "start",
+      "why": "AFE 的静音检测从“在说话”翻成“静音”的那一帧，设备第一次知道人讲完了",
+      "where": "before",
+      "once": "once"
+    },
+    {
+      "p": "P2",
+      "n": "说完事件回调",
+      "path": "main/audio/engines/afe_audio_engine.cc",
+      "l": 483,
+      "line": "talk",
+      "why": "把“说完了”告诉上层，仅用于灯效/界面提示，不结束链路",
+      "where": "before",
+      "once": "once"
+    },
+    {
+      "p": "P3",
+      "n": "音频帧交编码",
+      "path": "main/audio/engines/afe_audio_engine.cc",
+      "l": 494,
+      "line": "talk",
+      "why": "同一帧处理完后，AFE 输出按 60ms 切成帧压进编码队列，取这一轮第一次，标出上行打包的起点",
+      "where": "before",
+      "once": "first"
+    },
+    {
+      "p": "P4",
+      "n": "Opus 包入发送队列",
+      "path": "main/audio/audio_service.cc",
+      "l": 500,
+      "line": "talk",
+      "why": "编码任务把 PCM 压成 Opus 包放进待发队列，标出第一包已经准备好",
+      "where": "before",
+      "once": "first"
+    },
+    {
+      "p": "P5",
+      "n": "上传首包",
+      "path": "main/application.cc",
+      "l": 242,
+      "line": "talk",
+      "why": "主循环把待发队列里的包一个个取出调协议发送，取第一次执行，就是音频真正开始往外发的时刻",
+      "where": "before",
+      "once": "first"
+    },
+    {
+      "p": "P6",
+      "n": "上传末包",
+      "path": "main/application.cc",
+      "l": 242,
+      "line": "talk",
+      "why": "同一句发送在本轮里反复执行，最后一次执行就是上行音频的最后一包",
+      "where": "before",
+      "once": "last"
+    },
+    {
+      "p": "P7",
+      "n": "收到识别结果",
+      "path": "main/application.cc",
+      "l": 666,
+      "line": "talk",
+      "why": "服务器下发 stt 消息，首个结果里的第一句真正生效时上屏的那一句，标出识别结果到达",
+      "where": "before",
+      "once": "once"
+    },
+    {
+      "p": "P8",
+      "n": "用户文字上屏",
+      "path": "main/application.cc",
+      "l": 667,
+      "line": "talk",
+      "why": "把识别出的用户文字写进对话气泡，屏幕上是人第一次看到自己说的话被识别出来",
+      "where": "before",
+      "once": "once"
+    },
+    {
+      "p": "P9",
+      "n": "回复开始",
+      "path": "main/application.cc",
+      "l": 627,
+      "line": "talk",
+      "why": "收到 tts/start，设备切到说话状态，之后服务器下发的音频包才会被收下",
+      "where": "before",
+      "once": "once"
+    },
+    {
+      "p": "P10",
+      "n": "回复文字上屏",
+      "path": "main/application.cc",
+      "l": 651,
+      "line": "talk",
+      "why": "服务器逐句下发 sentence_start，取第一句，标出回复文字首次出现在屏幕上的时间",
+      "where": "before",
+      "once": "first"
+    },
+    {
+      "p": "P11",
+      "n": "首包音频入队",
+      "path": "main/application.cc",
+      "l": 556,
+      "line": "talk",
+      "why": "服务器下发的二进制音频包逐包进解码队列，取第一次，标出回复音频的到达",
+      "where": "before",
+      "once": "first"
+    },
+    {
+      "p": "P12",
+      "n": "解码后入播放队列",
+      "path": "main/audio/audio_service.cc",
+      "l": 453,
+      "line": "talk",
+      "why": "解码任务把 Opus 解成 PCM 推进播放队列，取第一次，标出可播音频已经就绪",
+      "where": "before",
+      "once": "first"
+    },
+    {
+      "p": "P13",
+      "n": "首次出声",
+      "path": "main/audio/audio_service.cc",
+      "l": 351,
+      "line": "talk",
+      "why": "输出任务把第一段 PCM 写进扬声器，这是人第一下听到回复的时刻",
+      "where": "before",
+      "once": "first"
+    },
+    {
+      "p": "P14",
+      "n": "末段输出",
+      "path": "main/audio/audio_service.cc",
+      "l": 351,
+      "line": "talk",
+      "why": "同一句输出在本轮反复执行，最后一次就是最后一段音频进扬声器，声音放完",
+      "where": "before",
+      "once": "last"
+    },
+    {
+      "p": "P15",
+      "n": "播放队列放空",
+      "path": "main/audio/audio_service.cc",
+      "l": 374,
+      "line": "talk",
+      "why": "输出完最后一包后判定解码队列、播放队列都空且无在途帧，回调“全部放完”，标出本地播放真正结束",
+      "where": "before",
+      "once": "once"
+    },
+    {
+      "p": "P16",
+      "n": "回到聆听",
+      "path": "main/application.cc",
+      "l": 635,
+      "line": "talk",
+      "why": "收到 tts/stop 且当前是说话状态、监听模式为自动停止，设备回到聆听，本轮结束并准备下一轮",
+      "where": "before",
+      "once": "once"
+    }
+  ],
+  "reply": "```json\n{\n  \"header\": \"main/fw_stopwatch.h\",\n  \"inserts\": [\n    {\n      \"step\": \"include\",\n      \"file\": \"main/audio/engines/afe_audio_engine.cc\",\n      \"after_line\": 11,\n      \"lines\": [\n        \"// 计时点头文件：接入码表计时点接口\",\n        \"#include \\\"fw_stopwatch.h\\\"\"\n      ]\n    },\n    {\n      \"step\": \"include\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"after_line\": 24,\n      \"lines\": [\n        \"// 计时点头文件：接入码表计时点接口\",\n        \"#include \\\"fw_stopwatch.h\\\"\"\n      ]\n    },\n    {\n      \"step\": \"include\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 20,\n      \"lines\": [\n        \"// 计时点头文件：接入码表计时点接口\",\n        \"#include \\\"fw_stopwatch.h\\\"\"\n      ]\n    },\n    {\n      \"step\": \"reset\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 1029,\n      \"lines\": [\n        \"            // 计时点辅助：设备回到聆听，本轮开始，清零“只记第一次”标记\",\n        \"            FSW_ROUND_RESET();\"\n      ]\n    },\n    {\n      \"step\": \"P1\",\n      \"file\": \"main/audio/engines/afe_audio_engine.cc\",\n      \"after_line\": 481,\n      \"lines\": [\n        \"            // 计时点 P1：说话结束（说话翻静音的那一帧）\",\n        \"            FSW_MARK_ONCE(1, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P2\",\n      \"file\": \"main/audio/engines/afe_audio_engine.cc\",\n      \"after_line\": 482,\n      \"lines\": [\n        \"            // 计时点 P2：说完事件回调告知上层\",\n        \"            FSW_MARK_ONCE(2, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P3\",\n      \"file\": \"main/audio/engines/afe_audio_engine.cc\",\n      \"after_line\": 493,\n      \"lines\": [\n        \"            // 计时点 P3：音频帧交编码（上行打包起点）\",\n        \"            FSW_MARK_ONCE(3, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P4\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"after_line\": 493,\n      \"lines\": [\n        \"                        // 计时点 P4：Opus 包入发送队列（第一包准备好）\",\n        \"                        FSW_MARK_ONCE(4, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P12\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"after_line\": 452,\n      \"lines\": [\n        \"                // 计时点 P12：解码后入播放队列（可播音频就绪）\",\n        \"                FSW_MARK_ONCE(12, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P13\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"after_line\": 350,\n      \"lines\": [\n        \"        // 计时点 P13：首次出声（第一段 PCM 写进扬声器）\",\n        \"        FSW_MARK_ONCE_AFTER(13, 10, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P14\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"after_line\": 350,\n      \"lines\": [\n        \"        // 计时点 P14：末段输出（本轮最后一次写扬声器）\",\n        \"        FSW_KEEP_LAST(14);\"\n      ]\n    },\n    {\n      \"step\": \"P15\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"after_line\": 373,\n      \"lines\": [\n        \"            // 计时点 P15：播放队列放空（本地播放真正结束）\",\n        \"            FSW_MARK_ONCE(15, 0);\"\n      ]\n    },\n    {\n      \"step\": \"flush\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"after_line\": 373,\n      \"lines\": [\n        \"            // 计时点辅助：把“末段输出”最后一次的计时打出来\",\n        \"            FSW_FLUSH_LAST(14);\"\n      ]\n    },\n    {\n      \"step\": \"arm\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 626,\n      \"lines\": [\n        \"                    // 计时点辅助：回复开始武装，之后才允许记“首次出声”\",\n        \"                    FSW_ARM();\"\n      ]\n    },\n    {\n      \"step\": \"P9\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 626,\n      \"lines\": [\n        \"                    // 计时点 P9：回复开始（收到 tts/start）\",\n        \"                    FSW_MARK_ONCE(9, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P10\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 650,\n      \"lines\": [\n        \"                        // 计时点 P10：回复文字上屏（第一句）\",\n        \"                        FSW_MARK_ONCE(10, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P11\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 555,\n      \"lines\": [\n        \"            // 计时点 P11：首包音频入解码队列\",\n        \"            FSW_MARK_ONCE(11, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P16\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 634,\n      \"lines\": [\n        \"                            // 计时点 P16：回到聆听（本轮结束）\",\n        \"                            FSW_MARK_ONCE(16, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P5\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 241,\n      \"lines\": [\n        \"                // 计时点 P5：上传首包（音频开始往外发）\",\n        \"                FSW_MARK_ONCE(5, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P6\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 241,\n      \"lines\": [\n        \"                // 计时点 P6：上传末包（本轮最后一次发送）\",\n        \"                FSW_KEEP_LAST(6);\"\n      ]\n    },\n    {\n      \"step\": \"flush\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 666,\n      \"lines\": [\n        \"                    // 计时点辅助：把“上传末包”最后一次的计时打出来\",\n        \"                    FSW_FLUSH_LAST(6);\"\n      ]\n    },\n    {\n      \"step\": \"P7\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 665,\n      \"lines\": [\n        \"                    // 计时点 P7：收到识别结果（stt 到达）\",\n        \"                    FSW_MARK_ONCE(7, 0);\"\n      ]\n    },\n    {\n      \"step\": \"P8\",\n      \"file\": \"main/application.cc\",\n      \"after_line\": 666,\n      \"lines\": [\n        \"                    // 计时点 P8：用户文字上屏\",\n        \"                    FSW_MARK_ONCE(8, 0);\"\n      ]\n    }\n  ],\n  \"notes\": [\n    \"main/fw_stopwatch.h 目前不在源码树里（由码表提供），所以 P13 用到的“前一步编号”暂写成表里的 P9：P11 在 audio_service.cc 内部还有提示音/通知音走 PushPacketToDecodeQueue 的路径（OnPlaybackDrained/PlaySound），P12 是 AFE 线程与主线程都频繁进出的地方，都可能被上一轮残留提前触发；P9 在 tts/start 的 Schedule 里、本轮一定先于回复音频发生，所以把 P13 也绑在武装+前置 P9 上。若希望严格按“前一步=P11”，只需把 13 那行改成 FSW_MARK_ONCE_AFTER(13, 11, 0)。\",\n    \"P6 用 FSW_KEEP_LAST，若本轮没有任何上行音频（没经过第 242 行）就不会打印，这符合“末包=最后一次发送”的语义；打印点放在 stt 首个结果上屏处（本轮上行音频一定先于它）。P14 同理：若本轮没播任何音频（例如回复为空），最后一次调用还是上一轮的，我会在 P15 打印，但那种情况下 P15 本身也常常不会触发，这一项会是空值，需要码表侧注意。\",\n    \"P13/P14 都在 audio_output 任务里每 60ms 一次的高频路径上：P14 用 KEEP_LAST 只写内存没问题；P13 是 ONCE + ARM 守卫，开销也仅次于一次判断。真正有风险的是 P3（AFE 每帧、~60ms 一次）和 P11/P12——P11 只在“收到首包”位置，但如果服务器每轮都发第一包就一次；P12 在 OpusCodecTask 里，解码每次都会走，靠 ONCE 抵消，但若提示音也在新一轮聆听早期排队，可能被提示音的包先占掉（提示音属于本轮新播放，正常情况下就是“该轮最早可播音频”，可接受）。\",\n    \"FSW_ROUND_RESET 放在 HandleStateChangedEvent() 的 case kDeviceStateListening 里、display->SetEmotion(\\\"neutral\\\"); 之后（第 1030 行之后、if 之前），这样无论是自动模式延迟开始聆听还是立即开始，本轮进入聆听时都会清一次；但它不会清掉上一轮尚未送达的音频（P13 已用 ARM 防护）。\",\n    \"P5/P6 的打印点放在 stt 首个结果里（application.cc 第 865～866 行前），和“用户文字上屏”同一处，可以保证本轮上行发送已经结束；如果希望更早看到，可以改放到 P9（tts/start）之前。\"\n  ]\n}\n```"
+}

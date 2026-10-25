@@ -204,8 +204,11 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
 码表会把头文件 {header} 放进项目，里面有这些语句（编号用上面表里的数字，附加值没有就写 0）：
 - FSW_MARK(编号, 附加值);  每次都记一行
 - FSW_MARK_ONCE(编号, 附加值);  一轮只记第一次
-- FSW_KEEP_LAST(编号);  高频位置用：只在内存里记最后一次，再在之后的某个计时点处用 FSW_FLUSH_LAST(编号); 打印出来
-- FSW_ROUND_RESET();  一轮开始时清零"只记第一次"的标记，放在每轮开始的地方（比如进入聆听状态、读到卡）
+- FSW_KEEP_LAST(编号);  高频位置用：只在内存里记最后一次，再在之后的某个计时点处用 FSW_FLUSH_LAST(编号); 打印出来。
+  表里写"一轮里记最后一次"的点用它，不用 FSW_MARK（FSW_MARK 每次都打一行，逐帧、逐包的地方会打出成百上千行）
+- FSW_ROUND_RESET();  一轮开始时清零"只记第一次"的标记，放在每轮开始、一轮只经过一次的地方（比如进入聆听状态的那一支、读到卡）。
+  不能放在主循环、事件循环、任务循环的循环体里（每来一个事件、每一包、每一下定时都会转一圈，一轮会清零几十上百次），
+  也不能放在逐帧、逐包、定时执行的地方。FSW_ARM(); 同样只放在一轮只经过一次的地方
 - FSW_ARM(); 和 FSW_MARK_ONCE_ARMED(编号, 附加值);  只在 FSW_ARM() 之后才记；FSW_ARM(); 单独一行，不能套在 if 里
 - FSW_MARK_ONCE_AFTER(编号, 前一步编号, 附加值);  这一轮走到"前一步"（那个用 FSW_MARK_ONCE 记的计时点）之后才记，只记第一次。
   会被上一轮剩下的东西提前触发的点要用它：比如"收到第一段声音"，上一句回答剩下的一包声音可能在新一轮聆听时才到，
@@ -346,6 +349,49 @@ def _needs_lost(out, dropped):
     return lost
 
 
+ROUND_ONCE = re.compile(r"FSW_(?:ROUND_RESET|ARM)\(\s*\)")
+
+
+def _once_place(root, rel, after, lines, steps):
+    """清零（FSW_ROUND_RESET）、武装（FSW_ARM）一轮只该经过一次：插在第 after 行后面的这几句如果落在会一直转的地方，返回说明。
+    看结构，不认文件名、函数名：
+    - 直接在循环体里（不在里面哪一支里）：主循环、事件循环、任务循环每来一个事件、每一包、每一下定时都转一圈；
+    - 直接写在函数体里（不在哪一支里），而反复执行的计时点（一轮记第一次、最后一次、每次都记的那几步，起点除外）
+      也直接写在这个函数体里：这个函数是逐帧、逐包执行的。
+    放在循环里某一支（比如"进入聆听"那一支）、或只在某个事件才调用的函数里，不算。"""
+    if not any(isinstance(l, str) and ROUND_ONCE.search(l) for l in lines):
+        return None
+    from fsw import structure
+    try:
+        proj = structure.Project(root)
+        src = proj.file(rel)
+        if src is None:
+            return None
+        at = src.pos(after, "after") if after else 0
+        loops, _inner, _ = src.context(at)
+        what = "清零" if any(isinstance(l, str) and "ROUND_RESET" in l for l in lines) else "武装"
+        here = src.chain(at)
+        if loops and here[:1] == loops[:1]:
+            b = src.blocks[loops[0]]
+            return (f"{rel} 第 {after} 行后面的{what}放在第 {src.line_of(b['open'])} 行「{structure._cond_text(b['head'])}」这个循环体里，"
+                    f"每转一圈就{what}一次，一轮会{what}很多次；要放在一轮只经过一次的地方（比如进入聆听状态的那一支）")
+        for s in steps:
+            if str(s.get("once") or "") not in ("first", "last", "every") or (s.get("path") or s.get("f")) != rel \
+                    or s.get("line") == "start":  # 起点那一步：每轮从它开始，清零放在它旁边是对的
+                continue
+            try:
+                pos = src.pos(int(s.get("l")), s.get("where") or "before")
+            except (TypeError, ValueError, IndexError):
+                continue
+            mine = src.chain(pos)
+            if here and mine and here[0] == mine[0] and src.blocks[here[0]]["kind"] in ("function", "lambda"):
+                return (f"{rel} 第 {after} 行后面的{what}和「{s.get('n')}」在同一段代码里，那里逐帧、逐包反复执行，"
+                        f"一轮会{what}很多次；要放在一轮只经过一次的地方（比如进入聆听状态的那一支）")
+    except Exception:  # 结构读不懂：不拦（插的内容照样只有计时点语句）
+        return None
+    return None
+
+
 def parse_plan(text, root, steps, needs=None):
     """读 AI 给的插入清单，逐条核对。只能插计时点语句、注释和 #include，别的代码一行都不插。
     不合规的那几条（比如夹带了 if 判断）：去掉以后每个计时点都还在、留下的都能照常工作，就只去掉这几条，其余照插，
@@ -397,6 +443,10 @@ def parse_plan(text, root, steps, needs=None):
             reject(x, f"{rel} 第 {after} 行的附加值不是只读的：<code>{html.escape(badv[0][:80])}</code>"
                       "（附加值只能读已有的变量或不带参数的函数返回值）")
             continue
+        where = _once_place(root, rel, after, lines, steps)
+        if where:
+            reject(x, where)
+            continue
         out.append({"step": step, "file": p.relative_to(root).as_posix(), "after_line": after, "lines": lines})
     whole = []  # 去掉不合规的几条之后还缺的（缺了就不能只去掉）
     missing = [s["n"] for k, s in ids.items() if not any(x["step"] == k for x in out)]
@@ -434,6 +484,8 @@ PLAN_FIX = """你给的插入清单里有几条码表不能用（一个文件都
 不能加 if、条件判断、变量、赋值或任何别的代码。不用自己筛"只记回复的声音、不记提示音"：码表的计时点只认这一轮起点之后记到的
 （起点之前记到的码表不算），上一轮剩下的、提示音不会被算进这一轮；要"某一步之后才记"就用 FSW_MARK_ONCE_AFTER(编号, 前一步编号, 0)，
 不写判断，也不要套在 if 里用 FSW_ARM()。
+清零（FSW_ROUND_RESET）、武装（FSW_ARM）只能放在一轮只经过一次的地方（比如进入聆听状态的那一支、读到卡），
+不能放在主循环、事件循环的循环体里，也不能放在逐帧、逐包、定时执行的地方；放错的请挪到这种地方。
 
 不能用的是这几条：
 {items}
