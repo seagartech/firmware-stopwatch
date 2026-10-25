@@ -195,6 +195,17 @@ def _subprocess_runner(cmd, cwd, env):
     return proc.wait()
 
 
+def pick_errors(tail):
+    """编译输出里挑报错：先找编译器的报错行（文件:行: error:）连同"在哪里展开的宏"那几行（报错指到头文件里时靠它找到真正的那一句），
+    再找 CMake 的报错段（原话常常分好几行），找不到再退而求其次。最多 8 行。"""
+    cm = next((i for i, l in enumerate(tail) if l.startswith("CMake Error")), None)
+    errs = [l for l in tail if re.search(r":\d+(:\d+)?: (fatal )?error:|:\d+(:\d+)?: note: (in expansion of|expanded from) macro", l)] \
+        or (tail[cm:cm + 8] if cm is not None else []) \
+        or [l for l in tail if re.search(r"\berror\b", l, re.I) and not re.search(r"\s-W|xtensa-.*-g(cc|\+\+)\s", l)] \
+        or tail[-8:]
+    return errs[:8]
+
+
 class EspIdf:
     name = "ESP-IDF"
 
@@ -343,12 +354,7 @@ class EspIdf:
             on_progress(100, "编译完成")
             return {"ok": True, "seconds": secs, "error": None}
         # 先找编译器的报错行（文件:行: error:），再找 CMake 的报错段（原话常常分好几行），找不到再退而求其次
-        cm = next((i for i, l in enumerate(tail) if l.startswith("CMake Error")), None)
-        errs = [l for l in tail if re.search(r":\d+(:\d+)?: (fatal )?error:", l)] \
-            or (tail[cm:cm + 8] if cm is not None else []) \
-            or [l for l in tail if re.search(r"\berror\b", l, re.I) and not re.search(r"\s-W|xtensa-.*-g(cc|\+\+)\s", l)] \
-            or tail[-8:]
-        out = {"ok": False, "seconds": secs, "error": "\n".join(errs[:8])}
+        out = {"ok": False, "seconds": secs, "error": "\n".join(pick_errors(tail))}
         if NET_FAIL.search("\n".join(tail)):  # 下载组件连不上：是网络的问题，不是源码编不过
             out.update(cause="network", message=NET_MESSAGE)
         return out

@@ -722,6 +722,10 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         _stop_collect()
         proj = Path(body.project_dir)
         fp, cached = _plan_cache(body)
+        if fsw.get("redo_note"):  # 上一次插完编译或试的时候发现插法有问题：不再沿用上次的插法、也不用提前准备的，带上这个问题重新问 AI
+            cached = None
+            if fsw.get("prep"):
+                fsw["prep"]["status"] = "stale"
         prep, use_prep, redo = fsw.get("prep"), False, None
         if not cached and prep and prep["work"] == body.work and prep["status"] in ("running", "ready", "failed"):
             if prep["steps"] == body.steps and prep["status"] != "failed":
@@ -772,14 +776,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     try:
                         job["calls"] += 1
                         talk["llm"] = _model()[1]
-                        text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("cut_note", None)), body.work,
+                        text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("redo_note", None)), body.work,
                                                        on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     except llms.LLMError as e:
                         return _fail(job, "insert", f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", error=e.detail)
             else:
                 job["calls"] += 1
                 try:
-                    text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("cut_note", None)), body.work,
+                    text = Tap().investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=fsw.pop("redo_note", None)), body.work,
                                              on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     talk["llm"] = model
                 except llms.LLMError as e:
@@ -874,12 +878,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "build", r["message"], error=r.get("error"), cause=r["cause"])
             if not r.get("ok"):
                 rec = ins.current(_fsw_dirs(a)[0]) or {"steps": {}}
-                step = ins.locate_error(r.get("error"), rec, a.work)
+                place = ins.error_place(r.get("error"), rec, a.work)
+                step = place["step"] if place and place["step"] not in ins.HELPERS else None
                 s = next((x for x in a.steps if ins.point_id(x, a.steps) == step), None)
-                where = f"{rec['steps'][step]['file']} 第 {rec['steps'][step]['at']} 行" if step else ""
+                where = f"{place['file']} 第 {place['at']} 行" if place else ""
                 short = (r.get("error") or "").replace(str(Path(a.work).resolve()) + "/", "").replace(str(a.work) + "/", "")
-                return _fail(job, "build", "编译没通过：是码表插的计时点引起的" if step else "编译没通过",
-                             error=short, step=step, step_name=s["n"] if s else None, where=where)
+                if place:  # 报错对回了插进去的哪一句（报错指到头文件时按"在哪里展开的宏"找）：说清楚，重插时告诉 AI
+                    note = ins.error_text(place, a.steps)
+                    fsw["redo_note"] = note
+                    return _fail(job, "build", f"编译没通过：{note}。点\"重新插入\"，码表会把这个问题告诉 AI。",
+                                 error=short, step=step, step_name=s["n"] if s else None, where=where)
+                return _fail(job, "build", "编译没通过", error=short, step=None, step_name=None, where="")
             if not EspIdf.save_firmware(a.work, fsw_fw):
                 return _fail(job, "build", "编译说通过了，但没找到编出来的固件文件（build/flasher_args.json）。点\"重新编译\"再试一次。")
             T().end("build")
@@ -1072,7 +1081,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 rest = "」「".join(names.get(f"P{k}") or f"P{k}" for k in sorted(cut["later"], key=order.index))
                 note = (f"每轮清零那一句放错了：每一轮在「{at_n}」之后就被清零，后面的「{rest}」都算不进这一轮。"
                         "清零要放在一轮结束、回到等待的地方，不能放在每次换状态、每一步都会走的地方")
-                fsw["cut_note"] = note  # 回到「插计时点」重插时告诉 AI
+                fsw["redo_note"] = note  # 回到「插计时点」重插时告诉 AI
                 return _fail(job, "try", note + "。再试也一样，回到「插计时点」那一步重新插一次（码表会把这个问题告诉 AI）。",
                              why="设备真的走完了这一轮（后面的点都打出来了），只是半路被清零，码表没法把它们算进同一轮。",
                              error=f"（收到 {len(got)} / {len(want)} 个）", missing=[names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)],

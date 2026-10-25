@@ -1,0 +1,12 @@
+In file included from {ROOT}/main/audio/audio_service.cc:5:
+{ROOT}/main/fw_stopwatch.h:144:42: error: expected constructor, destructor, or type conversion before '(' token
+  144 | #define FSW_FLUSH_LAST(id) fsw_flush_last(id)
+      |                                          ^
+{ROOT}/main/audio/audio_service.cc:389:5: note: in expansion of macro 'FSW_FLUSH_LAST'
+  389 |     FSW_FLUSH_LAST(6);
+      |     ^~~~~~~~~~~~~~
+{ROOT}/main/fw_stopwatch.h:144:42: error: expected constructor, destructor, or type conversion before '(' token
+  144 | #define FSW_FLUSH_LAST(id) fsw_flush_last(id)
+      |                                          ^
+{ROOT}/main/audio/audio_service.cc:390:5: note: in expansion of macro 'FSW_FLUSH_LAST'
+  390 |     FSW_FLUSH_LAST(10);
