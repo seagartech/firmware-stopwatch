@@ -34,7 +34,7 @@ PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是�
 {flow}
 ## 怎么选点
 1. 计时点只能从事件链里选：每个点都写 chain_step（第几步），点就插在那一步那一行，或那一行所在的那一支里；链外不加点。起点是第 1 步（line_of 写 start）。
-2. 链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点；第一下感觉到的结果也要有。同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last；外层一句和它调用的那一句是同一次发送的，只在一处放 first、last。标了输出的那一步也放 first、last 两个点。
+2. 链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点；第一下感觉到的结果也要有。同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last；上传首包、末包只放在标了它们的那一步。标了输出的那一步也放 first、last 两个点。全部放完的点放在判断出放完的那一支里，不放在检查状态的入口。
 3. 点所在那一层是循环体（或逐帧、逐包反复调用的函数）时，它每圈都执行，不能写 once：要么放进循环里判断出"就是这一次"的那一支（这时写 once），要么写 first 或 last。不写 every。首包、首个结果这类，放在判断出"确实会被用上"之后。
 4. 插点写法：line 写一句真正的语句，点插在它前面、和它同一层（where 写 before）；要放进某一支，就写这一支大括号里的第一句。if、while、for、switch、else、case 那一行不能当 line：点会落在整个判断或循环外面，不在你想要的那一支里。只有 {{ 或 }} 的行、#if/#else/#endif 也不能写；只有放在块里最后一句之后才写 after；同一句只放一个点（上面第 2 条的首包、末包除外）。例：要记 `}} else if (done) {{` 这一支，写它里面第一句 `stop();`、before。条件成立才执行的那一句（比如调用回调、发出数据），点写在 if 大括号里的第一句，不写在 if 那一行；首个结果、最后结果这类点也放在认出是这种消息之后那一支里，不放在消息分发入口。发送或调用本身写在 if 条件里的（比如 if (!send(x))），只能写 if 这一行、where 写 before。
 5. 点放在链写明的那一支里，出错、失败、重试那一支不放。外面套着条件、可能不走的，always 写 false，除非在 why 里说明正常每轮都满足。
@@ -99,7 +99,7 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；定不下来的写进 doubts。
 4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面；和上一步谁先谁后说不准的，after 写"不确定"。
 5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
-6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；外层一句和它调用的那一句是同一次发送的，首包、末包只标在其中一处。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句，role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
+6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口），role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
 7. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道），以及注册回调、初始化这类不在这一轮运行时执行的代码，不进链。
 {hint}
 ## 最后输出
@@ -257,6 +257,7 @@ def _json_block(text):
     return None
 
 
+FIX_AGAIN = "码表核对你的流程时发现下面几处不对，其余都对：\n{items}\n不要再读源码，只改这几处，把完整的结果重新输出一个 ```json 代码块。"
 FORMAT_AGAIN = "你上一条回答最后的 JSON 码表读不懂（格式不对，比如少了引号或逗号）。不要再读源码，只按要求的格式把同样的内容重新输出一个 ```json 代码块。"
 
 
@@ -341,13 +342,13 @@ def _where_code(root, file, line, code):
     return None, f"{_rel(root, file)} 第 {n} 行是「{real[:40]}」，和它抄的原文「{str(code).strip()[:40]}」对不上"
 
 
-def check_chain(root, data, category=""):
+def check_chain(root, data, category="", fixes=None):
     """两次调用之间码表检查理清的流程（只做做得可靠的）：
     文件、行号、原文对不对得上；必填项有没有写；第一步有没有写明是哪种输入结束检测。
     返回 (整理好的流程, 问题列表)；问题列表不空就是不合格。"""
     if not isinstance(data, dict):
         return None, ["回答的格式不对，码表看不懂"]
-    bad, tips, roles, proj = [], [], set(), structure.Project(root)
+    bad, tips, roles, proj, up_steps = [], [], set(), structure.Project(root), []
     trigger = str(data.get("trigger") or "").strip()
     if not trigger:
         bad.append("没写选定的触发路径")
@@ -407,6 +408,10 @@ def check_chain(root, data, category=""):
         line, why = _where_code(root, c.get("file"), c.get("line"), c.get("code"))
         if why:
             bad.append(f"{tag}：{why}")
+            real = check_location(root, c.get("file"), line_no(c.get("line"))[0]) if line_no(c.get("line"))[0] else (None, "x")
+            if fixes is not None and not real[1] and real[0] is not None and "对不上" in why:  # 只是抄的原文对不上：追问时把文件里的原文给它
+                fixes.append({"bad": bad[-1], "text": f"第 {n} 步：{_rel(root, c.get('file'))} 第 {line_no(c.get('line'))[0]} 行文件里是「{real[0]}」，"
+                                                       f"你写的是「{str(c.get('code')).strip()}」。照抄文件里这一行（行号不对就改成原文所在的行）"})
             continue
         src = proj.file(_rel(root, c["file"]))
         got = structure.check_func(src, line, c["func"]) if src is not None else None
@@ -415,11 +420,17 @@ def check_chain(root, data, category=""):
             continue
         if got:
             tips.append(f"{tag}：{got[1]}")
+        if any(r.startswith("上传") for r in role):
+            up_steps.append(n)
         chain.append({"n": n, "what": str(c["what"]).strip(), "file": _rel(root, c["file"]), "line": line,
                       "code": check_location(root, c["file"], line)[0], "func": str(c["func"]).strip(), "role": role,
                       "branch": str(c.get("branch") or "").strip(), "repeat": rep, "after": str(c.get("after") or "").strip()})
     upload = str(data.get("upload") or "").strip()
     need = [r for r in ROLES if r not in roles and not (r.startswith("上传") and upload.lower().startswith(_NONE))]
+    if len(up_steps) > 1:  # 同一次发送只标一处
+        bad.append(f"上传首包、上传末包标在了第 {'、'.join(map(str, up_steps))} 步：只能标在一步上（真正发出数据的那一句）")
+        if fixes is not None:
+            fixes.append({"bad": bad[-1], "text": f"上传首包、上传末包标在了第 {'、'.join(map(str, up_steps))} 步，只留一步（真正发出数据的那一句），其余步骤去掉这两个标记"})
     if raw and need:
         bad.append(f"事件链里没标出：{'、'.join(need)}（在对应步骤的 role 里写；确实不往外发数据的，upload 写「无」）")
     if raw and str(category or "").strip() in NEED_DONE and DONE not in roles and not any(DONE in d for d in doubts):
@@ -629,7 +640,22 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
         except LLMError as e:
             return failed(e, "chain")
         took_retries("chain")
-        got, bad = check_chain(root, _json_block(chain_reply), category)
+        fixes = []
+        got, bad = check_chain(root, _json_block(chain_reply), category, fixes)
+        if bad and len(fixes) == len(bad) and not any(x["stage"] == STAGES["chain"] for x in followups):
+            # 只差抄错的原文、首包末包标了多步这类码表能指出改法的：同一段对话里追问一次，只改这几处（每一步最多追问一次）
+            t = time.time()
+            try:
+                again = llm.followup(FIX_AGAIN.format(items="\n".join(f"- {x['text']}" for x in fixes)))
+            except LLMError as e:
+                return failed(e, "chain")
+            took_retries("chain")
+            if again is not None:
+                got2, bad2 = check_chain(root, _json_block(again), category)
+                followups.append({"stage": STAGES["chain"], "kind": "fix", "ok": not bad2, "problems": bad, "seconds": round(time.time() - t, 1)})
+                print(f"[识别] 理清流程有 {len(bad)} 处可指出改法的问题，追问一次只改这几处：{'好了' if not bad2 else '还是不对'}", file=sys.stderr, flush=True)
+                chain_first = chain_first or chain_reply
+                chain_reply, got, bad = again, got2, bad2
         if bad:  # 不合格就停下说明原因，不自动重试
             more = f"等 {len(bad)} 处" if len(bad) > 3 else ""
             return _fail("bad_chain", f"理清流程这一步的结果没通过码表检查：{'；'.join(bad[:3])}{more}。点\"重试\"再理一次，也可以到设置页换一个大模型。",

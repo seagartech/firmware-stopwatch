@@ -696,10 +696,28 @@ def in_step_area(src, chain_line, pos):
 _NOT_CALL = {"if", "while", "for", "switch", "sizeof", "return", "defined"}
 
 
+_QUERY = re.compile(r"(?i:is|has|get|can|should|check|contains|exists|find|count|size|length|empty|valid)(?:[A-Z0-9]|$)")
+_QUERY_NAMES = {"strcmp", "strncmp", "strcasecmp", "memcmp", "strlen", "strstr", "empty", "size", "length", "find", "count"}
+
+
+def _is_query(name):
+    """名字像只查状态、不往外发数据的调用：IsXxx、HasXxx、GetXxx、is_xxx、xxx_IsXxx、strcmp 这一类。"""
+    if name.lower() in _QUERY_NAMES:
+        return True
+    return any(_QUERY.match(part) for part in re.split(r"_+|::", name) if part)
+
+
 def call_in_if(code):
-    """这一行是不是 if，且条件里就有一次调用（比如 if (!send(x))）：动作本身写在条件里，点只能放在这一行前面。"""
+    """这一行是不是 if，且条件里就有一次真正的动作调用（比如 if (!send(x))）：动作本身写在条件里，点只能放在这一行前面。
+    只算带参数、名字不像只查状态的调用（发送、写出数据这类）；IsXxx()、HasXxx()、strcmp(...) 这种只查状态的不算。"""
     m = re.match(r"if\s*\((.*)", code.strip())
-    return bool(m) and any(n not in _NOT_CALL for n in re.findall(r"([A-Za-z_]\w*)\s*\(", m.group(1)))
+    if not m:
+        return False
+    for call in re.finditer(r"([A-Za-z_]\w*)\s*\(\s*([^)\s])?", m.group(1)):
+        name, arg = call.group(1), call.group(2)
+        if name not in _NOT_CALL and arg and not _is_query(name):
+            return True
+    return False
 
 
 def _check_one(proj, s, branch="", strict=False, chain_line=None):

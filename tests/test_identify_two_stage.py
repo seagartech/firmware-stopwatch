@@ -387,7 +387,7 @@ def test_one_send_step_can_be_both_first_and_last_upload(door):
 
 def test_prompts_explain_first_and_last_on_one_send_statement():
     c = idf.build_chain_prompt("全程")
-    assert "逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；外层一句和它调用的那一句是同一次发送的，首包、末包只标在其中一处。" in c
+    assert "逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。" in c
     assert "不要把两步都标成末包" not in idf.build_chain_prompt("全程", "", "语音对话")
     p = idf.build_prompt("全程", "", flow={"chain": []})
     assert "同一步同时标了上传首包和上传末包的，在这一步放两个点：一个 once 写 first，一个写 last；" in p
@@ -401,10 +401,14 @@ def test_two_points_first_and_last_on_one_repeated_step_pass_the_check(voice):
 
 
 # ---------- 发送或调用本身写在 if 条件里：只能放在这一行前面，不算硬失败（只限流程里这一步就是这一行） ----------
-def test_call_inside_if_condition_on_the_chain_line_is_allowed(voice):
+def test_call_inside_if_condition_on_the_chain_line_is_allowed(tmp_path):
     from fsw import structure
+    voice = tmp_path
+    (voice / "main").mkdir()
+    (voice / "main/chat.cc").write_text("void Send(Packet p) {\n    log(1);\n    // 发出去\n    if (!protocol_->SendAudio(p)) {\n        return;\n    }\n}\n"
+                                        + "\n" * 10 + "void Other() {\n    done();\n}\n", encoding="utf-8")
     line4 = open(voice / "main/chat.cc", encoding="utf-8").read().splitlines()[3].strip()
-    assert structure.call_in_if(line4), line4  # if (!protocol_->OpenAudioChannel()) {
+    assert structure.call_in_if(line4), line4  # if (!protocol_->SendAudio(p)) {
     chain = [{"n": 1, "file": "main/chat.cc", "line": 4}, {"n": 2, "file": "main/chat.cc", "line": 18}]
     pt = lambda n: [{"id": "P1", "chain_step": n, "file": "main/chat.cc", "line": 4, "where": "before", "once": "once",
                      "line_of": "main", "loc_ok": True}]
@@ -415,7 +419,10 @@ def test_call_inside_if_condition_on_the_chain_line_is_allowed(voice):
     structure.check(voice, s, chain=chain, strict=True)
     assert "fail" in [c["level"] for c in s[0]["chk"] if c["kind"] in ("anchor", "chain")]
     for code, want in [("if (ready && cb_) {", False), ("} else if (strcmp(a, b) == 0) {", False),
-                       ("while (auto p = pop()) {", False), ("if (!send(x)) {", True), ("if (sizeof(x) > 2) {", False)]:
+                       ("while (auto p = pop()) {", False), ("if (!send(x)) {", True), ("if (sizeof(x) > 2) {", False),
+                       ("if (!IsPlaybackDrainedLocked() || drained_) {", False), ("if (!ch->Open()) {", False),
+                       ("if (cJSON_IsString(item)) {", False), ("if (is_ready(dev)) {", False), ("if (GetState(dev) == 2) {", False),
+                       ("if (uart_write_bytes(port, buf, n) < 0) {", True), ("if (xQueueSend(q, &m, 0) != pdTRUE) {", True)]:
         assert structure.call_in_if(code) is want, code
 
 
@@ -505,14 +512,15 @@ def test_card_category_does_not_require_done_step(door):
 
 def test_prompts_for_one_send_one_mark_and_done_step():
     c = idf.build_chain_prompt("全程")
-    assert "外层一句和它调用的那一句是同一次发送的，首包、末包只标在其中一处。" in c
-    assert ("代码里有输出或播放队列放空、动作完成这类\"全部放完\"信号的，单独列一步，写判断出放完的那一支里的语句，role 标全部放完；"
+    assert "首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。" in c
+    assert ("代码里有输出或播放队列放空、动作完成这类\"全部放完\"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口），role 标全部放完；"
             "最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明\"没有全部放完的信号\"和找过哪里。") in c
     assert "播放全部放完（播放队列放空的那一支）" in idf.VOICE_HINT
     assert "门锁动作或提示音有\"真正做完\"信号的（比如动作到位、提示音放完），这一步标全部放完。" in idf.CARD_HINT
     p = idf.build_prompt("全程", "", flow={"chain": []})
     assert "链里标了上传首包、上传末包、首个结果、最后结果、全部放完的步骤都要有点" in p
-    assert "外层一句和它调用的那一句是同一次发送的，只在一处放 first、last。" in p
+    assert "上传首包、末包只放在标了它们的那一步。" in p
+    assert "全部放完的点放在判断出放完的那一支里，不放在检查状态的入口。" in p
 
 
 # ---------- mode 分两样写：模式那一行、协议或通道那一行（或在 doubts 里说明） ----------
@@ -583,3 +591,59 @@ def test_prompts_for_uncertain_order_output_and_two_mode_lines():
     p = idf.build_prompt("全程", "", flow={"chain": []})
     assert "链里先后写着\"不确定\"的、两步都标了最后结果的，不要串成前后相连的段：各自从前面同一个点量起，写进 doubts。" in p
     assert "标了输出的那一步也放 first、last 两个点。" in p
+
+
+# ---------- 只查状态的调用写在 if 条件里不算动作；首包末包只标一步；抄错原文追问一次 ----------
+def test_query_call_in_if_is_still_a_hard_failure(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.cc").write_text("void Loop() {\n    lock();\n    if (!IsDrained() || notified_) {\n        return;\n    }\n    notify();\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.cc", "line": 3}]
+    s = [{"id": "P1", "chain_step": 1, "file": "main/a.cc", "line": 3, "where": "before", "once": "once", "line_of": "main", "loc_ok": True}]
+    structure.check(tmp_path, s, chain=chain, strict=True)
+    assert "fail" in [c["level"] for c in s[0]["chk"] if c["kind"] in ("anchor", "chain")]
+
+
+def test_upload_roles_on_two_steps_fail_the_mid_check(voice):
+    flow = voice_flow()
+    flow["upload"] = "发音频包"
+    flow["chain"][1]["role"] = "上传首包"
+    flow["chain"][2]["role"] = "上传末包"
+    fixes = []
+    got, bad = idf.check_chain(voice, flow, "", fixes)
+    assert any("只能标在一步上" in b for b in bad), bad
+    assert any("只留一步" in f["text"] for f in fixes)
+
+
+def _mistyped():
+    d = copy.deepcopy(DOOR_RESULT)
+    code = d["chain"][1]["code"]
+    d["chain"][1]["code"] = code[:-2] + "x" + code[-1:]
+    return d
+
+
+def test_code_mismatch_gets_one_follow_up_with_the_real_line(door):
+    d = _mistyped()
+    m = FakeLLM(js(d), followups=[DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"], r.get("message")
+    assert [(x["stage"], x.get("kind"), x["ok"]) for x in r["followups"]] == [("理清流程", "fix", True)]
+    assert r["calls"] == 2 and len(m.asked) == 1
+    c = DOOR_RESULT["chain"][1]
+    real = (door / c["file"]).read_text(encoding="utf-8").splitlines()[c["line"] - 1].strip()
+    assert real in m.asked[0] and d["chain"][1]["code"] in m.asked[0] and "不要再读源码" in m.asked[0]
+
+
+def test_code_mismatch_follow_up_only_once_then_stop(door):
+    m = FakeLLM(js(_mistyped()), followups=[js(_mistyped()), DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert not r["ok"] and r["kind"] == "bad_chain" and len(m.asked) == 1 and r["calls"] == 1
+    assert [(x.get("kind"), x["ok"]) for x in r["followups"]] == [("fix", False)]
+
+
+def test_other_problems_mean_no_code_fix_follow_up(door):
+    d = _mistyped()
+    d["chain"][2].pop("func", None)
+    m = FakeLLM(js(d), followups=[DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert not r["ok"] and r["kind"] == "bad_chain" and not m.asked and not r["followups"]
