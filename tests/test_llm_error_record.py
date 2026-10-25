@@ -1,5 +1,5 @@
 """调用大模型出错时留下原始报错：异常类型和原话、HTTP 状态码、第几次请求、哪一步、用时；页面提示照旧好懂；不留密钥。
-全部用假的网络（替换 urlopen），不联网、不花钱。"""
+全部用假的网络（替换发请求的 _open，或连本机的假服务器），不联网、不花钱。"""
 
 import io
 import json
@@ -51,7 +51,7 @@ def fake_net(monkeypatch, fail_at, error=None, fail_read=None):
                 raise error
             return Resp(None, fail_read=fail_read)
         return Resp(tool_reply())
-    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: urlopen(req, timeout))
     monkeypatch.setattr(llms.time, "sleep", lambda s: None)
     return sent
 
@@ -139,7 +139,7 @@ def flaky_net(monkeypatch, errors):
         if e is not None:
             raise e
         return Resp({"choices": [{"message": {"role": "assistant", "content": "好了"}}]})
-    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: urlopen(req, timeout))
     monkeypatch.setattr(llms.time, "sleep", lambda s: sent.append(("sleep", s)))
     return sent
 
@@ -216,7 +216,7 @@ def test_successful_retries_are_kept_in_the_result(monkeypatch, tmp_path):
         if e is not None:
             raise e
         return Resp({"choices": [{"message": {"role": "assistant", "content": next(replies)}}]})
-    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: urlopen(req, timeout))
     monkeypatch.setattr(llms.time, "sleep", lambda s: None)
     r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门")
     assert r["ok"] and [(x["stage"], x["request_no"], x["retry"]) for x in r["retries"]] == [("理清流程", 1, 1), ("选计时点", 1, 1)]
@@ -272,7 +272,7 @@ def test_deepseek_followup_continues_the_same_conversation_without_tools(monkeyp
     def urlopen(req, timeout=None):
         bodies.append(json.loads(req.data))
         return Resp(next(replies))
-    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: urlopen(req, timeout))
     m = DeepSeek(KEY)
     assert m.investigate("读一读", tmp_path) == "坏的"
     assert m.followup("只按格式重新输出") == "好的"
@@ -288,7 +288,7 @@ def test_deepseek_request_timeout_is_180s_and_read_timeout_is_clear(monkeypatch,
     def urlopen(req, timeout=None):
         seen.append(timeout)
         return Resp(None, fail_read=TimeoutError("The read operation timed out"))
-    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: urlopen(req, timeout))
     m = DeepSeek(KEY)
     with pytest.raises(LLMError) as got:
         m.investigate("读一读", tmp_path)

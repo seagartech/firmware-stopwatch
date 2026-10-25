@@ -55,13 +55,80 @@ RETRY_STATUS = {429, 502, 503}  # 服务器说忙、网关临时出错：可以�
 MAX_RETRIES = 2  # 每次请求最多重发 2 次
 
 
+CONNECT_TIMEOUT = 30  # 连接、TLS 握手（含经过代理建隧道）的上限：正常 1-2 秒就好，卡住的早点放弃、重发
+
+
+class ConnectTimeout(TimeoutError):
+    """连接、TLS 握手阶段超时：请求还没发出去，重发不会重复计费。"""
+
+
+def _phase_connection(base):
+    class Conn(base):
+        """连接和握手用较短的上限，连上后改回读回答的上限；连接阶段超时换成 ConnectTimeout，好和"等回答超时"分开。"""
+        def __init__(self, *a, connect_timeout=None, **kw):
+            super().__init__(*a, **kw)
+            self.connect_timeout = connect_timeout
+
+        def connect(self):
+            read_timeout = self.timeout
+            if self.connect_timeout and (read_timeout is None or not isinstance(read_timeout, (int, float))
+                                         or self.connect_timeout < read_timeout):
+                self.timeout = self.connect_timeout
+            try:
+                super().connect()
+            except TimeoutError as e:  # 建连接、代理隧道、TLS 握手时超时（socket.timeout 也是它）
+                raise ConnectTimeout(f"{e}（连接阶段，上限 {self.timeout} 秒）") from e
+            finally:
+                self.timeout = read_timeout
+            if self.sock is not None and isinstance(read_timeout, (int, float)):
+                self.sock.settimeout(read_timeout)
+    Conn.__name__ = base.__name__
+    return Conn
+
+
+_HTTPSConn, _HTTPConn = _phase_connection(http.client.HTTPSConnection), _phase_connection(http.client.HTTPConnection)
+
+
+class _PhaseHTTPS(urllib.request.HTTPSHandler):
+    def __init__(self, connect_timeout):
+        super().__init__()
+        self.ct = connect_timeout
+
+    def https_open(self, req):
+        return self.do_open(_HTTPSConn, req, context=self._context, connect_timeout=self.ct)
+
+
+class _PhaseHTTP(urllib.request.HTTPHandler):
+    def __init__(self, connect_timeout):
+        super().__init__()
+        self.ct = connect_timeout
+
+    def http_open(self, req):
+        return self.do_open(_HTTPConn, req, connect_timeout=self.ct)
+
+
+_openers = {}
+
+
+def _open(req, timeout, connect_timeout=None):
+    """发请求：和 urllib.request.urlopen 一样（照样走系统代理），只是连接、握手阶段单独用 connect_timeout。"""
+    if not connect_timeout:
+        return urllib.request.urlopen(req, timeout=timeout)
+    if connect_timeout not in _openers:
+        _openers[connect_timeout] = urllib.request.build_opener(_PhaseHTTPS(connect_timeout), _PhaseHTTP(connect_timeout))
+    return _openers[connect_timeout].open(req, timeout=timeout)
+
+
 def retryable(e):
     """发请求阶段出的、可以放心重发的错（对方还没开始回答，重发不会多算钱）：
     连接被重置或中断、TLS 中途断开、代理断开、查不到域名，以及 HTTP 429/502/503。
-    超时不重发：urllib 分不清是连不上还是连上后在等回答（后者重发会重复计费）；证书不对也不重发（重发也一样）。"""
+    超时：只有确定是连接、TLS 握手阶段的（ConnectTimeout，请求还没发出去）才重发；分不清阶段的一律按等回答超时，不重发
+    （连上后在等回答时重发会重复计费）。证书不对也不重发（重发也一样）。"""
     if isinstance(e, urllib.error.HTTPError):
         return e.code in RETRY_STATUS
     r = e.reason if isinstance(e, urllib.error.URLError) else e
+    if isinstance(r, ConnectTimeout):
+        return True
     if isinstance(r, (TimeoutError, ssl.SSLCertVerificationError)):
         return False
     if isinstance(r, (ConnectionError, ssl.SSLError, socket.gaierror)):
@@ -93,6 +160,7 @@ class LLM:
             "bad_key": f"密钥不对：{self.name}不认这个密钥。看看有没有复制完整、前后有没有多空格，或者去{self.site}重新建一个。",
             "no_balance": f"密钥是对的，但账户余额不够了：去{self.site}充值后再试。",
             "offline": f"连不上{self.name}的服务器：看看电脑有没有联网，或者是不是要开代理。",
+            "connect_timeout": f"连接{self.name}的服务器超时（连接、握手阶段卡住，请求还没发出去）：看看网络和代理稳不稳，再点重试。",
             "busy": f"{self.name}那边现在太忙，过一会儿再试。",
             "refused": f"{self.name}拒绝回答这次请求。",
             "not_installed": "这台电脑上没找到 Claude Code。装好并登录后再选这一项，或者改用填密钥的方式。",
@@ -277,8 +345,11 @@ class DeepSeek(LLM):
 
     # 单次请求的上限：以前的复测里一次请求一般 2-4 秒，最长的（写最终结果那次）约 34 秒；
     # 180 秒给长回答留了 5 倍余量，卡住的请求也不会白等 10 分钟。
-    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=180, retry_wait=(1, 2)):
+    # 连接、握手另有 30 秒上限（CONNECT_TIMEOUT）：正常 1-2 秒，卡住的早点放弃并重发，不白等 180 秒。
+    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=180, retry_wait=(1, 2),
+                 connect_timeout=CONNECT_TIMEOUT):
         self.key, self.model, self.base_url, self.timeout = key, model, base_url.rstrip("/"), timeout
+        self.connect_timeout = connect_timeout
         self.request_timeout = timeout
         self.retry_wait = retry_wait  # 第 1、2 次重发前各等几秒
         self.retry_log = []  # 这次调用里重发过的请求：[{request_no, retry, why, wait}]，成功的也记，看得出网络稳不稳
@@ -291,7 +362,7 @@ class DeepSeek(LLM):
             req = urllib.request.Request(self.base_url + "/chat/completions", data=data,
                                          headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"})
             try:
-                return urllib.request.urlopen(req, timeout=self.timeout)
+                return _open(req, self.timeout, self.connect_timeout)
             except (urllib.error.URLError, OSError) as e:
                 if attempt < MAX_RETRIES and retryable(e):
                     wait = self.retry_wait[min(attempt, len(self.retry_wait) - 1)]
@@ -319,7 +390,11 @@ class DeepSeek(LLM):
             err.info["status"] = e.code
             return err
         except (urllib.error.URLError, OSError) as e:
-            if isinstance(getattr(e, "reason", e), TimeoutError):  # 连上了但等不到回复：不是没联网
+            r = getattr(e, "reason", e)
+            if isinstance(r, ConnectTimeout):  # 连接、握手阶段超时：说"连接超时"，不说等回答
+                return LLMError("offline", self._say("connect_timeout"), f"连接超时：{type(r.__cause__ or r).__name__}: {r}",
+                                timeout_phase="connect")
+            if isinstance(getattr(e, "reason", e), TimeoutError):  # 连上了但等不到回复（或分不清阶段）：按等回答超时说
                 return self._read_error(getattr(e, "reason", e))
             return LLMError("offline", self._say("offline"), _why(e))
 

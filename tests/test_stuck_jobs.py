@@ -52,7 +52,7 @@ class Resp:
     (http.client.IncompleteRead(b"{", 100), "dropped"),
 ])
 def test_deepseek_investigate_read_errors_become_llm_errors(monkeypatch, tmp_path, exc, kind):
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: Resp(exc))
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: (lambda req, timeout=None: Resp(exc))(req, timeout))
     with pytest.raises(LLMError) as e:
         DeepSeek(FAKE_KEY).investigate("x", tmp_path)
     assert e.value.kind == kind and "DeepSeek" in e.value.message and e.value.detail
@@ -60,7 +60,7 @@ def test_deepseek_investigate_read_errors_become_llm_errors(monkeypatch, tmp_pat
 
 
 def test_deepseek_insert_read_timeout_is_a_plain_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: Resp(TimeoutError("timed out")))
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: (lambda req, timeout=None: Resp(TimeoutError("timed out")))(req, timeout))
     r = ins.insert(DeepSeek(FAKE_KEY), tmp_path, [{"p": "P1", "n": "x", "path": "a.c", "l": 1}], tmp_path / "bk")
     assert not r["ok"] and r["kind"] == "slow" and "重新插入" in r["message"]
 
@@ -71,7 +71,7 @@ def test_deepseek_insert_read_timeout_is_a_plain_failure(monkeypatch, tmp_path):
     ([b'data: {"choices":[{"delta":{"content":"a"}}]}\n'], ConnectionResetError(104, "reset")),
 ])
 def test_deepseek_stream_bad_line_or_drop_becomes_llm_error(monkeypatch, lines, exc):
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: Resp(exc, lines))
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: (lambda req, timeout=None: Resp(exc, lines))(req, timeout))
     with pytest.raises(LLMError):
         list(DeepSeek(FAKE_KEY).stream("x"))
     assert idf.suggest(DeepSeek(FAKE_KEY), "/nonexistent", {}) == []  # 推荐常用语照样不报错
@@ -80,7 +80,7 @@ def test_deepseek_stream_bad_line_or_drop_becomes_llm_error(monkeypatch, lines, 
 def test_deepseek_connect_timeout_is_not_called_offline(monkeypatch):
     def slow(req, timeout=None):
         raise urllib.error.URLError(TimeoutError("timed out"))
-    monkeypatch.setattr(urllib.request, "urlopen", slow)
+    monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: (slow)(req, timeout))
     r = DeepSeek(FAKE_KEY).test()
     assert r["kind"] == "slow" and "连不上" not in r["message"]
 
