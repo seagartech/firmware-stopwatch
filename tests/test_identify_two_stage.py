@@ -397,3 +397,32 @@ def test_two_points_first_and_last_on_one_repeated_step_pass_the_check(voice):
     pts = [{"id": "P1", "chain_step": 1, "file": "main/chat.cc", "line": 18, "where": "before", "once": "first", "line_of": "main"},
            {"id": "P2", "chain_step": 1, "file": "main/chat.cc", "line": 18, "where": "before", "once": "last", "line_of": "main"}]
     assert _pick(voice, pts) == [[], []]
+
+
+# ---------- 发送或调用本身写在 if 条件里：只能放在这一行前面，不算硬失败（只限流程里这一步就是这一行） ----------
+def test_call_inside_if_condition_on_the_chain_line_is_allowed(voice):
+    from fsw import structure
+    line4 = open(voice / "main/chat.cc", encoding="utf-8").read().splitlines()[3].strip()
+    assert structure.call_in_if(line4), line4  # if (!protocol_->OpenAudioChannel()) {
+    chain = [{"n": 1, "file": "main/chat.cc", "line": 4}, {"n": 2, "file": "main/chat.cc", "line": 18}]
+    pt = lambda n: [{"id": "P1", "chain_step": n, "file": "main/chat.cc", "line": 4, "where": "before", "once": "once",
+                     "line_of": "main", "loc_ok": True}]
+    s = pt(1)
+    structure.check(voice, s, chain=chain, strict=True)
+    assert [c["level"] for c in s[0]["chk"] if c["kind"] == "anchor"] == ["tip"] and "动作写在 if 条件里" in s[0]["chk"][0]["text"]
+    s = pt(2)  # 流程里那一步不是这一行：照旧算失败
+    structure.check(voice, s, chain=chain, strict=True)
+    assert "fail" in [c["level"] for c in s[0]["chk"] if c["kind"] in ("anchor", "chain")]
+    for code, want in [("if (ready && cb_) {", False), ("} else if (strcmp(a, b) == 0) {", False),
+                       ("while (auto p = pop()) {", False), ("if (!send(x)) {", True), ("if (sizeof(x) > 2) {", False)]:
+        assert structure.call_in_if(code) is want, code
+
+
+def test_prompts_say_results_go_inside_the_branch_not_the_dispatch_entry():
+    c = idf.build_chain_prompt("全程")
+    assert "首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。" in c
+    assert "\"最后\"一类优先用整段真正结束的那一句（比如结束消息、输出或播放队列放空），不用逐包、逐帧执行的那一行。" in c
+    p = idf.build_prompt("全程", "", flow={"chain": []})
+    assert "首个结果、最后结果这类点也放在认出是这种消息之后那一支里，不放在消息分发入口。发送或调用本身写在 if 条件里的（比如 if (!send(x))），只能写 if 这一行、where 写 before。" in p
+    for bad in ["小智", "xiaozhi", "Application", "afe", "OnIncoming", "websocket", "mqtt", "SendAudio", "stt"]:  # 没有固件、文件、函数名
+        assert bad not in idf.CHAIN_PROMPT + idf.PICK_PROMPT + idf.VOICE_HINT, bad

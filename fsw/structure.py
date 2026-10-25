@@ -623,7 +623,16 @@ def in_step_area(src, chain_line, pos):
     return any(src.blocks[i]["open"] < pos <= src.blocks[i]["close"] for i in areas)
 
 
-def _check_one(proj, s, branch="", strict=False):
+_NOT_CALL = {"if", "while", "for", "switch", "sizeof", "return", "defined"}
+
+
+def call_in_if(code):
+    """这一行是不是 if，且条件里就有一次调用（比如 if (!send(x))）：动作本身写在条件里，点只能放在这一行前面。"""
+    m = re.match(r"if\s*\((.*)", code.strip())
+    return bool(m) and any(n not in _NOT_CALL for n in re.findall(r"([A-Za-z_]\w*)\s*\(", m.group(1)))
+
+
+def _check_one(proj, s, branch="", strict=False, chain_line=None):
     if not s.get("loc_ok", True) or not s.get("file") or not s.get("line"):
         return
     src = proj.file(s["file"])
@@ -635,6 +644,10 @@ def _check_one(proj, s, branch="", strict=False):
     t = check_anchor(src, line, where)
     if t:
         s["chk"].append({"level": "fail", "kind": "anchor", "text": t})
+    elif where == "before" and line == chain_line and call_in_if(src.clines[line - 1]):
+        # 流程里这一步就是这一行，而且动作（发送、调用）本身写在 if 条件里：只能放在这一行前面，不算错
+        s["chk"].append({"level": "tip", "kind": "anchor",
+                         "text": f"第 {line} 行「{_cond_text(src.lines[line - 1].strip())}」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"})
     elif where == "before" and re.match(r"(?:if|while|for|switch|do)\b", src.clines[line - 1].strip()):
         # 旧写法：插在判断或循环开头之前。旧结果、演示数据只提醒；两步识别的新结果算失败（多半是想放进这一支、这个循环里）
         s["chk"].append({"level": "fail" if strict else "tip", "kind": "anchor",
@@ -700,6 +713,13 @@ def _check_chain_step(proj, s, steps_by_n):
     return None
 
 
+def chain_no_line(c):
+    try:
+        return int(c.get("line")) if isinstance(c, dict) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def check(root, steps, segments=None, side_segments=None, chain=None, strict=False):
     """逐个计时点做结构检查，结果写进 step["chk"]（[{level: fail/tip, kind, text}]）和 step["struct_ok"]。
     有硬失败的点可信度降成"低"。可以重复调用（缓存、沿用的结果也再查一遍），每次重新算，不会叠加。
@@ -720,7 +740,9 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
                 t = _check_chain_step(proj, s, by_n)
                 if t:
                     s["chk"].append({"level": "fail", "kind": "chain", "text": t})
-            _check_one(proj, s, branches.get(s.get("chain_step"), ""), strict)
+            c = by_n.get(s.get("chain_step")) if strict else None
+            cl = chain_no_line(c)
+            _check_one(proj, s, branches.get(s.get("chain_step"), ""), strict, cl if c and c.get("file") == s.get("file") else None)
         except Exception as e:  # 检查自己出错不能挡住识别：说清楚这一步没查完
             s["chk"].append({"level": "tip", "kind": "error", "text": f"码表结构检查这一步没做完（{type(e).__name__}），请自己核对"})
     by = {s.get("id"): s for s in steps}
