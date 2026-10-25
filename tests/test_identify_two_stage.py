@@ -723,10 +723,10 @@ def test_if_head_anchor_gives_a_follow_up_with_the_branch_body(tmp_path):
     structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
     items = structure.pick_fixes(tmp_path, pts, chain)
     assert len(items) == 1 and "第 4 行「finish();」" in items[0] and "4:         finish();" in items[0]
-    pts.append({**pts[0], "id": "P9", "file": "main/zz.c"})  # 再加一个别的硬失败（文件不对）：照样追问能改的那个，别的不在追问里
+    pts.append({**pts[0], "id": "P9", "file": "main/zz.c"})  # 再加一个别的硬失败（文件不对）：两个一起追问
     structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
     items = structure.pick_fixes(tmp_path, pts, chain)
-    assert len(items) == 1 and items[0].startswith("P2")
+    assert len(items) == 2 and items[0].startswith("P2") and items[1].startswith("P9") and "file 改成" in items[1]
 
 
 @pytest.mark.parametrize("strict,level", [(True, "fail"), (False, "tip")])
@@ -772,13 +772,14 @@ def test_pick_follow_up_that_makes_it_worse_keeps_the_first_answer(door):
     assert r["steps"][0]["file"] == "main/rfid_task.c"
 
 
-def test_no_pick_follow_up_for_wrong_file(door):
+def test_wrong_file_gets_a_put_back_follow_up_used_only_if_better(door):
     d = _door_output(False)
     d["steps"][1]["file"] = "main/net_auth.c"
     d["steps"][1]["line"] = 180
-    m = FakeLLM(js(d), followups=[DOOR_REPLY])
+    m = FakeLLM(js(d), followups=[js(d)])  # 追问后原样不改：不用追问的结果，原来的照旧算数
     r = idf.identify(m, door, "从刷卡到开门")
-    assert r["ok"] and not m.asked and not r["followups"]
+    assert r["ok"] and len(m.asked) == 1 and "line 改成 131、file 改成 main/rfid_task.c" in m.asked[0]
+    assert r["followups"][0]["fails_after"] == r["followups"][0]["fails_before"] == 1 and r["steps"][1]["file"] == "main/net_auth.c"
 
 
 # ---------- 段由码表理顺；输出同一行拆成几步算一步；语音类要有收到识别文字那一步 ----------
@@ -1021,3 +1022,57 @@ def test_round1_prompt_sentences():
     c = idf.build_chain_prompt("全程")
     assert "写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。" in c
     assert "写判断出放完的那一支里的语句（不写检查是否放完的入口，也不写之后转发、处理这个通知的地方），role 标全部放完；" in c
+
+
+# ---------- 第 2 轮：隔一层的调用也算同一件事；点不在那一步那一行时追问放回去 ----------
+def _two_level(tmp_path):
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/out.c").write_text("void Out(int b) {\n    BoardWrite(b);\n}\n", encoding="utf-8")
+    (tmp_path / "main/board.c").write_text("int BoardWrite(int b) {\n    hw(b);\n    return 0;\n}\n", encoding="utf-8")
+    (tmp_path / "main/a.c").write_text("void Run(void) {\n    heard();\n    while (more()) {\n        Out(next());\n    }\n    done();\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 2}, {"n": 2, "file": "main/a.c", "line": 4, "role": "输出", "repeat": "repeat"},
+             {"n": 3, "file": "main/board.c", "line": 2, "repeat": "repeat"}, {"n": 4, "file": "main/a.c", "line": 6}]
+    spec = [("P1", 1, "main/a.c", 2, "once", "start"), ("P2", 2, "main/a.c", 4, "first", "main"), ("P3", 2, "main/a.c", 4, "last", "main"),
+            ("P4", 3, "main/board.c", 2, "first", "main"), ("P5", 4, "main/a.c", 6, "once", "main")]
+    pts = [{"id": i, "chain_step": n, "name": i, "file": f, "line": l, "where": "before", "once": o, "line_of": lo, "loc_ok": True}
+           for i, n, f, l, o, lo in spec]
+    return chain, pts
+
+
+def test_last_to_first_through_a_two_level_call_is_negative_and_repaired(tmp_path):
+    from fsw import structure
+    chain, pts = _two_level(tmp_path)
+    proj = structure.Project(tmp_path)
+    assert structure._same_thing(proj, pts[2], pts[3]) and not structure._same_thing(proj, pts[0], pts[3])
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P3", "to": "P4"}, {"from": "P3", "to": "P5"}]
+    fixed, notes = structure.repair_segments(tmp_path, pts, segs, chain)
+    assert ("P2", "P4") in [(g["from"], g["to"]) for g in fixed] and ("P3", "P4") not in [(g["from"], g["to"]) for g in fixed]
+
+
+def test_point_off_its_step_gets_a_put_back_follow_up(tmp_path):
+    from fsw import structure
+    chain, pts = _two_level(tmp_path)
+    pts[1]["file"], pts[1]["line"] = "main/board.c", 2  # 输出首段挪进了被调用的函数里
+    pts[4]["line"] = 1  # 结束点跑到别的地方
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P3", "to": "P5"}], chain=chain, strict=True)
+    items = structure.pick_fixes(tmp_path, pts, chain)
+    p2 = next(t for t in items if t.startswith("P2"))
+    assert "流程第 2 步在 main/a.c 第 4 行「Out(next());」" in p2 and "line 改成 4、file 改成 main/a.c" in p2
+    assert any(t.startswith("P5") and "line 改成 6" in t for t in items)
+
+
+def test_point_off_an_if_step_gets_the_branch_hint(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.c").write_text("void Run(int t) {\n    heard();\n    if (t == 2) {\n        show();\n    }\n    other();\n}\nvoid Later(void) {\n    more();\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 2}, {"n": 2, "file": "main/a.c", "line": 3}]
+    pts = [{"id": "P1", "chain_step": 1, "name": "a", "file": "main/a.c", "line": 2, "where": "before", "once": "once", "line_of": "start", "loc_ok": True},
+           {"id": "P2", "chain_step": 2, "name": "b", "file": "main/a.c", "line": 9, "where": "before", "once": "once", "line_of": "main", "loc_ok": True}]
+    structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
+    items = structure.pick_fixes(tmp_path, pts, chain)
+    assert items and "判断或循环的开头" in items[0] and "第 4 行「show();」" in items[0]
+
+
+def test_round2_pick_prompt_sentence():
+    p = idf.build_pick_prompt({"chain": []}) if hasattr(idf, "build_pick_prompt") else idf.PICK_PROMPT
+    assert "（不挪进那一句调用的函数里，也不挪到它引起、在别处执行的代码里）" in p

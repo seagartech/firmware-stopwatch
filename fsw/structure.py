@@ -572,7 +572,7 @@ def _calls(src, line, name):
 
 
 def _same_thing(proj, a, b):
-    """两点是不是同一件事的两处：同一步、同一行，或一处那一行直接调用另一处所在的函数（调用和被调用）。"""
+    """两点是不是同一件事的两处：同一步、同一行，或一处那一行调用另一处所在的函数（调用和被调用，直接或隔一层）。"""
     if a.get("chain_step") is not None and a.get("chain_step") == b.get("chain_step"):
         return True
     if a.get("file") == b.get("file") and str(a.get("line")) == str(b.get("line")):
@@ -582,7 +582,49 @@ def _same_thing(proj, a, b):
         return False
     la, lb = int(a["line"]), int(b["line"])
     fa, fb = func_at(sa, la)[0], func_at(sb, lb)[0]
-    return bool((fb and _calls(sa, la, fb)) or (fa and _calls(sb, lb, fa)))
+    if (fb and _calls(sa, la, fb)) or (fa and _calls(sb, lb, fa)):
+        return True
+    return bool((fb and _calls_via(proj, sa, la, fb)) or (fa and _calls_via(proj, sb, lb, fa)))
+
+
+_NOT_CALLS = {"if", "while", "for", "switch", "return", "sizeof", "catch", "defined"}
+
+
+def _short(name):
+    return re.split(r"::|\.", str(name or ""))[-1].strip()
+
+
+def _calls_via(proj, src, line, name):
+    """第 line 行调用的某个函数，它的函数体里又直接调用了 name（隔一层的调用和被调用，比如通用输出函数里再调具体板子的写函数）。"""
+    target = _short(name)
+    called = [n for n in re.findall(r"(?<![\w])([A-Za-z_]\w*)\s*\(", src.clines[line - 1]) if n not in _NOT_CALLS and n != target]
+    if not target or not called:
+        return False
+    cache = proj.__dict__.setdefault("_via", {})
+    for mid in dict.fromkeys(called):
+        key = (mid, target)
+        if key not in cache:
+            cache[key] = False
+            pat_mid, pat_t = re.compile(rf"(?<![\w]){re.escape(mid)}\s*\("), re.compile(rf"(?<![\w]){re.escape(target)}\s*\(")
+            for rel in proj.sources():
+                try:
+                    raw = (proj.root / rel).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if not (pat_mid.search(raw) and pat_t.search(raw)):
+                    continue
+                f = proj.file(rel)
+                if f is None:
+                    continue
+                for bl in f.blocks:
+                    if bl["kind"] == "function" and _short(bl["name"]) == mid and pat_t.search(f.code[bl["open"]:bl["close"]]):
+                        cache[key] = True
+                        break
+                if cache[key]:
+                    break
+        if cache[key]:
+            return True
+    return False
 
 
 def check_order(proj, steps, segments):
@@ -933,9 +975,16 @@ def anchor_fix_text(src, s):
 
 
 def pick_fixes(root, steps, chain):
-    """选点结果里能指出改法的硬失败（插在判断或循环开头那一行、标了输出的那一步缺 first 或 last），返回追问时要说的话；
-    别的硬失败（文件不对、不在那一步、段是负的……）不在追问里，原样留着、照旧算数。没有能追问的就返回 None。"""
+    """选点结果里能指出改法的硬失败（插在判断或循环开头那一行、只有分号的那一行、标了输出的那一步缺 first 或 last、
+    点不在它对应的那一步那一行或那一支里），返回追问时要说的话；别的硬失败（段是负的……）不在追问里，原样留着、照旧算数。没有能追问的就返回 None。"""
     proj = Project(root)
+    by_n = {}
+    for i, c in enumerate(chain if isinstance(chain, list) else []):
+        if isinstance(c, dict):
+            try:
+                by_n[int(str(c.get("n", i + 1)).strip())] = c
+            except (TypeError, ValueError):
+                pass
     items = []
     for s in steps:
         for c in s.get("chk") or []:
@@ -953,7 +1002,29 @@ def pick_fixes(root, steps, chain):
                              "去掉这个点，或者放回流程里那一步那一行")
             elif c["kind"] == "output":
                 items.append(f"{s['id']}：{c['text']}")
+            elif c["kind"] == "chain" and ("不是那一步的位置" in c["text"] or "不在那一行所在的那一支里" in c["text"]):
+                t = _step_fix_text(proj, s, by_n.get(s.get("chain_step")) or {})
+                if t:
+                    items.append(t)
     return items or None
+
+
+def _step_fix_text(proj, s, c):
+    """点不在它对应的那一步那一行（文件不对，或跑到了别的函数、别的一支）：追问时告诉它那一步在哪，放回去或去掉。"""
+    src = proj.file(c.get("file") or "")
+    try:
+        cl = int(c.get("line") or 0)
+    except (TypeError, ValueError):
+        return None
+    if src is None or not 1 <= cl <= len(src.lines):
+        return None
+    code = src.lines[cl - 1].strip()
+    head = (f"{s['id']}「{s.get('name')}」放在 {s.get('file')} 第 {s.get('line')} 行，可它对应的流程第 {s.get('chain_step')} 步在 "
+            f"{c.get('file')} 第 {cl} 行「{code}」，点不在那一步那一行，也不在那一行所在的那一支里。")
+    hl = src.clines[cl - 1].strip()
+    if re.match(r"(?:\}\s*)?(?:else\s+)?(?:if|while|for|switch)\b", hl) and hl.endswith("{") and not call_in_if(hl):
+        return head + "那一行是判断或循环的开头：" + branch_hint(src, cl)
+    return head + f"line 改成 {cl}、file 改成 {c.get('file')}（where 照那一句的意思写 before 或 after）；这个点量的不是这一轮流程里的事，就去掉这个点"
 
 
 END_ROLES = ("最后结果", "全部放完")
