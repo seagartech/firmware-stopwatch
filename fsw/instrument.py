@@ -206,7 +206,7 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
 - FSW_MARK_ONCE(编号, 附加值);  一轮只记第一次
 - FSW_KEEP_LAST(编号);  高频位置用：只在内存里记最后一次，再在之后的某个计时点处用 FSW_FLUSH_LAST(编号); 打印出来
 - FSW_ROUND_RESET();  一轮开始时清零"只记第一次"的标记，放在每轮开始的地方（比如进入聆听状态、读到卡）
-- FSW_ARM(); 和 FSW_MARK_ONCE_ARMED(编号, 附加值);  同一处代码别的时候也会走到（比如提示音也走播放）时用：只在 FSW_ARM() 之后才记
+- FSW_ARM(); 和 FSW_MARK_ONCE_ARMED(编号, 附加值);  只在 FSW_ARM() 之后才记；FSW_ARM(); 单独一行，不能套在 if 里
 - FSW_MARK_ONCE_AFTER(编号, 前一步编号, 附加值);  这一轮走到"前一步"（那个用 FSW_MARK_ONCE 记的计时点）之后才记，只记第一次。
   会被上一轮剩下的东西提前触发的点要用它：比如"收到第一段声音"，上一句回答剩下的一包声音可能在新一轮聆听时才到，
   用 FSW_MARK_ONCE 会记成那一包，这一轮真正的第一包反而记不到。前一步选这一轮里它前面、一定会先发生的那个计时点（比如"收到开口指令"）
@@ -215,7 +215,9 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
 读代码，确定每个计时点具体插在哪一行的后面（after_line 是原文件现在的行号，0 表示插在文件最前面），写出要插的几行（带上和周围一样的缩进）。
 - 每个计时点插两行：一行中文注释（// 计时点 P编号：中文名），一行计时点语句。辅助语句（清零、武装、打印最后一次）也各配一行注释。
 - 每个用到计时点的文件，在开头的 #include 附近加一行 #include，路径要让编译器能找到 {header}。这一行只写 #include，说明另起一行写注释。
-- 只能插注释、#include 和 FSW_ 开头的计时点语句，不能加别的代码，不能改、不能删已有的行。
+- 只能插注释、#include 和 FSW_ 开头的计时点语句，每行一句；不能加 if、条件判断、变量、赋值或别的代码，不能改、不能删已有的行。
+  不用自己筛"只记回复的声音、不记提示音""不记上一轮剩下的"：码表的计时点只认这一轮起点之后记到的（起点之前记到的码表不算），
+  提示音、上一轮剩下的不会被算进这一轮；要"某一步之后才记"就用 FSW_MARK_ONCE_AFTER，不写判断。
 - 不要插在宏定义、多行语句、if 条件、初始化列表的中间；插在 return / break 之后的执行不到。
 - 表里写"这一句之前"的，插在那一句的紧前面、和它同一层（after_line 就是它上一行）；写"这一句之后"的，插在那一句（块里最后一句）的紧后面、同一层。不要跨过 }}、else 或判断那一行，跨过就到了别的分支或块外。
 - 每个位置都要亲自打开文件核对行号。
@@ -322,8 +324,33 @@ def _read_lines(p):
     return Path(p).read_bytes().decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
 
 
+KEEP_CALL = re.compile(r"FSW_KEEP_LAST\(\s*(\d+)\s*\)")
+FLUSH_CALL = re.compile(r"FSW_FLUSH_LAST\(\s*(\d+)\s*\)")
+ARM_CALL = re.compile(r"FSW_ARM\(\s*\)")
+RESET_CALL = re.compile(r"FSW_ROUND_RESET\(\s*\)")
+
+
+def _needs_lost(out, dropped):
+    """去掉不合规的那几条以后，留下的计时点还能不能照常工作：留下的"武装后才记"要有武装那一句，
+    留下的"记最后一次"原来有打印那一句（被去掉了）就不行，清零那一句全被去掉也不行。返回说明（空 = 没缺）。"""
+    def text(xs):
+        return "\n".join(l for x in xs for l in x.get("lines") or [] if isinstance(l, str))
+    kept, gone, lost = text(out), text(dropped), []
+    if any(m.group(1) == "MARK_ONCE_ARMED" for m in MARK_CALL.finditer(kept)) and not ARM_CALL.search(kept):
+        lost.append("用了「武装后才记」的计时点，但武装那一句被去掉了")
+    for n in sorted({int(m.group(1)) for m in KEEP_CALL.finditer(kept)}):
+        if n in {int(m.group(1)) for m in FLUSH_CALL.finditer(gone)} and n not in {int(m.group(1)) for m in FLUSH_CALL.finditer(kept)}:
+            lost.append(f"P{n} 记最后一次，打印它的那一句被去掉了")
+    if RESET_CALL.search(gone) and not RESET_CALL.search(kept):
+        lost.append("每轮清零那一句被去掉了")
+    return lost
+
+
 def parse_plan(text, root, steps, needs=None):
-    """读 AI 给的插入清单，逐条核对；不对就整份不用（一个文件都不改）。"""
+    """读 AI 给的插入清单，逐条核对。只能插计时点语句、注释和 #include，别的代码一行都不插。
+    不合规的那几条（比如夹带了 if 判断）：去掉以后每个计时点都还在、留下的都能照常工作，就只去掉这几条，其余照插，
+    去掉了什么写进 fixes 和说明；会缺计时点（或缺它要的武装、打印、清零那一句），整份不用（一个文件都不改），
+    返回里带 bad（是哪几条、为什么），调用的地方可以追问 AI 一次只改这几条（见 fix_plan）。"""
     root = Path(root).resolve()
     data = _json_block(text)
     if not isinstance(data, dict) or not isinstance(data.get("inserts"), list):
@@ -333,48 +360,60 @@ def parse_plan(text, root, steps, needs=None):
             or root not in (root / header).resolve().parents:
         header = default_header(root)
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
-    out, problems = [], []
+    out, problems, bad = [], [], []
+
+    def reject(x, why):
+        problems.append(why)
+        bad.append({"step": str(x.get("step") or ""), "file": str(x.get("file") or ""), "after_line": x.get("after_line"),
+                    "lines": [str(l) for l in x.get("lines")] if isinstance(x.get("lines"), list) else [str(x.get("lines"))],
+                    "why": re.sub(r"<[^>]+>", "", why)})
+
     for x in data["inserts"]:
         if not isinstance(x, dict):
             continue
         step, rel, lines = str(x.get("step") or ""), str(x.get("file") or "").lstrip("./"), x.get("lines")
         p = (root / rel).resolve()
         if step not in ids and step not in HELPERS:
-            problems.append(f"不认识的计时点 {step}")
+            reject(x, f"不认识的计时点 {step}")
             continue
         if root not in p.parents or not p.is_file():
-            problems.append(f"找不到文件 {rel}")
+            reject(x, f"找不到文件 {rel}")
             continue
         try:
             after = int(x.get("after_line"))
         except (TypeError, ValueError):
-            problems.append(f"{rel} 的行号写得不对")
+            reject(x, f"{rel} 的行号写得不对")
             continue
         n = len(_read_lines(p))
         if not 0 <= after <= n:
-            problems.append(f"{rel} 没有第 {after} 行（只有 {n} 行）")
+            reject(x, f"{rel} 没有第 {after} 行（只有 {n} 行）")
             continue
-        bad = [l for l in lines if not (isinstance(l, str) and LINE_OK.match(l))] if isinstance(lines, list) else [str(lines)]
-        if not lines or bad:
-            problems.append(f"{rel} 第 {after} 行后面要插的内容里夹带了别的代码：<code>{html.escape(str(bad[0] if bad else '')[:80])}</code>")
+        badl = [l for l in lines if not (isinstance(l, str) and LINE_OK.match(l))] if isinstance(lines, list) else [str(lines)]
+        if not lines or badl:
+            reject(x, f"{rel} 第 {after} 行后面要插的内容里夹带了别的代码：<code>{html.escape(str(badl[0] if badl else '')[:80])}</code>")
             continue
         badv = [v for _, v in _marks(lines) if not value_ok(v)]
         if badv:
-            problems.append(f"{rel} 第 {after} 行的附加值不是只读的：<code>{html.escape(badv[0][:80])}</code>"
-                            "（附加值只能读已有的变量或不带参数的函数返回值）")
+            reject(x, f"{rel} 第 {after} 行的附加值不是只读的：<code>{html.escape(badv[0][:80])}</code>"
+                      "（附加值只能读已有的变量或不带参数的函数返回值）")
             continue
         out.append({"step": step, "file": p.relative_to(root).as_posix(), "after_line": after, "lines": lines})
+    whole = []  # 去掉不合规的几条之后还缺的（缺了就不能只去掉）
     missing = [s["n"] for k, s in ids.items() if not any(x["step"] == k for x in out)]
     if missing:
-        problems.append("这些计时点没插：" + "、".join(missing))
+        whole.append("这些计时点没插：" + "、".join(missing))
     for f in {x["file"] for x in out if x["step"] != "include"}:
         has = any(x["file"] == f and x["step"] == "include" for x in out) or "fw_stopwatch.h" in (root / f).read_text(errors="replace")
         if not has:
-            problems.append(f"{f} 用了计时点，但没加 #include")
-    if problems:
-        return _fail("bad_plan", "AI 给的插入清单不对，码表没有用，一个文件都没改：" + "；".join(problems[:4]) +
-                     "。只能加计时点、注释和 #include。点\"重新插入\"再试一次。")
+            whole.append(f"{f} 用了计时点，但没加 #include")
+    whole += _needs_lost(out, bad) if bad else []
+    if whole or (problems and not out):
+        return _fail("bad_plan", "AI 给的插入清单不对，码表没有用，一个文件都没改：" + "；".join((problems + whole)[:4]) +
+                     "。只能加计时点、注释和 #include。点\"重新插入\"再试一次。", bad=bad, lost=whole)
+    fixes = [{"kind": "dropped", **b} for b in bad]  # 只去掉不合规的那几条，其余照插
     notes = [str(n) for n in data.get("notes") or [] if n]
+    notes += [f"码表去掉了 AI 多加的一处（{b['file']} 第 {b['after_line']} 行后面，{b['step']}）：{b['why']}。"
+              "只能插计时点、注释和 #include；去掉后每个计时点都还在" for b in bad]
     said = {str(v.get("step")): v for v in data.get("values") or [] if isinstance(v, dict)}
     values = {}
     for k, need in _needs_by_id(steps, needs).items():
@@ -388,7 +427,46 @@ def parse_plan(text, root, steps, needs=None):
                      "what": need["what"]}
     st = next((s for s in steps if s.get("line") == "start"), steps[0] if steps else None)  # 一轮的起点（和场景里一样）
     start = number(st["p"], steps) if st and f"P{number(st['p'], steps)}" in {x["step"] for x in out} else None
-    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start}
+    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes}
+
+
+PLAN_FIX = """你给的插入清单里有几条码表不能用（一个文件都还没改）。规则：只能插注释、#include 和 FSW_ 开头的计时点语句，每行一句；
+不能加 if、条件判断、变量、赋值或任何别的代码。不用自己筛"只记回复的声音、不记提示音"：码表的计时点只认这一轮起点之后记到的
+（起点之前记到的码表不算），上一轮剩下的、提示音不会被算进这一轮；要"某一步之后才记"就用 FSW_MARK_ONCE_AFTER(编号, 前一步编号, 0)，
+不写判断，也不要套在 if 里用 FSW_ARM()。
+
+不能用的是这几条：
+{items}
+{lost}
+只改这几条（以及因为它们改了、要跟着改的那个计时点），其余照原样抄，不用再读代码。最后只输出一个完整的 ```json 代码块，格式和上次一样。"""
+
+
+def fix_plan(llm, text, root, steps, needs=None):
+    """核对插入清单；不合规又不能只去掉那几条（会缺计时点）时，在同一段对话里追问 AI 一次，只改这几条。
+    返回 (插入清单或失败, 追问后的回答或 None)。追问后还不对就失败，说清楚。接法不支持追问（比如沿用的、命令行）就直接失败。"""
+    plan = parse_plan(text, root, steps, needs)
+    if plan["ok"] or not plan.get("bad") or llm is None:
+        return plan, None
+    items = "\n".join(f"- {b['step']}（{b['file']} 第 {b['after_line']} 行后面）：{b['why']}；原来写的：{' / '.join(l.strip() for l in b['lines'])}"
+                      for b in plan["bad"])
+    lost = ("去掉它们会出的问题：" + "；".join(plan.get("lost") or []) + "\n") if plan.get("lost") else ""
+    try:
+        again = llm.followup(PLAN_FIX.format(items=items, lost=lost))
+    except LLMError as e:
+        return {**plan, "asked": True, "message": plan["message"].replace("点\"重新插入\"再试一次。", "") +
+                f"追问 AI 改的时候出错：{e.message}。点\"重新插入\"再试一次。"}, None
+    if again is None:  # 这种接法不支持追问
+        return plan, None
+    if not again.strip():
+        return {**plan, "asked": True}, None
+    plan2 = parse_plan(again, root, steps, needs)
+    if not plan2["ok"]:
+        return {**plan2, "asked": True, "message": "AI 给的插法里有不能用的地方，码表追问它改了一次还是不对，一个文件都没改：" +
+                plan2["message"].split("一个文件都没改：", 1)[-1], "first_bad": plan["bad"]}, again
+    plan2["fixes"] = [{"kind": "rewritten", **b} for b in plan["bad"]] + plan2.get("fixes", [])
+    plan2["asked"] = True
+    plan2["notes"] = [f"AI 第一次给的插法有 {len(plan['bad'])} 处不能用（{plan['bad'][0]['why']}），码表追问它改了一次，改好的照插"] + plan2["notes"]
+    return plan2, again
 
 
 def _record_path(backup):
@@ -623,7 +701,7 @@ def insert(llm, root, steps, backup, on_progress=None, needs=None):
         text = llm.investigate(build_prompt(steps, header, needs), root, on_tool=tool)
     except LLMError as e:
         return _fail(e.kind, f"{e.message}<br>一个文件都没改，点\"重新插入\"再试一次。", seconds=round(time.time() - t0, 1))
-    plan = parse_plan(text, root, steps, needs)
+    plan, _again = fix_plan(llm, text, root, steps, needs)
     if not plan["ok"]:
         return {**plan, "seconds": round(time.time() - t0, 1)}
     rec = apply(root, plan, backup)

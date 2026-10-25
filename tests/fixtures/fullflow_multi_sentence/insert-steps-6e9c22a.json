@@ -1,0 +1,113 @@
+[
+ {
+  "p": "P1",
+  "n": "说话结束",
+  "path": "main/audio/engines/afe_audio_engine.cc",
+  "l": 482,
+  "line": "start",
+  "why": "设备在这一帧判定已由说话转静音，是设备最早知道人说完话的时刻，放在把说话标志置回之前。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P2",
+  "n": "静音状态回调",
+  "path": "main/audio/engines/afe_audio_engine.cc",
+  "l": 483,
+  "line": "talk",
+  "why": "同一支里紧跟其后把静音通知往上抛（只用于刷新指示灯），能区分出判定完和通知完两个时刻。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P5",
+  "n": "上传首包",
+  "path": "main/application.cc",
+  "l": 242,
+  "line": "talk",
+  "why": "主循环第一次把上行音频真正发出去，是设备把声音交给网络的时刻。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P6",
+  "n": "上传末包",
+  "path": "main/application.cc",
+  "l": 242,
+  "line": "talk",
+  "why": "同一句最后一次执行，本轮录音最后一包离开设备，从这里开始设备等服务器。",
+  "where": "before",
+  "once": "last"
+ },
+ {
+  "p": "P7",
+  "n": "收到识别结果",
+  "path": "main/application.cc",
+  "l": 667,
+  "line": "talk",
+  "why": "服务器识别结果落到对话区那一刻，是设备收到的第一个结果。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P8",
+  "n": "回复开始",
+  "path": "main/application.cc",
+  "l": 627,
+  "line": "talk",
+  "why": "服务器宣告回复开始、设备切到说话状态的那一刻，之后才允许收音频包。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P9",
+  "n": "首段出声",
+  "path": "main/audio/audio_service.cc",
+  "l": 351,
+  "line": "talk",
+  "why": "第一段回复音频第一次送进扬声器，用户第一下听到声音就从这里开始。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P10",
+  "n": "末段出声",
+  "path": "main/audio/audio_service.cc",
+  "l": 351,
+  "line": "talk",
+  "why": "同一句最后一次执行，最后一段回复音频送进扬声器，声音放完的时刻。",
+  "where": "before",
+  "once": "last"
+ },
+ {
+  "p": "P11",
+  "n": "播放全部放完",
+  "path": "main/audio/audio_service.cc",
+  "l": 374,
+  "line": "talk",
+  "why": "判定解码队列、播放队列都空、没有在途解码和输出之后才走这一支，这里才是真正放空的时刻。",
+  "where": "before",
+  "once": "every"
+ },
+ {
+  "p": "P12",
+  "n": "回到聆听",
+  "path": "main/application.cc",
+  "l": 635,
+  "line": "talk",
+  "why": "服务器发来回复结束、设备切回自动聆听，这一轮到此结束。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P13",
+  "n": "换表情",
+  "path": "main/application.cc",
+  "l": 674,
+  "line": "face",
+  "why": "顺带发现的画面线：服务器发来情绪消息时把表情换成对应双眼，取本轮第一次，看它相对出声的先后。",
+  "where": "before",
+  "once": "first",
+  "opt": true
+ }
+]
