@@ -541,6 +541,13 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
     t0, text = time.time(), []
     state = {"stage": "chain" if flow is None else "pick", "found": list(known or []), "at": [""] * len(known or []), "read": 0, "last": ""}
     calls, chain_reply, t_stage = 0, None, [t0]
+    retries = []  # 发请求时重发过的：[{stage, request_no, retry, why, wait}]（只有会重发的接法才有）
+
+    def took_retries(stage):
+        for x in getattr(llm, "retry_log", None) or []:
+            retries.append({"stage": STAGES[stage], **x})
+        if getattr(llm, "retry_log", None):
+            llm.retry_log = []
 
     def report():
         on_progress and on_progress({"seconds": round(time.time() - t0, 1), **state,
@@ -564,10 +571,12 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
     def failed(e, stage):
         tail = (f"已找到的 {len(state['found'])} 个留着，点\"重试\"接着找" if stage == "pick"
                 else "点\"重试\"再试一次") + "，也可以到设置页换一个大模型。"
+        took_retries(stage)
         err = error_record(e, stage, round(time.time() - t_stage[0], 1), round(time.time() - t0, 1))
+        err["retried_before"] = len(retries)  # 这次识别里出错前一共重发过几次（含成功的）
         print(f"[识别] {err['stage']}出错：{err['detail'] or err['kind']}（第 {err.get('request_no', '?')} 次请求，"
-              f"这一步已用 {err['stage_seconds']} 秒）", file=sys.stderr, flush=True)  # 运行日志：原始报错，已去掉密钥
-        return _fail(e.kind, f"{STAGES[stage]}时出错：{e.message}<br>{tail}", found=state["found"], stage=stage, error=err,
+              f"这一步已用 {err['stage_seconds']} 秒，这次请求重发过 {err.get('retries', 0)} 次）", file=sys.stderr, flush=True)  # 运行日志：原始报错，已去掉密钥
+        return _fail(e.kind, f"{STAGES[stage]}时出错：{e.message}<br>{tail}", found=state["found"], stage=stage, error=err, retries=retries,
                      seconds=round(time.time() - t0, 1), calls=calls,
                      **({"flow": flow} if flow else {}), **({"chain_reply": chain_reply} if chain_reply else {}))
 
@@ -579,11 +588,12 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
             calls += 1
             return failed(e, "chain")
         calls += 1
+        took_retries("chain")
         got, bad = check_chain(root, _json_block(chain_reply))
         if bad:  # 不合格就停下说明原因，不自动重试
             more = f"等 {len(bad)} 处" if len(bad) > 3 else ""
             return _fail("bad_chain", f"理清流程这一步的结果没通过码表检查：{'；'.join(bad[:3])}{more}。点\"重试\"再理一次，也可以到设置页换一个大模型。",
-                         found=[], stage="chain", problems=bad, chain_reply=chain_reply,
+                         found=[], stage="chain", problems=bad, chain_reply=chain_reply, retries=retries,
                          seconds=round(time.time() - t0, 1), calls=calls)
         flow = got
         state["stage"], text, t_stage[0] = "pick", [], time.time()
@@ -594,8 +604,9 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
         calls += 1
         return failed(e, "pick")
     calls += 1
+    took_retries("pick")
     r = parse(reply, root, chain=flow["chain"], strict=True)
-    r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick", chain_category=category or "")
+    r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick", chain_category=category or "", retries=retries)
     if chain_reply is not None:
         r["chain_reply"] = chain_reply
     if r["ok"]:

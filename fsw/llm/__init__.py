@@ -13,7 +13,10 @@ import json
 import os
 import re
 import shutil
+import socket
+import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -46,6 +49,24 @@ def _why(e):
     if isinstance(e, urllib.error.URLError) and isinstance(r, BaseException):
         return f"{type(e).__name__}({type(r).__name__}): {r}"
     return f"{type(e).__name__}: {e}"
+
+
+RETRY_STATUS = {429, 502, 503}  # 服务器说忙、网关临时出错：可以重发
+MAX_RETRIES = 2  # 每次请求最多重发 2 次
+
+
+def retryable(e):
+    """发请求阶段出的、可以放心重发的错（对方还没开始回答，重发不会多算钱）：
+    连接被重置或中断、TLS 中途断开、代理断开、查不到域名，以及 HTTP 429/502/503。
+    超时不重发：urllib 分不清是连不上还是连上后在等回答（后者重发会重复计费）；证书不对也不重发（重发也一样）。"""
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code in RETRY_STATUS
+    r = e.reason if isinstance(e, urllib.error.URLError) else e
+    if isinstance(r, (TimeoutError, ssl.SSLCertVerificationError)):
+        return False
+    if isinstance(r, (ConnectionError, ssl.SSLError, socket.gaierror)):
+        return True
+    return "tunnel connection failed" in str(r).lower() or "proxy" in str(r).lower()
 
 
 class LLMError(Exception):
@@ -223,16 +244,37 @@ class DeepSeek(LLM):
     name = "DeepSeek"
     site = " DeepSeek 开放平台（platform.deepseek.com）"
 
-    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=600):
+    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=600, retry_wait=(1, 2)):
         self.key, self.model, self.base_url, self.timeout = key, model, base_url.rstrip("/"), timeout
+        self.retry_wait = retry_wait  # 第 1、2 次重发前各等几秒
+        self.retry_log = []  # 这次调用里重发过的请求：[{request_no, retry, why, wait}]，成功的也记，看得出网络稳不稳
+        self._req_no = None
 
     def _post(self, body):
-        req = urllib.request.Request(
-            self.base_url + "/chat/completions", data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"},
-        )
+        """发一次请求；发请求阶段的连接类错误和 429/502/503 等一会儿重发，最多 MAX_RETRIES 次。读回答途中出的错不在这里，不重发。"""
+        data = json.dumps(body).encode()
+        for attempt in range(MAX_RETRIES + 1):
+            req = urllib.request.Request(self.base_url + "/chat/completions", data=data,
+                                         headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"})
+            try:
+                return urllib.request.urlopen(req, timeout=self.timeout)
+            except (urllib.error.URLError, OSError) as e:
+                if attempt < MAX_RETRIES and retryable(e):
+                    wait = self.retry_wait[min(attempt, len(self.retry_wait) - 1)]
+                    why = redact(f"HTTPError {e.code}" if isinstance(e, urllib.error.HTTPError) else _why(e), 200)
+                    self.retry_log.append({"request_no": self._req_no, "retry": attempt + 1, "why": why, "wait": wait})
+                    print(f"[大模型] {self.name} 第 {self._req_no or '?'} 次请求出错（{why}），{wait} 秒后重发（第 {attempt + 1} 次重发）",
+                          file=sys.stderr, flush=True)
+                    time.sleep(wait)
+                    continue
+                err = self._error(e)
+                err.info["retries"] = attempt
+                raise err from e
+
+    def _error(self, e):
+        """把发请求时的错换成大模型错误。"""
         try:
-            return urllib.request.urlopen(req, timeout=self.timeout)
+            raise e
         except urllib.error.HTTPError as e:
             kind = {401: "bad_key", 403: "bad_key", 402: "no_balance", 429: "busy"}.get(e.code, "busy" if e.code >= 500 else "other")
             try:
@@ -241,15 +283,17 @@ class DeepSeek(LLM):
                 said = ""
             err = self.fail(kind, f"HTTPError {e.code}: {said}".strip())
             err.info["status"] = e.code
-            raise err from e
+            return err
         except (urllib.error.URLError, OSError) as e:
             if isinstance(getattr(e, "reason", e), TimeoutError):  # 连上了但等不到回复：不是没联网
-                raise self._read_error(getattr(e, "reason", e)) from e
-            raise LLMError("offline", self._say("offline"), _why(e)) from e
+                return self._read_error(getattr(e, "reason", e))
+            return LLMError("offline", self._say("offline"), _why(e))
 
     def investigate(self, prompt, root, on_text=None, on_tool=None):
         tools, messages, t0 = SourceTools(root), [{"role": "user", "content": prompt}], time.time()
+        self.retry_log = []
         for rnd in range(MAX_TOOL_ROUNDS + 1):
+            self._req_no = rnd + 1
             body = {"model": self.model, "messages": messages}
             if rnd < MAX_TOOL_ROUNDS:
                 body["tools"] = openai_tools()

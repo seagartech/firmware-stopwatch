@@ -39,18 +39,19 @@ def tool_reply():
 
 
 def fake_net(monkeypatch, fail_at, error=None, fail_read=None):
-    """前 fail_at-1 次请求正常（模型要读目录），第 fail_at 次出错。"""
+    """前 fail_at-1 次请求正常（模型要读目录），从第 fail_at 次起一直出错（会重发的错重发也照样出错）。不真等。"""
     sent = []
 
     def urlopen(req, timeout=None):
         sent.append(req)
         assert req.get_header("Authorization") == f"Bearer {KEY}"
-        if len(sent) == fail_at:
+        if len(sent) >= fail_at:
             if error:
                 raise error
             return Resp(None, fail_read=fail_read)
         return Resp(tool_reply())
     monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms.time, "sleep", lambda s: None)
     return sent
 
 
@@ -88,9 +89,9 @@ def test_identify_failure_record_and_log(monkeypatch, tmp_path, capsys):
     door = door_source(tmp_path / "door")
     sent = fake_net(monkeypatch, 3, urllib.error.URLError(ConnectionResetError(54, f"Connection reset by peer {KEY}")))
     r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门")
-    assert not r["ok"] and r["kind"] == "offline" and r["stage"] == "chain" and len(sent) == 3
+    assert not r["ok"] and r["kind"] == "offline" and r["stage"] == "chain" and len(sent) == 5  # 第 3 次请求重发了 2 次
     err = r["error"]
-    assert err["stage"] == "理清流程" and err["request_no"] == 3 and err["kind"] == "offline"
+    assert err["stage"] == "理清流程" and err["request_no"] == 3 and err["kind"] == "offline" and err["retries"] == 2
     assert "ConnectionResetError" in err["detail"] and "Connection reset by peer" in err["detail"] and "sk-***" in err["detail"]
     assert err["stage_seconds"] >= 0 and err["seconds"] >= err["stage_seconds"]
     assert "连不上DeepSeek的服务器" in r["message"] and "ConnectionResetError" not in r["message"]
@@ -108,7 +109,8 @@ def test_second_stage_failure_names_the_second_stage(monkeypatch, tmp_path):
     flow = idf.check_chain(door, {k: DOOR_RESULT[k] for k in ("trigger", "upload", "mode", "detect", "chain")})[0]
     fake_net(monkeypatch, 1, http_error(429, "rate limited"))
     r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门", flow=flow)
-    assert r["kind"] == "busy" and r["error"]["stage"] == "选计时点" and r["error"]["status"] == 429 and r["error"]["request_no"] == 1
+    assert r["kind"] == "busy" and r["error"]["stage"] == "选计时点" and r["error"]["status"] == 429 and r["error"]["request_no"] == 1 \
+        and r["error"]["retries"] == 2 and [x["stage"] for x in r["retries"]] == ["选计时点", "选计时点"]
 
 
 def test_redact():
@@ -121,3 +123,100 @@ def test_web_job_keeps_the_error_record(tmp_path):
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "fsw/web/app.py").read_text(encoding="utf-8")
     assert 'job["error_info"] = r["error"]' in src
+
+
+# ---------- 有限重发：只重发发请求阶段的连接类错误和 429/502/503，最多 2 次；读回答途中出错不重发 ----------
+def flaky_net(monkeypatch, errors):
+    """errors：按发请求的顺序，每次要出的错（None 表示正常回答，"read" 表示回答读到一半断开）。用完后都正常。"""
+    sent, seq = [], list(errors)
+
+    def urlopen(req, timeout=None):
+        sent.append(req)
+        e = seq.pop(0) if seq else None
+        if e == "read":
+            return Resp(None, fail_read=ConnectionResetError(54, "Connection reset by peer"))
+        if e is not None:
+            raise e
+        return Resp({"choices": [{"message": {"role": "assistant", "content": "好了"}}]})
+    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms.time, "sleep", lambda s: sent.append(("sleep", s)))
+    return sent
+
+
+TLS = urllib.error.URLError(ssl.SSLEOFError(8, "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol"))
+
+
+@pytest.mark.parametrize("error", [
+    TLS, ConnectionResetError(54, "Connection reset by peer"), urllib.error.URLError(ConnectionRefusedError(61, "refused")),
+    urllib.error.URLError(OSError("Tunnel connection failed: 502 Bad Gateway")), urllib.error.URLError(socket.gaierror(8, "nodename nor servname")),
+])
+def test_send_phase_connection_errors_are_retried(monkeypatch, tmp_path, capsys, error):
+    sent = flaky_net(monkeypatch, [error, error])
+    m = DeepSeek(KEY)
+    assert m.investigate("读一读", tmp_path) == "好了"
+    reqs = [x for x in sent if not isinstance(x, tuple)]
+    assert len(reqs) == 3 and [x for x in sent if isinstance(x, tuple)] == [("sleep", 1), ("sleep", 2)]
+    assert [x["retry"] for x in m.retry_log] == [1, 2] and all(x["request_no"] == 1 for x in m.retry_log)
+    log = capsys.readouterr().err
+    assert "第 1 次请求出错" in log and "1 秒后重发（第 1 次重发）" in log and KEY not in log
+
+
+@pytest.mark.parametrize("code,retried", [(429, True), (502, True), (503, True), (500, False), (401, False), (402, False)])
+def test_http_status_retry(monkeypatch, tmp_path, code, retried):
+    sent = flaky_net(monkeypatch, [http_error(code, "x")])
+    m = DeepSeek(KEY)
+    if retried:
+        assert m.investigate("读一读", tmp_path) == "好了" and len(m.retry_log) == 1
+    else:
+        with pytest.raises(LLMError) as got:
+            m.investigate("读一读", tmp_path)
+        assert got.value.info["retries"] == 0 and got.value.info["status"] == code
+        assert len([x for x in sent if not isinstance(x, tuple)]) == 1
+
+
+@pytest.mark.parametrize("error", [
+    urllib.error.URLError(socket.timeout("timed out")),  # 分不清是连不上还是在等回答：不重发
+    urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),  # 证书不对：重发也一样
+])
+def test_timeouts_and_bad_certificates_are_not_retried(monkeypatch, tmp_path, error):
+    sent = flaky_net(monkeypatch, [error])
+    with pytest.raises(LLMError) as got:
+        DeepSeek(KEY).investigate("读一读", tmp_path)
+    assert got.value.info["retries"] == 0 and len(sent) == 1
+
+
+def test_mid_response_read_failure_is_never_retried(monkeypatch, tmp_path):
+    sent = flaky_net(monkeypatch, ["read"])
+    with pytest.raises(LLMError) as got:
+        DeepSeek(KEY).investigate("读一读", tmp_path)
+    assert got.value.kind == "dropped" and len(sent) == 1  # 回答读到一半断开：重发会重复计费，不重发
+
+
+def test_gives_up_after_two_retries_and_records_it(monkeypatch, tmp_path, capsys):
+    """整个识别：第一步第 1 次请求连续 3 次 TLS 断开 → 不再重发，出错记录写明重发了 2 次。"""
+    door = door_source(tmp_path / "door")
+    sent = flaky_net(monkeypatch, [TLS, TLS, TLS])
+    r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门")
+    assert not r["ok"] and r["error"]["retries"] == 2 and r["error"]["request_no"] == 1 and r["error"]["retried_before"] == 2
+    assert len([x for x in sent if not isinstance(x, tuple)]) == 3
+    assert [x["stage"] for x in r["retries"]] == ["理清流程", "理清流程"] and "SSLEOFError" in r["retries"][0]["why"]
+    assert "这次请求重发过 2 次" in capsys.readouterr().err
+    assert KEY not in json.dumps(r, ensure_ascii=False)
+
+
+def test_successful_retries_are_kept_in_the_result(monkeypatch, tmp_path):
+    from tests.identify_fixtures import DOOR_REPLY
+    door = door_source(tmp_path / "door")
+    seq = [TLS, None, http_error(503, "busy"), None]  # 第一步重发 1 次成功；第二步重发 1 次成功
+    replies = iter([DOOR_REPLY, DOOR_REPLY])
+
+    def urlopen(req, timeout=None):
+        e = seq.pop(0) if seq else None
+        if e is not None:
+            raise e
+        return Resp({"choices": [{"message": {"role": "assistant", "content": next(replies)}}]})
+    monkeypatch.setattr(llms.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llms.time, "sleep", lambda s: None)
+    r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门")
+    assert r["ok"] and [(x["stage"], x["request_no"], x["retry"]) for x in r["retries"]] == [("理清流程", 1, 1), ("选计时点", 1, 1)]
+    assert "HTTPError 503" in r["retries"][1]["why"]
