@@ -375,6 +375,9 @@ def check_anchor(src, line, where):
                 "请把参照句改成开关里面或外面那一句真正的语句")
     if not c:
         return None  # 空行、注释：插在哪儿都一样，不拦
+    if c == ";":
+        return (f"参照的第 {line} 行只有一个分号（空语句，常是一个循环的循环体），插在它前面会变成那个循环的循环体、改掉原来的逻辑。"
+                "请换成循环外面那一句真正的语句")
     if re.fullmatch(r"[{}]+;?", c):
         return (f"参照的第 {line} 行「{code}」只有大括号，插在它{'之后会出了这个代码块（比如出了某一支或循环）' if where == 'after' else '之前落在块的末尾'}，"
                 "想放在哪一层说不清。要放在块里，参照句写块里最后一句、where 写 after；要放在块外，参照句写块后面那一句、where 写 before")
@@ -835,6 +838,51 @@ def check_output(steps, by_n):
     return out
 
 
+_FAIL_COND = re.compile(r"!\s*[\w(]|==\s*(?:NULL|nullptr|false)\b|!=\s*(?:ESP_OK|0)\b|<\s*0\b")
+
+
+def _enclosing_header(src, line):
+    """第 line 行所在的那个大括号块的开头那一行：(行号, 去掉注释的代码)；在最外层就是 (None, "")。"""
+    depth = 0
+    for k in range(line - 2, -1, -1):
+        c = src.clines[k]
+        depth += c.count("}") - c.count("{")
+        if depth < 0:
+            return k + 1, c.strip()
+    return None, ""
+
+
+def _failure_header(src, line):
+    """第 line 行是不是在一个看起来是"失败、出错才走"的 if 那一支里（往外找最多三层）。返回那一行 (行号, 原文) 或 None。"""
+    cur = line
+    for _ in range(3):
+        n, c = _enclosing_header(src, cur)
+        if not n:
+            return None
+        m = re.match(r"(?:\}\s*)?(?:else\s+)?if\s*\((.*)\)\s*\{?$", c)
+        if m and _FAIL_COND.search(m.group(1)) and not call_in_if(c.lstrip("} ").replace("else ", "", 1)):
+            return n, src.lines[n - 1].strip()
+        if m and _FAIL_COND.search(m.group(1)) and call_in_if(c.lstrip("} ").replace("else ", "", 1)):
+            return n, src.lines[n - 1].strip()  # if (!send(x)) { … }：大括号里是发送失败那一支
+        cur = n
+    return None
+
+
+def _block_end(src, line):
+    """第 line 行开头的判断或循环，整个块结束那一行的行号（含 else 各支）；找不到就是 None。"""
+    depth, opened = 0, False
+    for k in range(line - 1, min(len(src.lines), line - 1 + 200)):
+        c = src.clines[k]
+        depth += c.count("{") - c.count("}")
+        opened = opened or "{" in c
+        if opened and depth <= 0:
+            nxt = _next_code(src, k + 1)
+            if nxt[0] and _ELSE.match(nxt[1]):
+                continue
+            return k + 1
+    return None
+
+
 def _branch_text(src, line, limit=12):
     """判断或循环开头那一行后面那一支：(第一句的行号, 第一句原文, [(行号, 原文)…最多 limit 行])。"""
     n, first = _next_code(src, line)
@@ -853,30 +901,59 @@ def _branch_text(src, line, limit=12):
     return n, src.lines[n - 1].strip(), rows
 
 
+def branch_hint(src, line, step=False):
+    """判断或循环开头那一行：告诉模型这一支里有什么、能往哪儿挪。失败那一支、空循环体不当插点。
+    step=True 是第一步（理清流程）用的说法：改的是这一步写的那一行，不是插点。"""
+    it, put, drop = ("这一步", "这一步的 file、line、code 改成", "去掉这一步上的标记") if step else ("这个点", "line 改成", "去掉这个点")
+    how = "（照抄那一行）" if step else "（where 写 before）"
+    fail = _failure_header(src, line)
+    if fail:
+        return (f"它在第 {fail[0]} 行「{_cond_text(fail[1])}」这一支里，这一支是出错、失败才走的，正常每轮走不到："
+                f"{drop}，或者放回流程里正常走的那一句")
+    c = src.clines[line - 1].strip()
+    n, first, rows = _branch_text(src, line)
+    after = _block_end(src, line)
+    nxt = _next_code(src, after) if after else (None, "")
+    tail = f"判断（循环）后面的第一句是第 {nxt[0]} 行「{_cond_text(src.lines[nxt[0] - 1].strip())}」。" if nxt[0] and nxt[1] != "}" else ""
+    if not n or first.strip() in (";", "{}") or (re.match(r"(?:while|for)\b", c) and c.rstrip().endswith(";")):
+        return f"这个循环体是空的，不能放在里面。{tail}{put}循环外面那一句{how}，或者{drop}"
+    m = re.match(r"(?:\}\s*)?(?:else\s+)?if\s*\((.*)\)\s*\{?$", c)
+    if m and _FAIL_COND.search(m.group(1)):
+        return f"这一支（第 {n} 行起）看起来是出错、失败才走的，正常走的是判断后面。{tail}{put}判断后面的那一句{how}，或者正常那一支里的第一句"
+    body = "\n".join(f"    {k}: {t}" for k, t in rows)
+    return (f"这一支大括号里的第一句是第 {n} 行「{first}」；这一支的内容：\n{body}\n"
+            f"  {put}你要的那一支里的第一句（里面又是判断的，再往里一层）{how}")
+
+
+def anchor_fix_text(src, s):
+    """点插在判断或循环开头那一行：追问时说的话。"""
+    line = int(s["line"])
+    return (f"{s['id']}「{s.get('name')}」放在 {s['file']} 第 {line} 行「{src.lines[line - 1].strip()}」，"
+            f"这是判断或循环的开头，点会落在整个判断外面。" + branch_hint(src, line))
+
+
 def pick_fixes(root, steps, chain):
-    """选点结果的硬失败如果全是能指出改法的（插在判断或循环开头那一行、标了输出的那一步缺 first 或 last），返回追问时要说的话；
-    还有别的硬失败（文件不对、不在那一步、段是负的……）就返回 None，照旧不追问。"""
+    """选点结果里能指出改法的硬失败（插在判断或循环开头那一行、标了输出的那一步缺 first 或 last），返回追问时要说的话；
+    别的硬失败（文件不对、不在那一步、段是负的……）不在追问里，原样留着、照旧算数。没有能追问的就返回 None。"""
     proj = Project(root)
-    items, fails = [], 0
+    items = []
     for s in steps:
         for c in s.get("chk") or []:
             if c["level"] != "fail":
                 continue
-            fails += 1
             if c["kind"] == "anchor" and "是条件或循环的开头" in c["text"]:
                 src = proj.file(s["file"])
-                n, first, rows = _branch_text(src, int(s["line"])) if src else (None, "", [])
-                if not n:
-                    return None
-                body = "\n".join(f"    {k}: {t}" for k, t in rows)
-                items.append(f"{s['id']}「{s.get('name')}」放在 {s['file']} 第 {s['line']} 行「{src.lines[int(s['line']) - 1].strip()}」，"
-                             f"这是判断或循环的开头，点会落在整个判断外面。这一支大括号里的第一句是第 {n} 行「{first}」；这一支的内容：\n{body}\n"
-                             "  line 改成你要的那一支里的第一句，where 写 before")
+                if src is not None:
+                    items.append(anchor_fix_text(src, s))
+            elif c["kind"] == "anchor" and "只有一个分号" in c["text"]:
+                src = proj.file(s["file"])
+                fail = _failure_header(src, int(s["line"])) if src is not None else None
+                why = f"，而且在第 {fail[0]} 行「{_cond_text(fail[1])}」那一支里，是出错、失败才走的" if fail else ""
+                items.append(f"{s['id']}「{s.get('name')}」放在 {s['file']} 第 {s['line']} 行，这一行只有一个分号（空循环体）{why}：不能放在这里，"
+                             "去掉这个点，或者放回流程里那一步那一行")
             elif c["kind"] == "output":
                 items.append(f"{s['id']}：{c['text']}")
-            else:
-                return None
-    return items if fails and items else None
+    return items or None
 
 
 END_ROLES = ("最后结果", "全部放完")
@@ -887,26 +964,50 @@ def _end_role(s, by_n):
     return any(r in str(c.get("role") or "") for r in END_ROLES)
 
 
-def _end_base(p, steps, by_n):
-    """标了最后结果、全部放完的点从哪儿量起：按点的先后，往前找最近的一个主线点，跳过别的最后结果、全部放完的点，
-    也跳过"最后一次执行"的点（逐包、逐帧的最后一次和结束消息谁先谁后说不准）。找不到就是 None。"""
+def _skip_for_end(x, p, by_n):
+    """给最后结果、全部放完的点找起点时不能用的点：别的最后结果、全部放完；"最后一次执行"的点；旁线；
+    流程里排在它后面的；它写明和上一步先后不确定时，紧挨着的上一步。"""
+    if x is None or x.get("line_of") not in ("start", "main") or x is p:
+        return True
+    if _end_role(x, by_n) or str(x.get("once") or "").strip().lower() == "last":
+        return True
+    np, nx = p.get("chain_step"), x.get("chain_step")
+    if not (isinstance(np, int) and isinstance(nx, int)) or x.get("line_of") == "start":
+        return False
+    if nx >= np:
+        return True
+    # 紧挨着的上一步：流程写明和它先后不确定时不能用（有因果先后的，比如收到结果再开锁，照常用）
+    return nx == np - 1 and _uncertain((by_n.get(np) or {}).get("after"))
+
+
+def _end_base(p, steps, by_n, segs=None, start_from=None):
+    """标了最后结果、全部放完的点从哪儿量起：从 start_from（没有就用按先后排在它前面的那个主线点）出发，
+    顺着已有的段往回找，跳过不能用的点（见 _skip_for_end）。顺着段找不到时，再按点的先后往前找。找不到就是 None。"""
+    by = {x.get("id"): x for x in steps}
     i = next((k for k, x in enumerate(steps) if x is p), None)
+    if start_from is None and i is not None:
+        start_from = next((x for x in reversed(steps[:i]) if x.get("line_of") in ("start", "main")), None)
+    cur, seen = start_from, set()
+    while cur is not None and cur.get("id") not in seen:
+        seen.add(cur.get("id"))
+        if not _skip_for_end(cur, p, by_n):
+            return cur
+        inc = next((g.get("from") for g in segs or [] if g.get("to") == cur.get("id") and g.get("from") in by), None)
+        cur = by.get(inc)
     for x in reversed(steps[:i] if i is not None else []):
-        if x.get("line_of") not in ("start", "main") or _end_role(x, by_n):
-            continue
-        if str(x.get("once") or "").strip().lower() == "last":
-            continue
-        return x
+        if not _skip_for_end(x, p, by_n):
+            return x
     return None
 
 
 def repair_segments(root, steps, segments, chain):
-    """两步识别的新结果：码表把主线的段理顺，模型只管选点。三种情况改成从前面同一个点量起：
-    1. 先后说不准的两步被串成一段（后一步写明和上一步先后不确定、或两步都标了最后结果）；
-    2. 同一次发送的"最后一次"连到"第一次"（负段）；
-    3. 标了最后结果、全部放完的那一步，没有任何一段量到它。
-    原来那段的起点换成"前一头是从哪儿量起的"（最后结果、全部放完的点按 _end_base 找）；换完和已有的段重复就删掉。
-    返回 (新的段, [改了什么])。"""
+    """两步识别的新结果：码表把主线的段理顺，模型只管选点。
+    1. 先后说不准的两步被串成一段（后一步写明和上一步先后不确定、或两步都标了最后结果）：起点换成更前面的点，两头各自从那里量；
+    2. 同一次发送的"最后一次"连到"第一次"（负段）：起点换成前一头的上一个点；
+    3. 标了最后结果、全部放完的那一步没有段量到它：补一段；
+    4. 同一步放了 first、last 两个点，last 那个一段都没连上：补上 first → last。
+    最后结果、全部放完的点顺着已有的段往回找起点，跳过紧挨的上一步、"最后一次"的点和别的放完、结束点。
+    前面已经没有点可换（比如起点出发的那一段）就原样留着，不删。返回 (新的段, [改了什么])。"""
     proj = Project(root)
     by_n = {}
     for i, c in enumerate(chain if isinstance(chain, list) else []):
@@ -917,7 +1018,7 @@ def repair_segments(root, steps, segments, chain):
                 pass
     by = {s.get("id"): s for s in steps}
     segs = [dict(g) for g in segments or [] if isinstance(g, dict)]
-    notes = []
+    notes, kept = [], set()
 
     def name(i):
         return (by.get(i) or {}).get("name") or i
@@ -925,6 +1026,8 @@ def repair_segments(root, steps, segments, chain):
     for _ in range(3 * len(segs) + 3):
         k, why, neg = None, "", False
         for j, g in enumerate(segs):
+            if id(g) in kept:
+                continue
             if check_order(proj, steps, [g]):
                 k, why, neg = j, "同一次发送从最后一次连到第一次，是负的", True
             elif check_uncertain(steps, [g], by_n):
@@ -934,19 +1037,19 @@ def repair_segments(root, steps, segments, chain):
         if k is None:
             break
         g = segs[k]
-        b = by.get(g.get("to"))
+        a, b = by.get(g.get("from")), by.get(g.get("to"))
         if b is not None and _end_role(b, by_n):
-            base = _end_base(b, steps, by_n)
+            base = _end_base(b, steps, by_n, segs, start_from=a)
             new = base.get("id") if base else None
-        else:  # 负段：改从前一头的上一个点量起；先后说不准：顺着往回找，直到落在前一头那一步之前的点（和前一头各自从这个点量起）
-            new, na, hops = g.get("from"), (by.get(g.get("from")) or {}).get("chain_step"), 0
+        else:  # 负段：改从前一头的上一个点量起；先后说不准：顺着往回找，直到落在前一头那一步之前的点
+            new, na, hops = g.get("from"), (a or {}).get("chain_step"), 0
             while new and (hops == 0 or (not neg and (by.get(new) or {}).get("chain_step") == na)) and hops <= len(segs):
                 new = next((x.get("from") for x in segs if x is not g and x.get("to") == new), None)
                 hops += 1
         old = g.get("from")
         if not new or new == g.get("to") or new == old:
-            segs.pop(k)
-            notes.append(f"删掉「{g.get('name') or ''}」{name(old)}→{name(g.get('to'))}：{why}")
+            kept.add(id(g))  # 前面没有点可换：原样留着（结构检查照旧会提示）
+            notes.append(f"「{g.get('name') or ''}」{name(old)}→{name(g.get('to'))}：{why}，但前面没有更早的点可换，原样留着")
             continue
         if any(x is not g and x.get("from") == new and x.get("to") == g.get("to") for x in segs):
             segs.pop(k)
@@ -965,12 +1068,22 @@ def repair_segments(root, steps, segments, chain):
         if any(x.get("id") in ends for x in mine):
             continue
         target = mine[-1]
-        base = _end_base(target, steps, by_n)
+        base = _end_base(target, steps, by_n, segs)
         if base is None:
             continue
         segs.append({"from": base.get("id"), "to": target.get("id"), "name": f"到{target.get('name')}", "who": "", "outside": False, "added": True})
         ends.add(target.get("id"))
         notes.append(f"补上「{base.get('name')}」→「{target.get('name')}」：标了最后结果或全部放完的这一点原来没有段量到它")
+    used = {g.get("from") for g in segs} | {g.get("to") for g in segs}
+    for p in steps:
+        if p.get("line_of") not in ("start", "main") or p.get("id") in used or str(p.get("once") or "").lower() != "last":
+            continue
+        first = next((x for x in steps if x is not p and x.get("chain_step") == p.get("chain_step") and x.get("chain_step") is not None
+                      and str(x.get("once") or "").lower() == "first" and x.get("id") in used), None)
+        if first:
+            segs.append({"from": first.get("id"), "to": p.get("id"), "name": f"{first.get('name')}到{p.get('name')}", "who": "", "outside": False, "added": True})
+            used.add(p.get("id"))
+            notes.append(f"补上「{first.get('name')}」→「{p.get('name')}」：同一步的最后一次原来没有段连上")
     return segs, notes
 
 

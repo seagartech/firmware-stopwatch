@@ -513,7 +513,7 @@ def test_card_category_does_not_require_done_step(door):
 def test_prompts_for_one_send_one_mark_and_done_step():
     c = idf.build_chain_prompt("全程")
     assert "首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。" in c
-    assert ("代码里有输出或播放队列放空、动作完成这类\"全部放完\"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口），role 标全部放完；"
+    assert ("代码里有输出或播放队列放空、动作完成这类\"全部放完\"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口，也不写之后转发、处理这个通知的地方），role 标全部放完；"
             "最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明\"没有全部放完的信号\"和找过哪里。") in c
     assert "播放全部放完（播放队列放空的那一支）" in idf.VOICE_HINT
     assert "门锁动作或提示音有\"真正做完\"信号的（比如动作到位、提示音放完），这一步标全部放完。" in idf.CARD_HINT
@@ -584,7 +584,7 @@ def test_step_with_uncertain_order_is_not_chained_to_the_previous_step(tmp_path)
 
 def test_prompts_for_uncertain_order_output_and_two_mode_lines():
     c = idf.build_chain_prompt("全程")
-    assert "运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；定不下来的写进 doubts。" in c
+    assert "运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。" in c
     assert "和上一步谁先谁后说不准的，after 写\"不确定\"。" in c
     assert "真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。" in c
     assert '"protocol": {"what": "哪种协议或通道；只有一种的写：无"' in c
@@ -723,10 +723,10 @@ def test_if_head_anchor_gives_a_follow_up_with_the_branch_body(tmp_path):
     structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
     items = structure.pick_fixes(tmp_path, pts, chain)
     assert len(items) == 1 and "第 4 行「finish();」" in items[0] and "4:         finish();" in items[0]
-    pts[1]["chain_step"] = 1  # 再加一个别的硬失败（不在那一步那一支）：不追问
-    pts[1]["line"] = 99
+    pts.append({**pts[0], "id": "P9", "file": "main/zz.c"})  # 再加一个别的硬失败（文件不对）：照样追问能改的那个，别的不在追问里
     structure.check(tmp_path, pts, [{"from": "P1", "to": "P2"}], chain=chain, strict=True)
-    assert structure.pick_fixes(tmp_path, pts, chain) is None
+    items = structure.pick_fixes(tmp_path, pts, chain)
+    assert len(items) == 1 and items[0].startswith("P2")
 
 
 @pytest.mark.parametrize("strict,level", [(True, "fail"), (False, "tip")])
@@ -927,3 +927,97 @@ def test_first_and_last_on_two_steps_is_not_merged_by_the_rule(door):
     d["chain"][4]["role"] = "首个结果、上传末包"
     flow, bad = idf.check_chain(door, d, "", [], fresh=True)
     assert any("只能标在一步上" in b for b in bad) and "repairs" not in flow
+
+
+# ---------- 第 1 轮（ab9c71c 之后）：段理顺不删起点那段、最后结果顺着段找起点；分号行不能插；追问不被别的硬失败挡住 ----------
+def test_repair_keeps_the_only_segment_from_the_start(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    chain[1]["after"] = "不确定"
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}]
+    fixed, notes = structure.repair_segments(tmp_path, pts, segs, chain)
+    assert ("P1", "P2") in [(g["from"], g["to"]) for g in fixed] and "原样留着" in notes[0]
+
+
+def test_end_point_origin_follows_segments_and_skips_drain_like_steps(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.c").write_text("void Run(void) {\n    heard();\n    play(b);\n    mark();\n    drained();\n    reply_end();\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 2}, {"n": 2, "file": "main/a.c", "line": 3, "role": "输出"},
+             {"n": 3, "file": "main/a.c", "line": 4}, {"n": 4, "file": "main/a.c", "line": 5, "role": "全部放完"},
+             {"n": 5, "file": "main/a.c", "line": 6, "role": "最后结果", "after": "不确定"}]
+    spec = [("P1", 1, "once", "start"), ("P2", 2, "first", "main"), ("P3", 2, "last", "main"), ("P4", 3, "once", "main"),
+            ("P5", 4, "once", "main"), ("P6", 5, "once", "main")]
+    pts = [{"id": i, "chain_step": n, "name": i, "file": "main/a.c", "line": n + 1, "where": "before", "once": o, "line_of": lo, "loc_ok": True}
+           for i, n, o, lo in spec]
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P3"}, {"from": "P3", "to": "P5"}, {"from": "P5", "to": "P6"}]
+    fixed, _ = structure.repair_segments(tmp_path, pts, segs, chain)
+    pairs = [(g["from"], g["to"]) for g in fixed]
+    assert ("P2", "P6") in pairs and ("P4", "P6") not in pairs and ("P5", "P6") not in pairs
+    fixed, _ = structure.repair_segments(tmp_path, pts, segs[:3], chain)  # 悬空的回复结束：同样从首段输出量起
+    assert ("P2", "P6") in [(g["from"], g["to"]) for g in fixed]
+
+
+def test_dangling_last_of_a_first_last_pair_gets_connected(tmp_path):
+    from fsw import structure
+    chain, pts = _seg_project(tmp_path)
+    segs = [{"from": "P1", "to": "P2"}, {"from": "P2", "to": "P4"}, {"from": "P4", "to": "P5"}, {"from": "P5", "to": "P6"},
+            {"from": "P6", "to": "P7"}, {"from": "P7", "to": "P8"}, {"from": "P6", "to": "P9"}]
+    fixed, notes = structure.repair_segments(tmp_path, pts, segs, chain)
+    assert ("P2", "P3") in [(g["from"], g["to"]) for g in fixed] and any("最后一次原来没有段连上" in t for t in notes)
+
+
+def test_semicolon_only_line_is_unanchorable_and_asked_about(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.c").write_text("void Run(void) {\n    if (!send(p)) {\n        while (pop())\n            ;\n        return;\n    }\n    done();\n}\n", encoding="utf-8")
+    chain = [{"n": 1, "file": "main/a.c", "line": 2}, {"n": 2, "file": "main/a.c", "line": 7}]
+    pts = [{"id": "P1", "chain_step": 1, "name": "发", "file": "main/a.c", "line": 4, "where": "before", "once": "last", "line_of": "start", "loc_ok": True},
+           {"id": "P2", "chain_step": 1, "name": "取空", "file": "main/a.c", "line": 3, "where": "before", "once": "last", "line_of": "main", "loc_ok": True}]
+    structure.check(tmp_path, pts, [], chain=chain, strict=True)
+    assert any(c["level"] == "fail" and "只有一个分号" in c["text"] for c in pts[0]["chk"])
+    items = structure.pick_fixes(tmp_path, pts, chain)
+    assert any("空循环体" in t and "出错、失败才走" in t for t in items)
+    assert any(t.startswith("P2") and "出错、失败才走" in t and "去掉这个点" in t for t in items)  # 循环头在失败那一支里：不给"第一句"
+
+
+def test_branch_hint_for_failure_if_points_after_the_block(tmp_path):
+    from fsw import structure
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.c").write_text("int Run(void) {\n    if (!ready()) {\n        return 0;\n    }\n    go();\n    return 1;\n}\n", encoding="utf-8")
+    src = structure.Project(tmp_path).file("main/a.c")
+    t = structure.branch_hint(src, 2)
+    assert "出错、失败才走" in t and "第 5 行「go();」" in t
+
+
+def test_pick_follow_up_runs_even_with_other_failures(door):
+    first = _door_output()
+    first["steps"][1]["file"] = "main/net_auth.c"
+    first["steps"][1]["line"] = 180
+    fixed = _door_output(False)
+    fixed["steps"][1]["file"], fixed["steps"][1]["line"] = "main/net_auth.c", 180
+    m = FakeLLM(js(first), followups=[js(fixed)])
+    r = idf.identify(m, door, "从刷卡到开门")
+    assert len(m.asked) == 1 and "流程第 6 步标了输出" in m.asked[0]
+    f = r["followups"][0]
+    assert f["fails_before"] == 2 and f["fails_after"] == 1 and any(s["id"] == "P6" for s in r["steps"])
+
+
+def test_output_marked_on_caller_and_callee_is_one_output(tmp_path):
+    (tmp_path / "main").mkdir()
+    (tmp_path / "main/a.c").write_text("static void put(int b) {\n    hw_write(b);\n}\nvoid Run(void) {\n    heard();\n    put(1);\n    done();\n}\n", encoding="utf-8")
+    flow = {"trigger": "t", "upload": "无", "mode": {"what": "无"}, "detect": {"kind": "按键松开", "found": True},
+            "chain": [{"n": 1, "what": "按键松开", "file": "main/a.c", "line": 5, "code": "heard();", "func": "Run", "repeat": "once", "after": ""},
+                      {"n": 2, "what": "放出", "file": "main/a.c", "line": 6, "code": "put(1);", "func": "Run", "role": "首个结果、输出", "repeat": "repeat", "after": "接着"},
+                      {"n": 3, "what": "写硬件", "file": "main/a.c", "line": 2, "code": "hw_write(b);", "func": "put", "role": "输出", "repeat": "repeat", "after": "被调用"},
+                      {"n": 4, "what": "结束", "file": "main/a.c", "line": 7, "code": "done();", "func": "Run", "role": "最后结果", "repeat": "once", "after": "接着"}]}
+    fixes = []
+    bad = idf.check_chain(tmp_path, flow, "", fixes, fresh=True)[1]
+    assert any("同一次输出" in b for b in bad) and any("只留一步" in f["text"] for f in fixes)
+    assert not any("同一次输出" in b for b in idf.check_chain(tmp_path, flow, "")[1])
+
+
+def test_round1_prompt_sentences():
+    c = idf.build_chain_prompt("全程")
+    assert "写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。" in c
+    assert "写判断出放完的那一支里的语句（不写检查是否放完的入口，也不写之后转发、处理这个通知的地方），role 标全部放完；" in c

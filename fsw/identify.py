@@ -96,10 +96,10 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 理清连续使用时的第二轮里，从设备察觉人做完输入，到最后一个结果（比如回复全部播完、门完全打开），设备依次做了哪些事。
 1. 选定一条实际的触发路径（比如喊唤醒词、按键、点屏幕、刷卡），写进 trigger。从处理这个输入事件的函数开始，沿真实的调用关系往下追（谁调用了谁、事件交给了谁），不能挑一个名字像的函数就用。设备会把输入往外发的（比如声音、传感器数据、刷卡上报），先顺着输入从采集一直追到真正把它发出去的那一句（起点仍按第 2 条，不从按键、触摸这类触发动作往下追），再挑步骤；有上传却缺了上传首包、末包或首个结果的链是错的。
 2. 第一步用设备自己能察觉人做完输入的检测（比如静音或语音活动检测翻转、读卡完成、按键松开）。哪怕它只用来切换显示、指示灯，不上报，也算设备察觉到了，第一步就用它。确实找不到，在 detect 里写明找过哪里。
-3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；定不下来的写进 doubts。
+3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到真正决定它的那一行代码，再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。
 4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面；和上一步谁先谁后说不准的，after 写"不确定"。
 5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
-6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口），role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
+6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口，也不写之后转发、处理这个通知的地方），role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
 7. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道），以及注册回调、初始化这类不在这一轮运行时执行的代码，不进链。
 {hint}
 ## 最后输出
@@ -354,7 +354,7 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
     返回 (整理好的流程, 问题列表)；问题列表不空就是不合格。"""
     if not isinstance(data, dict):
         return None, ["回答的格式不对，码表看不懂"]
-    bad, tips, roles, proj, up_steps = [], [], set(), structure.Project(root), []
+    bad, tips, roles, proj, up_steps, out_steps = [], [], set(), structure.Project(root), [], []
     trigger = str(data.get("trigger") or "").strip()
     if not trigger:
         bad.append("没写选定的触发路径")
@@ -435,6 +435,8 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
             tips.append(f"{tag}：{got[1]}")
         if any(r.startswith("上传") for r in role):
             up_steps.append(n)
+        if OUTPUT in role:
+            out_steps.append({"n": n, "file": _rel(root, c["file"]), "line": line, "chain_step": None})
         chain.append({"n": n, "what": str(c["what"]).strip(), "file": _rel(root, c["file"]), "line": line,
                       "code": check_location(root, c["file"], line)[0], "func": str(c["func"]).strip(), "role": role,
                       "branch": str(c.get("branch") or "").strip(), "repeat": rep, "after": str(c.get("after") or "").strip()})
@@ -454,6 +456,14 @@ def check_chain(root, data, category="", fixes=None, fresh=False):
         bad.append(f"上传首包、上传末包标在了第 {'、'.join(map(str, up_steps))} 步：只能标在一步上（真正发出数据的那一句）")
         if fixes is not None:
             fixes.append({"bad": bad[-1], "text": f"上传首包、上传末包标在了第 {'、'.join(map(str, up_steps))} 步，只留一步（真正发出数据的那一句），其余步骤去掉这两个标记"})
+    same_out = sorted({x["n"] for i, x in enumerate(out_steps) for y in out_steps[i + 1:]
+                       if (x["file"], x["line"]) != (y["file"], y["line"]) and structure._same_thing(proj, x, y)} |
+                      {y["n"] for i, x in enumerate(out_steps) for y in out_steps[i + 1:]
+                       if (x["file"], x["line"]) != (y["file"], y["line"]) and structure._same_thing(proj, x, y)})
+    if fresh and len(same_out) > 1:  # 外层和它调用的那一句算同一次输出：只标一处
+        bad.append(f"输出标在了第 {'、'.join(map(str, same_out))} 步，它们是同一次输出（调用和被调用）：只能标在一步上")
+        if fixes is not None:
+            fixes.append({"bad": bad[-1], "text": f"输出标在了第 {'、'.join(map(str, same_out))} 步，它们是同一次输出（调用和被调用），只留一步（真正把输出送出去、且一轮里每段都经过的那一句），其余步骤去掉这个标记"})
     if raw and need:
         bad.append(f"事件链里没标出：{'、'.join(need)}（在对应步骤的 role 里写；确实不往外发数据的，upload 写「无」）")
         if fixes is not None:  # 改 role 不用再读源码：步骤已经在链里的，追问时只补标记
