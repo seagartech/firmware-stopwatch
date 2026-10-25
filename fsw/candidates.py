@@ -355,6 +355,25 @@ def _done(f):
                 f.add("全部放完", rel, src, k, f"在「{_short(c)}」那一支里", 0 if same else 1, _area(src, i))
 
 
+
+def _shared_call(f, mine):
+    """发送写在同一个接口的几种实现里（几种连接方式各写一份），而候选里另有一句就是调用这个接口方法的：
+    那一句不管走哪种实现都会执行，只留它，各实现里的去掉（只在一种连接方式下才走到）。"""
+    impl = {}
+    for c in mine:
+        src = f.proj.file(c["file"])
+        hit = st.one_of_impls(f.proj, src, c["line"]) if src is not None else None
+        if hit:
+            impl[id(c)] = hit[1]
+    if not impl:
+        return mine
+    names = set(impl.values())
+    callers = [c for c in mine if id(c) not in impl and any(re.search(rf"(?:->|\.)\s*{re.escape(n)}\s*\(", c.get("code") or "") for n in names)]
+    if not callers:
+        return mine
+    called = {n for n in names if any(re.search(rf"(?:->|\.)\s*{re.escape(n)}\s*\(", c.get("code") or "") for c in callers)}
+    return [c for c in mine if impl.get(id(c)) not in called]
+
 def find(root, category=""):
     """返回候选列表：[{id, role, file, line, code, where}]，id 是 K1、K2……（按角色排好，每个角色最多几句）。"""
     f = _Finder(root, category)
@@ -374,6 +393,8 @@ def find(root, category=""):
             mine = [c for c in mine if c["_rank"][1] == 0]
         if role == "消息" and mine and not mine[0]["_rank"][1][0]:  # 有收进来的消息分支，就不要按函数参数分支的
             mine = [c for c in mine if not c["_rank"][1][0]]
+        if role == "上传":
+            mine = _shared_call(f, mine)
         mine = mine[:LIMIT[role]]
         if role == "消息":
             mine.sort(key=lambda c: (c["file"], c["line"]))

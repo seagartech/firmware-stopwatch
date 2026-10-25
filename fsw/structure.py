@@ -814,6 +814,28 @@ def _bases(proj, cls, seen=None):
     return seen
 
 
+def one_of_impls(proj, src, line):
+    """这一行在某个类的一个方法里，而项目里还有别的类写了同名方法（同一个接口的几种实现，运行时只走其中一种）：
+    返回 (类名, 方法名, [别的类])；不是就返回 None。"""
+    head = ""
+    for i in src.chain(src.pos(line, "before")):
+        if src.blocks[i]["kind"] == "function":
+            head, name = src.blocks[i]["head"], src.blocks[i]["name"]
+            break
+    cls = _class_of(head)
+    if not cls:
+        return None
+    others = set()
+    for rel, k in _sites_any(proj, rf"\b\w+::{re.escape(name)}\s*\(", name):
+        o = proj.file(rel)
+        for b in o.blocks:
+            if b["kind"] == "function" and b["name"] == name and o.line_of(b["open"]) in (k, k + 1, k + 2):
+                c2 = _class_of(b["head"])
+                if c2 and c2 != cls:
+                    others.add(c2)
+    return (cls, name, sorted(others)) if others else None
+
+
 def _sites_any(proj, pattern, word):
     rx = re.compile(pattern)
     out = []
@@ -1336,7 +1358,7 @@ def _kind(s):
 
 def build_segments(steps, segments):
     """要测的这条线的段由码表按点的先后连（模型写的段只拿来用名字、谁在忙、在不在设备外）：
-    同一步的"最后一次"从这一步的"第一次"量起；"第一次"不从别处的"最后一次"量起（那样会是负的），往前找最近一个不是"最后一次"的点；
+    同一步（或同一行拆成的几步）的"最后一次"从那一句的"第一次"量起；"第一次"不从别处的"最后一次"量起（那样会是负的），往前找最近一个不是"最后一次"的点；
     其余从紧挨着的上一个点量起。先后说不准、最后结果和全部放完从哪儿量，再交给 repair_segments 理。返回 (段, [说明])。"""
     main = [x for x in steps if x.get("line_of") in ("start", "main")]
     model = [g for g in segments or [] if isinstance(g, dict)]
@@ -1347,7 +1369,9 @@ def build_segments(steps, segments):
         k = _kind(p)
         a = None
         if k == "last":
-            a = next((x for x in main[:i] if x.get("chain_step") == p.get("chain_step") and p.get("chain_step") is not None and _kind(x) == "first"), None)
+            a = next((x for x in main[:i] if _kind(x) == "first" and (
+                (x.get("chain_step") == p.get("chain_step") and p.get("chain_step") is not None)
+                or (x.get("file") and (x.get("file"), x.get("line"), x.get("where")) == (p.get("file"), p.get("line"), p.get("where"))))), None)  # 同一句的第一次（同一步，或同一行拆成的前一步）
         if a is None and k in ("first", "last"):
             a = next((x for x in reversed(main[:i]) if _kind(x) != "last"), None)
         if a is None:

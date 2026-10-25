@@ -576,7 +576,8 @@ def _fallback(proj, file, line, cands, single, text=""):
     """不在候选里时换成哪一个（找不准就 None，不换）：
     1. 这一步自己的说明（text）里写了某种消息的名字（候选比较的那个字符串）：换成这种消息那一支里的第一个候选；
     2. 同一个函数里，和它同在一支判断里的候选（最里层那一支相同的优先，同样深取离得近的）；只同在函数、回调里不算；
-    3. 这一类只能有一处（single：输入结束、模式、协议）：同一个函数里最近的候选，或者只有一个候选就用它。"""
+    3. 这一类只能有一处（single：输入结束、模式、协议）：同一个函数里最近的候选，或者只有一个候选就用它。
+    写在同一个接口几种实现里的一种里的（比如某一种连接方式自己的发送）：换成候选里调用这个方法的那一句。"""
     words = {w.lower() for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text or "")}
     scored = [(sum(w.lower() in words for w in _msg_words(c)), bool(_msg_words(c)) and _msg_words(c)[-1].lower() in words, c) for c in cands]
     best = max(((n, last) for n, last, _c in scored), default=(0, False))
@@ -585,6 +586,12 @@ def _fallback(proj, file, line, cands, single, text=""):
     src = proj.file(file)
     if src is None or not 1 <= line <= len(src.lines):
         return cands[0] if single and len(cands) == 1 else None
+    hit = structure.one_of_impls(proj, src, line)
+    if hit:  # 写在几种实现里的一种里（只在这种实现下才走到）：换成候选里调用这个方法的那一句（哪种实现都会经过）
+        call = re.compile(rf"(?:->|\.)\s*{re.escape(hit[1])}\s*\(")
+        callers = [c for c in cands if call.search(c.get("code") or "")]
+        if callers:
+            return callers[0]
     opened = [i for i in structure._opened_on(src, line) if src.blocks[i]["kind"] != "lambda"]
     at = src.pos(line, "after") if opened else src.pos(line, "before")  # 判断开头那一行：算在它打开的那一支里
     fn = structure.func_at(src, line)[0]
@@ -874,6 +881,10 @@ def parse(text, root, chain=None, strict=False):
                      found=[s["name"] for s in steps])
     if strict and data.get("chain"):  # 两步识别的新结果：关键步骤上的点和主线的段由码表按流程放、连，再理顺（负段、先后说不准、没量到的最后结果）
         steps, pnotes = place_role_points(root, steps, data["chain"])
+        side_add, onotes = side_for_one_impl(root, steps, data["chain"], data.get("segments"))
+        if side_add:
+            data["side_segments"] = [g for g in data.get("side_segments") or [] if isinstance(g, dict)] + side_add
+            pnotes = pnotes + onotes
         built, bnotes = structure.build_segments(steps, data.get("segments"))
         data["segments"], notes = structure.repair_segments(root, steps, built, data["chain"])
         data["seg_repairs"] = pnotes + bnotes + notes
@@ -917,6 +928,80 @@ def _snap_plain(src, c, pts, notes, code):
             p["once"] = "first"
 
 
+
+def _merge_same_line(jobs, by_n, first_n):
+    """几步写在同一文件同一行、又都是要 first/last 的（比如模型把首段输出、末段输出拆成两步）：同一句只放一对点，
+    first 放在其中最早那一步，last 放在最晚那一步，中间的步骤不再放；不再每一步各放一对（同一行四个点、两两同时）。"""
+    single = {g[0]: plan[g[0]] for g, plan in jobs}
+    out, done = [], set()
+    for g, plan in jobs:
+        n = g[0]
+        if n in done:
+            continue
+        same = sorted(m for m in structure._same_line_steps(by_n, n) if m in single and m not in done and m != first_n
+                      and set(single[m]) <= {"first", "last"}) if n != first_n else []
+        if len(same) < 2 or n not in same:
+            out.append([g, plan])
+            done.add(n)
+            continue
+        kinds = set().union(*(single[m] for m in same))
+        merged = {m: [] for m in same}
+        if "first" in kinds:
+            merged[same[0]].append("first")
+        if "last" in kinds:
+            merged[same[-1]].append("last")
+        out.append([same, merged])
+        done |= set(same)
+    return out
+
+
+
+def side_for_one_impl(root, steps, chain, segments):
+    """没标角色的一步落在"几种实现里的一种"里（比如几种连接方式各写了一份发送），而流程里另有一步就是调用这个方法的那一句：
+    那一句不管走哪种实现都会执行，主线用它量；这一步上的点只在这种实现下才会触发，改成顺带那条线，从调用那一步的同类点量起。
+    返回 (加的旁线段, [说明])。"""
+    proj = structure.Project(root)
+    by_n = {c["n"]: c for c in chain if isinstance(c, dict) and isinstance(c.get("n"), int)}
+    if not by_n:
+        return [], []
+    first_n, added, notes = min(by_n), [], []
+    model = [g for g in segments or [] if isinstance(g, dict)]
+    for n, c in sorted(by_n.items()):
+        roles = c.get("role") or []
+        if n == first_n or any(r in (roles if isinstance(roles, list) else str(roles)) for r in POINT_ROLES):
+            continue
+        mine = [x for x in steps if x.get("chain_step") == n and x.get("line_of") in ("start", "main")]
+        src = proj.file(c.get("file") or "")
+        line = c.get("line")
+        if not mine or src is None or not isinstance(line, int) or not 1 <= line <= len(src.lines):
+            continue
+        hit = structure.one_of_impls(proj, src, line)
+        if not hit:
+            continue
+        cls, name, others = hit
+        call = re.compile(rf"(?:->|\.)\s*{re.escape(name)}\s*\(")
+        caller = None
+        for m, d in sorted(by_n.items()):
+            s2 = proj.file(d.get("file") or "") if m != n else None
+            ln = d.get("line")
+            if s2 is not None and isinstance(ln, int) and 1 <= ln <= len(s2.lines) and call.search(s2.clines[ln - 1]) \
+                    and any(x.get("chain_step") == m and x.get("line_of") in ("start", "main") for x in steps):
+                caller = m
+                break
+        if caller is None:
+            continue
+        base = [x for x in steps if x.get("chain_step") == caller and x.get("line_of") in ("start", "main")]
+        for q in mine:
+            q["line_of"] = "side"
+            k = structure._kind(q)
+            a = next((x for x in base if structure._kind(x) == k), None) or next((x for x in base if structure._kind(x) != "last"), base[0])
+            g = next((g for g in model if g.get("to") == q.get("id")), None)
+            added.append({"from": a.get("id"), "to": q.get("id"), "name": (g or {}).get("name") or f"{a.get('name')}到{q.get('name')}",
+                          "who": (g or {}).get("who") or "", "outside": bool((g or {}).get("outside")), "added": True})
+        notes.append(f"第 {n} 步在 {cls}::{name} 里，这只是几种实现中的一种（另有 {'、'.join(others[:3])}），换一种时走不到："
+                     f"它的点改成顺带那条线，从第 {caller} 步调用 {name} 的那一句量起；主线用第 {caller} 步")
+    return added, notes
+
 def place_role_points(root, steps, chain):
     """第 1 步和标了角色的步骤上的点由码表放：反复执行的放 first、last 两个，一轮一次的放一个，都插在那一步那一行前面。
     模型在这一步写的点留着名字、felt 这些，只改位置和 first/last/once；多出来的去掉，要两个却只放了一个的补上另一个。
@@ -936,6 +1021,7 @@ def place_role_points(root, steps, chain):
                   and not any(r in (by_n.get(x["chain_step"], {}).get("role") or []) for r in POINT_ROLES)]:
             keep.remove(x)
             notes.append(f"去掉「{x.get('name')}」：第 {x['chain_step']} 步排在最后结果、全部放完之后，是下一轮的事")
+    jobs, plain = [], []
     for n, c in sorted(by_n.items()):
         roles = c.get("role") or []
         roles = [r for r in POINT_ROLES if r in (roles if isinstance(roles, list) else str(roles))]
@@ -945,39 +1031,63 @@ def place_role_points(root, steps, chain):
                 structure.real_stmt(src, line) or structure.call_in_if(src.clines[line - 1])):
             continue
         if n != first_n and not roles:
-            _snap_plain(src, c, [x for x in keep if x.get("chain_step") == n and x.get("line_of") != "side"], notes, check_location(root, c["file"], line)[0])
+            plain.append((n, c, src, line))
             continue
-        want = _want(roles, c.get("repeat") == "repeat")
-        mine = [x for x in keep if x.get("chain_step") == n]  # 标了角色的步骤是主线：写成旁线的也算这一步的点
+        jobs.append([[n], {n: _want(roles, c.get("repeat") == "repeat")}])
+    jobs = _merge_same_line(jobs, by_n, first_n)
+    for n, c, src, line in plain:
+        _snap_plain(src, c, [x for x in keep if x.get("chain_step") == n and x.get("line_of") != "side"], notes, check_location(root, c["file"], line)[0])
+    for group, plan in jobs:
+        mine = [x for x in keep if x.get("chain_step") in group]  # 标了角色的步骤是主线：写成旁线的也算这一步的点
         if not mine:  # 模型在这一步一个点都没放：不替它加（结构检查照旧会指出、追问）
             continue
-        code, _p = check_location(root, c["file"], line)
-        for k in want:
-            p = next((x for x in mine if structure._kind(x) == k), None) or (mine[0] if mine else None)
-            if p is not None:
-                mine.remove(p)
-                was = (p.get("file"), p.get("line"), structure._kind(p))
-            else:
-                pid = next(f"T{n}{suffix}" for suffix in ("", "b", "c", "d") if f"T{n}{suffix}" not in used)
-                used.add(pid)
-                nm = re.split(r"[，,（(]", str(c.get("what") or ""))[0][:10] or f"第 {n} 步"
-                sib = next((x for x in keep if x.get("chain_step") == n and x.get("line_of") != "side"), None)
-                p = {"id": pid, "name": nm + {"first": "（首次）", "last": "（末次）"}.get(k, ""), "sure": "中", "why": "码表按流程放在这一步",
-                     "doubt": "", "always": True, "felt": "last" if k == "last" and sib and sib.get("felt") else "",
-                     "kind": (sib or {}).get("kind") or "" if k == "last" and sib and sib.get("felt") else "", "added": True}
-                keep.insert(keep.index(sib) + 1 if sib in keep else len(keep), p)
-                was = None
-            p.update(file=c["file"], line=line, func=c.get("func") or p.get("func") or "", where="before", once=k, code=code, loc_ok=True,
-                     chain_step=n, line_of="start" if n == first_n else "main")
-            if was is None:
-                notes.append(f"补上第 {n} 步的点「{p['name']}」（{k}）")
-            elif was != (c["file"], line, k):
-                notes.append(f"「{p['name']}」按流程放到第 {n} 步那一行（{c['file']}:{line}，{k}）")
-            if p.get("doubt", "").startswith("和「"):  # 同一行的 first、last 两个点：本来就是同一句的第一次和最后一次
-                p["doubt"] = re.sub(r"^和「[^」]*」插在同一行代码上，两点记到的时间一样，分不出先后；?", "", p["doubt"])
+        for n in group:
+            c = by_n[n]
+            line = c["line"]
+            code, _p = check_location(root, c["file"], line)
+            for k in plan.get(n) or []:
+                p = (next((x for x in mine if x.get("chain_step") == n and structure._kind(x) == k), None)
+                     or next((x for x in mine if structure._kind(x) == k), None)
+                     or next((x for x in mine if x.get("chain_step") == n), None) or (mine[0] if mine else None))
+                if p is not None:
+                    mine.remove(p)
+                    was = (p.get("file"), p.get("line"), structure._kind(p), p.get("chain_step"))
+                else:
+                    pid = next(f"T{n}{suffix}" for suffix in ("", "b", "c", "d") if f"T{n}{suffix}" not in used)
+                    used.add(pid)
+                    nm = re.split(r"[，,（(]", str(c.get("what") or ""))[0][:10] or f"第 {n} 步"
+                    sib = next((x for x in keep if x.get("chain_step") in group and x.get("line_of") != "side"), None)
+                    p = {"id": pid, "name": nm + ({"first": "（首次）", "last": "（末次）"}.get(k, "") if len(group) == 1 else ""),
+                         "sure": "中", "why": "码表按流程放在这一步",
+                         "doubt": "", "always": True, "felt": "last" if k == "last" and sib and sib.get("felt") else "",
+                         "kind": (sib or {}).get("kind") or "" if k == "last" and sib and sib.get("felt") else "", "added": True}
+                    keep.insert(keep.index(sib) + 1 if sib in keep else len(keep), p)
+                    was = None
+                p.update(file=c["file"], line=line, func=c.get("func") or p.get("func") or "", where="before", once=k, code=code, loc_ok=True,
+                         chain_step=n, line_of="start" if n == first_n else "main")
+                if was is None:
+                    notes.append(f"补上第 {n} 步的点「{p['name']}」（{k}）")
+                elif was != (c["file"], line, k, n):
+                    notes.append(f"「{p['name']}」按流程放到第 {n} 步那一行（{c['file']}:{line}，{k}）")
+                if p.get("doubt", "").startswith("和「"):  # 同一行的 first、last 两个点：本来就是同一句的第一次和最后一次
+                    p["doubt"] = re.sub(r"^和「[^」]*」插在同一行代码上，两点记到的时间一样，分不出先后；?", "", p["doubt"])
         for x in mine:  # 这一步多出来的点
             keep.remove(x)
-            notes.append(f"去掉「{x.get('name')}」：第 {n} 步的点由码表按流程放")
+            notes.append(f"去掉「{x.get('name')}」：第 {x.get('chain_step')} 步的点由码表按流程放")
+    roled = {n for g, _p in jobs for n in g} | {first_n}
+    seen = {}
+    for x in [x for x in keep if x.get("line_of") in ("start", "main") and x.get("file")]:
+        key = (x.get("file"), x.get("line"), x.get("where") or "before", structure._kind(x))
+        y = seen.get(key)
+        if y is None:
+            seen[key] = x
+            continue
+        drop = x if x.get("chain_step") not in roled else (y if y.get("chain_step") not in roled else None)
+        if drop is None:
+            continue
+        keep.remove(drop)
+        seen[key] = x if drop is y else y
+        notes.append(f"去掉「{drop.get('name')}」：和「{seen[key].get('name')}」插在同一处、记的是同一次，两点时间一样")
     order = {"first": 0, "once": 1, "last": 2}
     main = iter(sorted((x for x in keep if x.get("line_of") in ("start", "main")),
                        key=lambda x: (x.get("chain_step") if isinstance(x.get("chain_step"), int) else 10 ** 6, order[structure._kind(x)])))
