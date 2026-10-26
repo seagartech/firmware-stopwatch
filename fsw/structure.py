@@ -1085,11 +1085,17 @@ def _check_one(proj, s, branch="", strict=False, chain_line=None):
         # 流程里这一步就是这一行，而且动作（发送、调用）本身写在 if 条件里：只能放在这一行前面，不算错
         s["chk"].append({"level": "tip", "kind": "anchor",
                          "text": f"第 {line} 行「{_cond_text(src.lines[line - 1].strip())}」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"})
+    elif where == "before" and s.get("lifted"):
+        # 原来那一句只在按设置选的某一支里（比如某个协议版本），码表挪到了整个判断前面：每种设置都会经过
+        s["chk"].append({"level": "tip", "kind": "branch", "text": s["lifted"]})
     elif where == "before" and re.match(r"(?:if|while|for|switch|do)\b", src.clines[line - 1].strip()):
         # 旧写法：插在判断或循环开头之前。旧结果、演示数据只提醒；两步识别的新结果算失败（多半是想放进这一支、这个循环里）
         s["chk"].append({"level": "fail" if strict else "tip", "kind": "anchor",
                          "text": f"参照的第 {line} 行「{_cond_text(src.lines[line - 1].strip())}」是条件或循环的开头：点放在整个判断前面，"
                                  "不在任何一支里。要放进某一支，参照句应写那一支大括号里的第一句"})
+    alt = None if s.get("lifted") else alt_branch(src, line)
+    if alt:
+        s["chk"].append({"level": "fail" if strict else "tip", "kind": "branch", "text": alt_text(src, line, alt)})
     t = None if t else check_branch(src, line, where)
     if t:
         kw = _CTRL_AFTER.match(src.clines[line - 1].strip()).group(1).split()[0]
@@ -1668,3 +1674,163 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
         if not s["struct_ok"]:
             s["sure"] = "低"
     return steps
+
+
+# ---------- 按设置选一支的判断（协议版本、连接方式这类）：点只在其中一支里 ----------
+_CONST = re.compile(r"^(?:k[A-Z]\w*|[A-Z][A-Z0-9_]*|true|false|nullptr|NULL|this|sizeof)$")
+_CALLEE = re.compile(r"([A-Za-z_]\w*)\s*(?:<[^<>()]*>)?\s*\(")
+_ALT_NOT_CALL = KEYWORDS | {"return", "static_cast", "reinterpret_cast", "const_cast", "dynamic_cast", "sizeof", "decltype"}
+
+
+def _callee(src, line):
+    """这一句调用的函数名（a->b(…) 取 b；auto x = f(…) 取 f）；不是调用返回 None。"""
+    c = src.clines[line - 1]
+    for m in _CALLEE.finditer(c):
+        if m.group(1) not in _ALT_NOT_CALL:
+            return m.group(1)
+    return None
+
+
+def _calls_in(text):
+    return {m.group(1) for m in _CALLEE.finditer(text) if m.group(1) not in _ALT_NOT_CALL}
+
+
+def _cond_of(head):
+    m = re.match(r"(?:else\s+)?(?:if|switch)\s*\((.*)\)\s*$", head.strip())
+    return m.group(1) if m else None
+
+
+def _setting_names(src, cond, fn):
+    """判断条件里用到的量：全是"设置"（成员、全局，这个函数里不赋值、也不是参数或局部变量）时返回它们的名字，
+    条件里有函数调用（比如查当前状态、比较消息类型）、用到局部变量或参数、在这个函数里改过的，返回 None（是运行时每次不同的东西）。"""
+    if cond is None:
+        return None
+    if re.search(r"[A-Za-z_]\w*\s*\(", cond):
+        return None
+    body = src.code[src.blocks[fn]["open"]:src.blocks[fn]["close"]] if fn is not None else ""
+    head = src.blocks[fn]["head"] if fn is not None else ""
+    names = set()
+    for m in re.finditer(r"(?<![\w.>:])([A-Za-z_]\w*)", re.sub(r"(?:->|\.)\s*[A-Za-z_]\w*", "", cond)):
+        n = m.group(1)
+        if _CONST.match(n) or n.isdigit():
+            continue
+        if re.search(rf"\b{re.escape(n)}\b", head):
+            return None  # 参数
+        if re.search(rf"(?<![=!<>]){re.escape(n)}\s*(?:[+\-*/|&^]?=(?!=)|\+\+|--)|(?:\+\+|--)\s*{re.escape(n)}\b", body):
+            return None  # 这个函数里改过
+        if re.search(rf"\b(?:auto|bool|char|int|long|short|float|double|size_t|u?int\d+_t|unsigned|signed|const)\b[\w\s:<>*&]*\b{re.escape(n)}\s*[=;\[({{]", body):
+            return None  # 局部变量
+        names.add(n)
+    return names or None
+
+
+def alt_text(src, line, alt, moved=False):
+    """给人看的说明：这一句只在某一种设置下才走。"""
+    what = "、".join(alt["names"])
+    base = (f"第 {line} 行只在「{_branch_cond(src, line, alt)}」这一种设置下才走"
+            f"（第 {alt['head']} 行按 {what} 分成 {alt['n']} 支，每一支都调用 {alt['callee']}，设备只走其中一支）")
+    if moved:
+        return base + f"；码表把点挪到第 {alt['head']} 行这个判断前面，不管哪种设置都会记到"
+    return base + f"；设备不是这种设置时一次也记不到，点要放在第 {alt['head']} 行这个判断前面"
+
+
+def _branch_cond(src, line, alt):
+    at = src.pos(line, "before")
+    for i in src.chain(at):
+        b = src.blocks[i]
+        if b["kind"] == "branch":
+            c = _cond_of(b["head"]) if b["name"] != "case" else None
+            if c:
+                return c
+            m = next((k for k in range(line, 0, -1) if re.match(r"\s*case\b", src.clines[k - 1])), None)
+            return src.lines[m - 1].strip().rstrip(":") if m else alt["cond"]
+    return alt["cond"]
+
+
+def alt_branch(src, line):
+    """这一行在"按设置选一支"的判断里的某一支（不是最后那个默认的 else / default），而别的每一支也调用同一个函数
+    （比如按协议版本各组一份数据、都交给同一个回调或发送函数；设备只走其中一支，插在这一支里换个设置就一次也记不到）：
+    返回 {"head": 整个判断开头那一行, "callee", "cond", "names"}；不是就 None。
+    最后那个默认的 else / default 不算（什么都没设时走它）；条件里有函数调用、局部变量、参数、在这个函数里改过的量不算
+    （那是运行时的情况，比如消息类型、当前状态、检测结果，各支本来就是不同的事）。"""
+    if src is None or not 1 <= line <= len(src.lines):
+        return None
+    callee = _callee(src, line)
+    if not callee:
+        return None
+    at = src.pos(line, "before")
+    chain = src.chain(at)
+    fn = next((i for i in chain if src.blocks[i]["kind"] in ("function", "lambda")), None)
+    for i in chain:
+        b = src.blocks[i]
+        if b["kind"] in ("function", "lambda", "loop"):
+            return None
+        if b["kind"] != "branch":
+            continue
+        if b["name"] in ("switch", "case", "default"):
+            sw = i if b["name"] == "switch" else b["parent"]
+            if sw is None or src.blocks[sw]["name"] != "switch":
+                return None
+            return _alt_switch(src, sw, line, callee, fn)
+        return _alt_if(src, i, callee, fn)
+    return None
+
+
+def _alt_if(src, i, callee, fn):
+    par = src.blocks[i]["parent"]
+    sib = [k for k, b in enumerate(src.blocks) if b["parent"] == par and b["kind"] == "branch"]
+    k = sib.index(i)
+    lo = k
+    while lo > 0 and src.blocks[sib[lo]]["head"].startswith("else") and \
+            re.fullmatch(r"\s*else\b.*", src.code[src.blocks[sib[lo - 1]]["close"] + 1:src.blocks[sib[lo]]["open"]], re.S):
+        lo -= 1
+    hi = k
+    while hi + 1 < len(sib) and src.blocks[sib[hi + 1]]["head"].startswith("else") and \
+            re.fullmatch(r"\s*else\b.*", src.code[src.blocks[sib[hi]]["close"] + 1:src.blocks[sib[hi + 1]]["open"]], re.S):
+        hi += 1
+    members = sib[lo:hi + 1]
+    if len(members) < 2 or not src.blocks[members[0]]["head"].startswith("if"):
+        return None
+    if src.blocks[i]["head"].strip() == "else":
+        return None  # 默认那一支
+    names = set()
+    for m in members:
+        h = src.blocks[m]["head"].strip()
+        if h == "else":
+            continue
+        got = _setting_names(src, _cond_of(h), fn)
+        if not got:
+            return None
+        names |= got
+    for m in members:
+        if m != i and callee not in _calls_in(src.code[src.blocks[m]["open"] + 1:src.blocks[m]["close"]]):
+            return None
+    head = src.line_of(src.blocks[members[0]]["open"])
+    while head > 1 and not re.match(r"\s*if\b", src.clines[head - 1]):
+        head -= 1
+    return {"head": head, "callee": callee, "cond": " / ".join(_cond_of(src.blocks[m]["head"]) or "其他" for m in members),
+            "names": sorted(names), "n": len(members)}
+
+
+def _alt_switch(src, sw, line, callee, fn):
+    b = src.blocks[sw]
+    names = _setting_names(src, _cond_of(b["head"]), fn)
+    if not names:
+        return None
+    first, last = src.line_of(b["open"]), src.line_of(b["close"])
+    labels = [k for k in range(first, last + 1) if re.match(r"\s*(?:case\b.*?:|default\s*:)", src.clines[k - 1])
+              and (lambda c: c and (c[0] == sw or src.blocks[c[0]]["parent"] == sw))(src.chain(src.pos(k, "before")))]
+    mine = max((k for k in labels if k <= line), default=None)
+    if mine is None or len(labels) < 2 or re.match(r"\s*default\s*:", src.clines[mine - 1]):
+        return None
+    ends = labels[1:] + [last]
+    for a, e in zip(labels, ends):
+        if a == mine:
+            continue
+        text = "\n".join(src.clines[a - 1:e - 1])
+        if callee not in _calls_in(text):
+            return None
+    head = first
+    while head > 1 and not re.match(r"\s*switch\b", src.clines[head - 1]):
+        head -= 1
+    return {"head": head, "callee": callee, "cond": _cond_of(b["head"]), "names": sorted(names), "n": len(labels)}

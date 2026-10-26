@@ -880,10 +880,12 @@ def parse(text, root, chain=None, strict=False):
         return _fail("bad_reply", "大模型只给出了不到 2 个步骤，量不出用时。点\"重试\"再找一次，或者换个说法写\"测从什么到什么\"。",
                      found=[s["name"] for s in steps])
     if strict and data.get("chain"):  # 两步识别的新结果：关键步骤上的点和主线的段由码表按流程放、连，再理顺（负段、先后说不准、没量到的最后结果）
+        data["chain"] = [dict(c) if isinstance(c, dict) else c for c in data["chain"]]  # 下面会改行号：不动调用方的流程
+        lnotes = lift_alt_branches(root, steps, data["chain"])
         steps, pnotes = place_role_points(root, steps, data["chain"])
         steps, snotes = drop_stream_points(steps, data["chain"])
         steps, fnotes = follow_start_points(steps, data["chain"])
-        pnotes = pnotes + snotes + fnotes
+        pnotes = lnotes + pnotes + snotes + fnotes + round_end_always(steps, data["chain"])
         side_add, onotes = side_for_one_impl(root, steps, data["chain"], data.get("segments"))
         if side_add:
             data["side_segments"] = [g for g in data.get("side_segments") or [] if isinstance(g, dict)] + side_add
@@ -904,7 +906,9 @@ POINT_ROLES = ROLES + (OUTPUT, DONE)
 # 码表放点、连段的规则版本：存下的两步识别结果版本不同，沿用时用存下的大模型回答按现在的规则重排一遍（不调大模型）
 # 2：去掉起点之前就一直在跑的流水线中间那几步；全部放完每次都记
 # 3：起点和第一个结果之间的点跟着起点记（起点一轮报好几次时，每报一次重新记）
-RULES_VER = 3
+# 4：只在按设置选的某一支里（比如某个协议版本）、别的支也调用同一个函数的点，挪到整个判断前面；
+#    一轮一次的主线点全被标成"不一定走"时，把最后结果那一步改回一定走（一轮结束要靠它）
+RULES_VER = 4
 RESULT_ROLES = ("首个结果", OUTPUT, "最后结果", DONE)  # 设备拿到了结果、开始往外给的那几步（不算上传）
 
 
@@ -927,11 +931,16 @@ def _snap_plain(src, c, pts, notes, code):
     反复执行的一步写了 once 的改成 first（每圈都执行，只能记第一次）。在那一支里的真语句上的不动。"""
     for p in pts:
         ok_line = p.get("file") == c["file"] and isinstance(p.get("line"), int) and 1 <= p["line"] <= len(src.lines)
-        good = ok_line and (structure.real_stmt(src, p["line"]) or (structure.call_in_if(src.clines[p["line"] - 1]) and p.get("where") != "after")) \
-            and structure.in_step_area(src, c["line"], src.pos(p["line"], p.get("where") or "before"))
+        if c.get("lifted"):  # 这一步挪到了整个判断前面（见 lift_alt_branches）：点只能在那一行前面
+            good = ok_line and p["line"] == c["line"] and p.get("where") == "before"
+        else:
+            good = ok_line and (structure.real_stmt(src, p["line"]) or (structure.call_in_if(src.clines[p["line"] - 1]) and p.get("where") != "after")) \
+                and structure.in_step_area(src, c["line"], src.pos(p["line"], p.get("where") or "before"))
         if not good:
             old = f"{p.get('file')}:{p.get('line')}"
             p.update(file=c["file"], line=c["line"], where="before", code=code, loc_ok=True)
+            if c.get("lifted"):
+                p["lifted"] = c["lifted"]
             notes.append(f"「{p.get('name')}」不在第 {c['n']} 步那一支里的一句真语句上（原来 {old}），挪到那一步那一行前面")
         if c.get("repeat") == "repeat" and structure._kind(p) == "once":
             p["once"] = "first"
@@ -1065,6 +1074,58 @@ def follow_start_points(steps, chain):
                    f"这几步在起点和第一个结果之间，每报一次起点就重新记，量的是同一次之后的那一下"]
 
 
+def lift_alt_branches(root, steps, chain):
+    """流程里一步（或旁线上的一个点）写在"按设置选一支"的判断的某一支里，而别的每一支也调用同一个函数
+    （比如按协议版本各解一种包、都交给同一个回调）：设备只走其中一支，设置不同就一次也记不到（10-26 真测：
+    「首个结果到达」放在协议 3 那一支，设备用协议 1，一直等不到）。挪到整个判断前面（不管哪种设置都会经过）。
+    最后那个默认的 else / default 不挪（什么都没设时走它，也是之前测通过的那种）。返回 [说明]。"""
+    proj = structure.Project(root)
+    notes = []
+    for c in chain:
+        if not isinstance(c, dict) or not isinstance(c.get("line"), int):
+            continue
+        src = proj.file(c.get("file") or "")
+        alt = structure.alt_branch(src, c["line"]) if src is not None else None
+        if not alt:
+            continue
+        old = c["line"]
+        c["lifted_from"] = old
+        c["lifted"] = structure.alt_text(src, old, alt, moved=True)
+        c["line"] = alt["head"]
+        for x in steps:
+            if x.get("chain_step") == c.get("n") and x.get("file") == c.get("file") and x.get("line_of") != "side":
+                x.update(line=alt["head"], where="before", lifted=c["lifted"], code=check_location(root, c["file"], alt["head"])[0], loc_ok=True)
+        notes.append(f"第 {c.get('n')} 步：" + c["lifted"])
+    for x in steps:  # 旁线上的点、没对应流程哪一步的点：直接看它自己那一句
+        if x.get("lifted") or not isinstance(x.get("line"), int) or (x.get("line_of") != "side" and x.get("chain_step") is not None):
+            continue
+        src = proj.file(x.get("file") or "")
+        alt = structure.alt_branch(src, x["line"]) if src is not None else None
+        if not alt:
+            continue
+        old = x["line"]
+        x.update(line=alt["head"], where="before", lifted=structure.alt_text(src, old, alt, moved=True),
+                 code=check_location(root, x["file"], alt["head"])[0], loc_ok=True)
+        notes.append(f"「{x.get('name')}」：" + x["lifted"])
+    return notes
+
+
+def round_end_always(steps, chain):
+    """一轮结束要靠主线上最后一个一轮一次的点（码表在它后面清零、把"最后一次"的点报出来）。
+    模型把这几个点全标成"不一定走"（always false）时，就没有一轮结束了：要最后一次的点一直报不出来（10-26 真测：上行末包一直等不到）。
+    把标了最后结果的那一步（没有就取流程最后的那个）改回一定走。返回 [说明]。"""
+    once = [x for x in steps if x.get("line_of") == "main" and structure._kind(x) == "once"]
+    if not once or any(x.get("always", True) for x in once):
+        return []
+    by_n = {c.get("n"): c for c in chain if isinstance(c, dict)}
+    ends = [x for x in once if "最后结果" in _roles_of(by_n.get(x.get("chain_step")) or {})]
+    pick = (ends or sorted(once, key=lambda x: x.get("chain_step") if isinstance(x.get("chain_step"), int) else -1))[-1]
+    pick["always"] = True
+    pick["end_why"] = "一轮结束靠这个点"
+    return [f"「{pick.get('name')}」改成每轮都走：一轮一次的点模型全标成了不一定走，一轮结束要靠这一个（在它后面清零、报出最后一次的点）；"
+            f"设备如果真不走这一步（比如设成了别的模式），试一次时会提示"]
+
+
 def place_role_points(root, steps, chain):
     """第 1 步和标了角色的步骤上的点由码表放：反复执行的放 first、last 两个，一轮一次的放一个，都插在那一步那一行前面。
     模型在这一步写的点留着名字、felt 这些，只改位置和 first/last/once；多出来的去掉，要两个却只放了一个的补上另一个。
@@ -1091,7 +1152,7 @@ def place_role_points(root, steps, chain):
         src = proj.file(c.get("file") or "")
         line = c.get("line")
         if src is None or not isinstance(line, int) or not 1 <= line <= len(src.lines) or not (
-                structure.real_stmt(src, line) or structure.call_in_if(src.clines[line - 1])):
+                c.get("lifted") or structure.real_stmt(src, line) or structure.call_in_if(src.clines[line - 1])):
             continue
         if n != first_n and not roles:
             plain.append((n, c, src, line))
@@ -1128,6 +1189,8 @@ def place_role_points(root, steps, chain):
                     was = None
                 p.update(file=c["file"], line=line, func=c.get("func") or p.get("func") or "", where="before", once=k, code=code, loc_ok=True,
                          chain_step=n, line_of="start" if n == first_n else "main")
+                if c.get("lifted"):
+                    p["lifted"] = c["lifted"]
                 if k == "once" and n != first_n and DONE in _roles_of(c) and OUTPUT not in _roles_of(c):
                     # 全部放完（播放队列放空、动作做完）：一轮里可能放空好几次（回复分几句播，每句之间都会放空一下），
                     # 只记第一次就只量到第一句。每次都记，码表取这一轮最后那一次
@@ -1407,11 +1470,78 @@ def _load_flow(f, root):
         return None
 
 
+def _older_ok(root, r):
+    """源码改过（指纹变了）以后，上一版源码的识别结果还能不能原样用：只认两步识别的新结果，并且
+    - 理清的流程按现在的源码重新核对没有问题；
+    - 流程里每一步、每个计时点那一行的代码和当时一模一样；
+    - 码表在现在的源码里找到的候选和当时一样（候选是从整份源码里按结构找的：相关的代码变了，候选就会变）。
+    有一样对不上返回原因，都对得上返回 None。"""
+    if not (r.get("ok") and r.get("strict") is True and r.get("reply") and isinstance(r.get("chain"), list) and isinstance(r.get("flow"), dict)):
+        return "不是两步识别的结果"
+    try:
+        _flow, bad = check_chain(root, json.loads(json.dumps(r["flow"])))
+    except Exception as e:
+        return f"流程核对出错（{type(e).__name__}）"
+    if bad:
+        return "流程对不上现在的源码：" + "；".join(map(str, bad[:2]))
+    for x in list(r["chain"]) + list(r.get("steps") or []):
+        if not isinstance(x, dict) or not x.get("file") or not isinstance(x.get("line"), int):
+            continue
+        ln = x.get("lifted_from") or x["line"]  # 流程里挪到判断前面的一步：存的是原来那一句
+        code, problem = check_location(root, x["file"], ln)
+        if problem or (x.get("code") and not _same_code(x["code"], code)):
+            return f"{x['file']} 第 {ln} 行变了"
+    try:
+        proj = structure.Project(root)
+        now = cands_mod.find(root, r.get("chain_category") or r.get("category") or "")
+        saved = [c for c in r.get("candidates") or [] if isinstance(c, dict) and not structure.alt_branch(proj.file(c.get("file") or ""), c.get("line") or 0)]
+    except Exception as e:
+        return f"候选核对出错（{type(e).__name__}）"
+    key = lambda L: [(c.get("role"), c.get("file"), c.get("line"), str(c.get("code") or "").strip()) for c in L]
+    if key(now) != key(saved):
+        return "码表在源码里找到的候选变了"
+    return None
+
+
+def reuse_older(project_dir, root, what, provider, fingerprint):
+    """源码改过（指纹变了）、这一版还没识别过：上一版（项目记下的历史指纹，最新的先）同样要测的、同一个大模型、同一套提示词的结果，
+    相关的代码都没变（见 _older_ok）就存成这一版的，不再调用大模型；对不上返回 (None, [原因])。"""
+    try:
+        hist = json.loads((Path(project_dir) / "project.json").read_text(encoding="utf-8")).get("history") or []
+    except (OSError, ValueError, AttributeError):
+        hist = []
+    why = []
+    for fp in reversed([h for h in hist if isinstance(h, str) and h != fingerprint]):
+        f = _cache_file(project_dir, fp, what, provider)
+        if not f.is_file():
+            continue
+        try:
+            r = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        bad = _older_ok(root, r)
+        if bad:
+            why.append(bad)
+            continue
+        r["reused_from"] = fp
+        r["rules"] = None  # 下面按现在的规则重排一遍（不调大模型）
+        out = _cache_file(project_dir, fingerprint, what, provider)
+        out.write_text(json.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
+        return out, why
+    return None, why
+
+
 def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=True, reuse_flow=None, flow=None, **kw):
     """源码没变、要测的也没变时，直接用上次的识别结果（设置页的勾选），不再调用大模型。
     两次调用分别存：整份结果；理清的流程（reuse_flow，默认跟 reuse 一样；重试时码表传 True，第二次失败不用重跑第一次）。
     flow：调用方手里已有的理清的流程（没有项目目录、存不了文件时，网页重试把上次的带过来）。"""
     f = _cache_file(project_dir, fingerprint, what, provider) if project_dir and fingerprint else None
+    older = None
+    if reuse and f and not f.exists():  # 源码改过、这一版还没识别过：上一版的结果相关代码都没变就接着用
+        try:
+            older, _why = reuse_older(project_dir, root, what, provider, fingerprint)
+        except Exception:
+            older = None
     if reuse and f and f.exists():
         try:
             r = json.loads(f.read_text(encoding="utf-8"))
@@ -1429,7 +1559,8 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
             structure.check(root, r.get("steps") or [], r.get("segments"), r.get("side_segments"), r.get("chain"),
                             strict=r.get("strict") is True)  # 旧缓存没有这一项：照旧宽松
             # 页面数据按存下的步骤重新算一遍：码表升级后页面要的新字段（比如"一轮记哪一次"）也有
-            return {**r, "page": to_page(r, what), "reused": True, "seconds": 0, "calls": 0}
+            return {**r, "page": to_page(r, what), "reused": True, "seconds": 0, "calls": 0,
+                    **({"reused_older": r.get("reused_from")} if older else {})}
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             pass
     if "category" not in kw:

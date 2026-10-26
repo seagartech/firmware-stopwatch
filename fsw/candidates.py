@@ -374,6 +374,21 @@ def _shared_call(f, mine):
     called = {n for n in names if any(re.search(rf"(?:->|\.)\s*{re.escape(n)}\s*\(", c.get("code") or "") for c in callers)}
     return [c for c in mine if impl.get(id(c)) not in called]
 
+def _drop_alt_branch(f, found):
+    """只在"按设置选一支"的判断的某一支里（比如某个协议版本才走、别的版本各有一句调用同一个函数）的候选去掉：
+    设备只走其中一支，换个设置就一次也走不到（10-26 真测：协议 3 那一支）。最后那个默认的 else / default 不去。"""
+    out = []
+    for c in found:
+        src = f.proj.file(c["file"])
+        try:
+            hit = st.alt_branch(src, c["line"]) if src is not None else None
+        except Exception:
+            hit = None
+        if not hit:
+            out.append(c)
+    return out
+
+
 def find(root, category=""):
     """返回候选列表：[{id, role, file, line, code, where}]，id 是 K1、K2……（按角色排好，每个角色最多几句）。"""
     f = _Finder(root, category)
@@ -382,6 +397,7 @@ def find(root, category=""):
             fn(f)
         except Exception:  # 某一类找不到不影响别的
             pass
+    f.found = _drop_alt_branch(f, f.found)
     out = []
     for role in ROLES:
         mine = sorted((c for c in f.found if c["role"] == role), key=lambda c: c["_rank"])
