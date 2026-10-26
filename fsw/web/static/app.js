@@ -1097,12 +1097,15 @@ function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
  if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过（编译工具、依赖或板子配置的问题），和插的计时点无关，烧录前要先解决。码表不替你改代码。`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
  if(E.kind==='build')return E.step?box('编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点：「${htmlEsc(E.step_name||E.step)}」那一处（${htmlEsc(E.where)}）。<br>码表自己的问题，不用你改代码。`,E.error,`<button class="btn pri" data-flx="drop">撤掉这处计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`)
   :box('编译没通过',`${htmlEsc(E.message)}${E.error?'。报错里没对上是哪一处计时点，看下面的报错，或者重新插入。':''}`,E.error,`<button class="btn pri" data-flx="rebuild">重新编译</button><button class="btn" data-fl="redo">重新插入</button>`);
- if(E.kind==='burn'&&E.message&&E.message!=='烧录中断')return box('烧录没做成',htmlEsc(E.message),E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`);
- if(E.kind==='burn')return box('烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。',E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`);
+ if(E.kind==='burn'){  // 按失败阶段说：没连上 / 口被占着 = 什么都没写；只有真的开始写了才说"可能写了一半"（标题、说明由后台按阶段给）
+  const rec=(E.summary||E.log)?`<p class="note" style="margin:4px 0 0">烧录记录：${htmlEsc(E.summary||'')}${E.log?`<br>完整输出存在 <code>${htmlEsc(E.log)}</code>`:''}</p>`:'';
+  const t=E.title||(E.stage==='write'?'烧录中断：写到一半断了':'烧录没做成');
+  const d=E.message&&E.message!=='烧录中断'?E.message:'烧录工具报错了，看下面的报错。点「重新烧录」再试一次。';
+  return box(htmlEsc(t),htmlEsc(d)+rec,E.error,`<button class="btn pri" data-flx="reburn">重新烧录</button>`)}
  return box('试一次没收到计时点',`${htmlEsc(E.message)}${E.why?`<details class="lvwhy" style="margin-top:6px"><summary>可能的原因</summary><p class="note" style="margin:6px 0 0">${htmlEsc(E.why)}</p></details>`:''}${E.offer_restore?'<br>试了几次都不行：可以先还原成原版，设备回到原来的样子，不会坏。':''}`,E.error,`<button class="btn pri" data-flx="retry">再试一次</button>${E.offer_restore?'<button class="btn" data-hrestore="'+htmlEsc(REAL.project_dir)+'">还原成原版</button>':''}`)}
 function flErr(){if(realFlash()&&FSWJ&&FSWJ.err)return flErrReal();const F=FF[scene],C=CC(),L=live(),p=L[Math.min(2,L.length-1)];
  const E={orig:['原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过，和插的计时点无关。${htmlEsc(BG&&BG.message)}`,htmlEsc(BG&&BG.error),`<button class="btn" data-bgpop="1">看详情</button>`],build:['编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点。<br>AI 看了报错：「${p.n}」那个计时点（${p.f} ${lnTxt(p.l)}）插进了一个宏定义的中间，编译器不认。<br>码表自己的问题，不用你改代码。`,`${p.f}:${p.l}: error: expected ';' before 'FSW_MARK'`,`<button class="btn pri" data-flx="drop">撤掉这个计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`],
-  burn:['烧录中断：设备断开了','写到一半连接断了，多半是 USB 线松了或换了接口。<br>设备上现在是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。','A fatal error occurred: The chip stopped responding.',`<button class="btn pri" data-flx="reburn">重新烧录</button>`],
+  burn:['烧录中断：写到一半断了','已经开始往设备里写了，中途连接断了，多半是 USB 线松了或换了接口。<br>设备上现在可能是写了一半的固件，开不了机是正常的，<b>不会坏</b>：插好线再烧一次就行。','A fatal error occurred: The chip stopped responding.',`<button class="btn pri" data-flx="reburn">重新烧录</button>`],
   try:['试一次没收到计时点',`烧录成功，设备也重启了，但${F.trig}后 15 秒内没收到计时点。常见原因：<br>1. 没触发到：再${C.act}一次试试。<br>2. 串口被别的软件占着（比如别的串口监视器）：关掉它。<br>3. 设备在反复重启：点「完整日志」看。`,'（15 秒内没有新输出）',`<button class="btn pri" data-flx="retry">再试一次</button>`]}[fl.err];
  return `<div class="errbox"><b>${E[0]}</b><p style="margin:6px 0">${E[1]}</p><div class="ilog"><span class="note">报错</span><code>${E[2]}</code>${fullLogBtn()}</div>${fullLog()}<div class="acts" style="margin:8px 0 0">${E[3]}</div></div>`}
 function flList(from=0,to=4){const n=to-from+1;
@@ -1575,7 +1578,7 @@ function post(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'applic
 function syncFlow(){if(!flow)return;
  const ids=flow==='retest'?['retest','steps','flash','collect','compare']:FLOW1.map(x=>x[0]);
  let skipped=[];if(flow==='retest'&&!(page==='retest'&&rtSrc<2)){const C=rtC();skipped=[['steps',!C.steps[0][1]],['flash',!C.steps[1][1]],['compare',!C.steps[3][1]]].filter(x=>x[1]).map(x=>x[0])}
- const err=page==='flash'&&(fl.st===4||fl.st===5)?(fl.st===4?'没看到设备':{build:'编译没通过',burn:'烧录中断',try:'试一次没收到计时点'}[fl.err]):null;
+ const err=page==='flash'&&(fl.st===4||fl.st===5)?(fl.st===4?'没看到设备':{build:'编译没通过',burn:'烧录没做成',try:'试一次没收到计时点'}[fl.err]):null;
  const b={reached:flowMax,viewing:ids.includes(page)?page:null,error:err,skipped},k=JSON.stringify(b),kind=flow+'/'+scene;
  if(k===lastSync&&kind===lastKind)return;lastSync=k;
  (kind!==lastKind?post('/api/flow/start',{kind:flow,demo:scene}):Promise.resolve()).then(()=>post('/api/flow/sync',b)).catch(()=>{});lastKind=kind}

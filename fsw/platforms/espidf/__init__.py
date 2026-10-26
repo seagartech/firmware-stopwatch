@@ -143,13 +143,77 @@ def wrong_chip(lines):
     return None
 
 
+# 烧录失败分阶段（10-26 8783 真测：esptool 连都没连上，页面却说"写到一半断了、设备上是写了一半的固件"）：
+# - busy：调试口打不开（被别的程序占着、没权限）——什么都没写；
+# - connect：口打开了，但芯片没回话、没进下载模式——什么都没写，设备里原来的东西没动；
+# - write：已经开始擦写（Writing at / Erasing / Flash will be erased）之后断了——设备上可能是写了一半的固件；
+# - chip：芯片和固件对不上，乐鑫工具拒绝写——什么都没写；
+# - other：别的错，没看到开始写——按没写进去说，原话放详情。
+CONNECT_FAIL = re.compile(r"Failed to connect|No serial data received|Wrong boot mode|Timed out waiting for packet header|"
+                          r"Invalid head of packet|Possible serial noise or corruption|Download mode .*not detected", re.I)
+OPEN_FAIL = re.compile(r"could not open port|Resource busy|Errno 16|Permission denied|could not exclusively lock|"
+                       r"No such file or directory: '/dev/|could not open port", re.I)
+WRITE_SEEN = re.compile(r"Writing at 0x|Erasing flash|Flash will be erased|Erasing region|Wrote \d+ bytes", re.I)
+
+
+def flash_stage(lines):
+    """乐鑫烧录工具的输出 → (失败在哪个阶段, 是否已经开始写)。阶段见上面。"""
+    written = any(WRITE_SEEN.search(l) for l in lines)
+    if wrong_chip(lines):
+        return "chip", written
+    if written:
+        return "write", True
+    if any(OPEN_FAIL.search(l) for l in lines):
+        return "busy", False
+    if any(CONNECT_FAIL.search(l) for l in lines):
+        return "connect", False
+    return "other", False
+
+
 def _flash_failed(port, tail):
     errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-6:]
-    out = {"ok": False, "port": port, "error": "\n".join(errs[-6:])}
+    stage, written = flash_stage(tail)
+    out = {"ok": False, "port": port, "error": "\n".join(errs[-6:]), "stage": stage, "written": written}
     bad = wrong_chip(tail)
     if bad:  # 选错了板子（芯片不同）：乐鑫工具拒绝写入，设备里原来的东西没动
         out["wrong_chip"] = {"device": bad[0], "firmware": bad[1]}
     return out
+
+
+def _lsof_runner(port):
+    r = subprocess.run(["lsof", "-F", "pc", "--", port], capture_output=True, text=True, errors="replace", timeout=10)
+    return r.stdout
+
+
+def port_holders(port, own_pid=None, runner=_lsof_runner):
+    """哪些程序开着这个调试口（烧录前查；Windows 上没有 lsof，返回空）。不算码表自己。
+    返回 [{"pid": 123, "name": "screen"}]；查不了（没有 lsof、超时）也返回空，不挡烧录。"""
+    if os.name == "nt":
+        return []
+    own = os.getpid() if own_pid is None else own_pid
+    try:
+        text = runner(port) or ""
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out, cur = [], None
+    for line in text.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            cur = {"pid": int(line[1:]), "name": ""}
+            if cur["pid"] != own and all(x["pid"] != cur["pid"] for x in out):
+                out.append(cur)
+        elif line.startswith("c") and cur is not None:
+            cur["name"] = line[1:]
+    return out
+
+
+# 手动进下载模式：通用说法；知道是哪块板子时再补一句这块板子的按法（按板子说明书写的）
+DOWNLOAD_MODE_GENERIC = "按板子说明书让它进下载模式（多数板子是按住 BOOT 键，再按一下复位键 RST，先松 RST 再松 BOOT）"
+DOWNLOAD_MODE_TIPS = [(re.compile(r"m5stack.*core-?s3", re.I), "M5Stack CoreS3：长按复位键约 3 秒，看到内部绿灯亮就是进了下载模式")]
+
+
+def download_mode_tip(board=None):
+    tip = next((t for rx, t in DOWNLOAD_MODE_TIPS if board and rx.search(str(board))), None)
+    return f"{DOWNLOAD_MODE_GENERIC}；{tip}" if tip else DOWNLOAD_MODE_GENERIC
 
 
 def _list_ports():
@@ -419,28 +483,75 @@ class EspIdf:
         errs = [l for l in tail if "error" in l.lower() or "fatal" in l.lower()] or tail[-4:]
         return {"chip": None, "error": "\n".join(errs[-4:])}
 
-    def flash_saved(self, fw, port, on_progress=lambda pct, msg: None):
-        """烧存下的那份固件（乐鑫官方 esptool，和 idf.py flash 用同样的参数）。"""
+    CONNECT_RETRIES = 2   # 没连上（什么都没写）时再试几次
+    RETRY_WAIT = 2        # 每次重试前等几秒（让设备从上一次复位里缓过来）
+
+    def flash_saved(self, fw, port, on_progress=lambda pct, msg: None, log=None, on_attempt=lambda n, before: None):
+        """烧存下的那份固件（乐鑫官方 esptool，和 idf.py flash 用同样的参数）。
+
+        没连上芯片（连接阶段失败，还没开始写）时自动再试，最多 CONNECT_RETRIES 次：先用同样的复位方式再来一次，
+        再换 USB 复位（乐鑫自带 USB 口的芯片用它更稳）。已经开始写之后断了不自动重试，交给人看线。
+        log：每次尝试的乐鑫工具完整输出都追加写进这个文件（出错后能查原因，不只留最后一行）。"""
         fw = Path(fw)
         args = json.loads((fw / "flasher_args.json").read_text(encoding="utf-8"))
         extra = args.get("extra_esptool_args") or {}
-        cmd = [self._idf_py()[0], "-m", "esptool", "--chip", extra.get("chip", "auto"), "-p", port, "-b", "460800",
-               "--before", extra.get("before", "default-reset"), "--after", extra.get("after", "hard-reset"),
-               "write-flash", *args.get("write_flash_args", [])]
+        base = extra.get("before", "default-reset")
+        usb = "usb_reset" if "_" in base else "usb-reset"   # 老版本 esptool 用下划线写法
+        befores = [base] + [base, usb if base != usb else ("default_reset" if "_" in base else "default-reset")][:self.CONNECT_RETRIES]
+        files = []
         for off, rel in args["flash_files"].items():
-            cmd += [off, rel]
+            files += [off, rel]
 
         def line_cb(line):
             pct = flash_progress(line)
             if pct is not None:
                 on_progress(pct, line.strip()[:200])
 
-        t = time.time()
-        code, tail = self._run(cmd, fw, line_cb)
-        if code == 0:
-            on_progress(100, "烧录完成")
-            return {"ok": True, "port": port, "seconds": round(time.time() - t, 1), "error": None}
-        return _flash_failed(port, tail)
+        logf = None
+        if log:
+            try:
+                Path(log).parent.mkdir(parents=True, exist_ok=True)
+                logf = open(log, "a", encoding="utf-8")
+            except OSError:
+                logf = None
+        t, attempts, r = time.time(), [], None
+        try:
+            for n, before in enumerate(befores, 1):
+                if n > 1:
+                    self.sleep(self.RETRY_WAIT)
+                on_attempt(n, before)
+                cmd = [self._idf_py()[0], "-m", "esptool", "--chip", extra.get("chip", "auto"), "-p", port, "-b", "460800",
+                       "--before", before, "--after", extra.get("after", "hard-reset"),
+                       "write-flash", *args.get("write_flash_args", []), *files]
+                if logf:
+                    logf.write(f"\n===== 第 {n} 次烧录 {time.strftime('%Y-%m-%d %H:%M:%S')} 口 {port} 复位方式 {before}\n$ {' '.join(cmd)}\n")
+                    logf.flush()
+
+                def cb(line):
+                    if logf:
+                        logf.write(line + "\n")
+                    line_cb(line)
+                t1 = time.time()
+                code, tail = self._run(cmd, fw, cb)
+                if code == 0:
+                    attempts.append({"n": n, "before": before, "ok": True, "stage": None, "seconds": round(time.time() - t1, 1)})
+                    if logf:
+                        logf.write(f"===== 第 {n} 次：烧好了\n")
+                    on_progress(100, "烧录完成")
+                    return {"ok": True, "port": port, "seconds": round(time.time() - t, 1), "error": None,
+                            "attempts": attempts, "log": str(log) if log else None}
+                r = _flash_failed(port, tail)
+                attempts.append({"n": n, "before": before, "ok": False, "stage": r["stage"], "seconds": round(time.time() - t1, 1)})
+                if logf:
+                    logf.write(f"===== 第 {n} 次失败：阶段 {r['stage']}，{'已开始写' if r['written'] else '还没开始写'}（退出码 {code}）\n")
+                    logf.flush()
+                if r["stage"] != "connect":  # 只有"没连上、什么都没写"才自动再试
+                    break
+        finally:
+            if logf:
+                logf.close()
+        r.update(attempts=attempts, seconds=round(time.time() - t, 1), log=str(log) if log else None)
+        return r
 
     @staticmethod
     def read_for(ser, seconds, on_line=lambda line: None, stop=None):

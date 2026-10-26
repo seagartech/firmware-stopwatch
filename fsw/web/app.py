@@ -31,7 +31,7 @@ from fsw import rangelist as rl
 from fsw import carry as cy
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
-from fsw.platforms.espidf import EspIdf, ToolEnvError, chip_name, find_idf, find_ports, pick_idf, port_key
+from fsw.platforms.espidf import EspIdf, ToolEnvError, chip_name, download_mode_tip, find_idf, find_ports, pick_idf, port_holders, port_key
 from fsw.platforms.espidf.install import MacInstaller, choose_version
 from fsw.workspace import workspace as ws
 from fsw.workspace.workspace import ascii_work_root, prepare
@@ -91,14 +91,18 @@ class EspDevice:
     def __init__(self, idf_finder):
         self.idf_finder = idf_finder
 
-    def flash(self, fw, port, on_progress):
+    def flash(self, fw, port, on_progress, log=None, on_attempt=lambda n, before: None):
         found = pick_idf(self.idf_finder(), None)
         if not found:
             return {"ok": False, "error": "没找到乐鑫编译工具，烧录要用它带的 esptool。"}
         try:
-            return EspIdf(found["path"]).flash_saved(fw, port, on_progress=on_progress)
+            return EspIdf(found["path"]).flash_saved(fw, port, on_progress=on_progress, log=log, on_attempt=on_attempt)
         except ToolEnvError as e:
             return {"ok": False, "cause": "tool", "message": e.message, "error": e.detail}
+
+    def port_holders(self, port):
+        """烧录前查：除了码表自己，还有哪些程序开着这个调试口。"""
+        return port_holders(port)
 
     def read_chip(self, port):
         """设备上是哪种芯片（选板子时核对用）：乐鑫烧录工具连一下，设备会重启一下。"""
@@ -604,6 +608,53 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             return
         job.update(status="failed", err={"kind": kind, "message": message, **extra})
 
+    def _flash_with(dev, fw, port, on_progress, **kw):
+        """调设备的烧录：新参数（日志文件、第几次尝试）只传给认得它们的实现（测试里的假设备只收前三个）。"""
+        import inspect
+        try:
+            ps = inspect.signature(dev.flash).parameters
+        except (TypeError, ValueError):
+            ps = {}
+        ok = {k: v for k, v in kw.items() if k in ps or any(x.kind == x.VAR_KEYWORD for x in ps.values())}
+        return dev.flash(fw, port, on_progress, **ok)
+
+    def _flash_log(project_dir, what):
+        """这次烧录的完整输出存在哪（项目文件夹 flash-logs/，按时间起名，每次尝试都追加进去）。"""
+        return Path(project_dir) / "flash-logs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{what}.log"
+
+    def _holders_text(holders):
+        return "、".join(f"{h.get('name') or '某个程序'}（进程号 {h['pid']}）" for h in holders)
+
+    def _burn_say(r, board, holders=None):
+        """烧录没成：按失败阶段说人话（标题、说明、尝试记录）。只有真的开始写了才说"可能写了一半"。"""
+        stage = "busy" if holders else r.get("stage") or "other"
+        tries = r.get("attempts") or []
+        n = len(tries)
+        tip = download_mode_tip(board)
+        if stage == "busy":
+            who = _holders_text(holders) if holders else "别的程序"
+            title = "调试口被别的程序占着：什么都没写进去"
+            msg = (f"{who} 开着这个调试口，烧录工具打不开它。设备里原来的东西没动。"
+                   f"关掉它（比如串口监视器、另一个码表、终端里的 monitor），再点「重新烧录」。")
+        elif stage == "connect":
+            title = "烧录没连上设备：什么都没写进去"
+            msg = (f"烧录工具{'试了 ' + str(n) + ' 次都' if n > 1 else ''}没连上芯片（芯片没回话、没进下载模式），还没开始写，"
+                   f"设备里原来的东西没动，不会坏。按顺序试：1. 点「重新烧录」再试一次；"
+                   f"2. 关掉别的可能开着调试口的程序（串口监视器等）；3. {tip}，然后点「重新烧录」。")
+        elif stage == "write":
+            title = "烧录中断：写到一半断了"
+            msg = ("已经开始往设备里写了，中途连接断了，多半是 USB 线松了或换了接口。设备上现在可能是写了一半的固件，"
+                   "开不了机是正常的，不会坏：插好线再点「重新烧录」就行。")
+        else:
+            title = "烧录没做成"
+            msg = "烧录工具报错，没看到开始写，设备里原来的东西应该没动。看下面的报错，点「重新烧录」再试一次。"
+        summary = "；".join(f"第 {t['n']} 次（复位方式 {t['before']}）："
+                           + ("烧好了" if t.get("ok") else {"connect": "没连上", "write": "写到一半断了", "busy": "口打不开",
+                                                        "chip": "芯片对不上"}.get(t.get("stage"), "出错") + f"，用了 {t.get('seconds')} 秒")
+                           for t in tries)
+        return {"title": title, "message": msg, "stage": stage, "written": bool(r.get("written")), "summary": summary,
+                "log": r.get("log"), "holders": holders or []}
+
     def _on_device(project_dir, fsw_on):
         """设备上现在是计时版还是原版（存在项目文件夹里，码表重开也认得）。"""
         (Path(project_dir) / "on-device.json").write_text(json.dumps({"fsw": fsw_on, "at": time.strftime("%Y-%m-%d %H:%M")}),
@@ -954,9 +1005,25 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 T().wait("flash", time.time() - w0, "等设备插上")
             port = port_finder()[0]
             job.update(status="running", port=port, log=f"设备已连上 {port}")
+            holders = getattr(device, "port_holders", None)
+            holders = holders(port) if holders else []
+            if holders:  # 别的程序开着调试口：烧录工具打不开，先说是谁，不硬烧
+                say = _burn_say({"stage": "busy"}, a.board, holders)
+                T().end("flash", result="failed", stage="busy")
+                return _fail(job, "burn", say.pop("message"), error=f"{port} 被 {_holders_text(holders)} 占着", **say)
             ov = _overall(fsw_fw)
-            r = device.flash(fsw_fw, port, lambda pct, msg: (lambda o: _log(job, msg, o, f"正在写进设备：{o}%"))(ov(pct)))
+            log = _flash_log(a.project_dir, "fsw")
+
+            def attempt(n, before):
+                if n > 1:
+                    _log(job, f"没连上设备，第 {n} 次再试（复位方式 {before}）", 0, f"没连上设备，什么都没写；第 {n} 次再试")
+            r = _flash_with(device, fsw_fw, port, lambda pct, msg: (lambda o: _log(job, msg, o, f"正在写进设备：{o}%"))(ov(pct)),
+                            log=log, on_attempt=attempt)
             job["seconds"]["flash"] = r.get("seconds")
+            job["flash_log"] = r.get("log")
+            if not r.get("ok"):
+                T().end("flash", result="failed", stage=r.get("stage") or r.get("cause") or "other",
+                        attempts=len(r.get("attempts") or []) or None, log=r.get("log"))
             if r.get("cause") == "tool":
                 return _fail(job, "burn", r["message"], error=r.get("error"), cause="tool")
             if r.get("wrong_chip"):  # 选的板子和设备芯片不同：乐鑫工具没写进去，设备里原来的东西没动
@@ -966,11 +1033,12 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                                           f"乐鑫烧录工具没往里写，设备里原来的东西没动。回首页换一块芯片是 {w['device']} 的板子，再点「开始测量」。",
                              error=r.get("error"), wrong_chip=w)
             if not r.get("ok"):
-                return _fail(job, "burn", "烧录中断", error=r.get("error"))
+                say = _burn_say(r, a.board)
+                return _fail(job, "burn", say.pop("message"), error=r.get("error"), **say)
             _remember_chip(port, _fw_chip(fsw_fw))  # 烧进去了：设备就是固件要的芯片，以后选板子直接核对，不用再读
             _on_device(a.project_dir, True)
             job["_just_flashed"] = True  # 刚烧完设备会重启；之后点「再试一次」时设备一直开着，不用再等它开机
-            T().end("flash")
+            T().end("flash", result="ok", attempts=len(r.get("attempts") or []) or None, log=r.get("log"))
             return True
 
         def ready():
@@ -1257,6 +1325,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if job["status"] not in ("running", "waiting_device"):
                 return
             kind = {"flash": "burn", "try": "try"}.get(job.get("phase"), "build")
+            if kind == "burn":
+                T().end("flash", result="failed", stage="crash")
             if isinstance(e, ToolEnvError):
                 return _fail(job, kind, ToolEnvError.message, error=_detail(e), cause="tool")
             _fail(job, kind, {"burn": "烧录时码表出错了，没写进设备：点「重新烧录」再试一次。",
@@ -2174,7 +2244,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         def burn(port):
             for k in range(6):  # 刚测完调试口可能还没放开、或设备正在重连：等一下再烧，别马上报错（决策 129）
                 try:
-                    r = device.flash(orig_fw, port, lambda pct, msg: None)
+                    r = _flash_with(device, orig_fw, port, lambda pct, msg: None, log=_flash_log(a.project_dir, "orig"))
                 except ToolEnvError as e:
                     r = {"ok": False, "cause": "tool", "message": e.message, "error": e.detail}
                 except Exception as e:  # 烧录时码表自己出错：源码已经还原了，说清楚原版没烧上，不能让接口直接报错
@@ -2194,6 +2264,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 out["say"] = ("源码已还原，原版没烧上：" + r["message"] if r.get("cause") == "tool" else
                               "源码已还原，原版没烧上：烧录时码表出错了，再点一次「还原成原版」。" if r.get("cause") == "crash" else
                               "源码已还原，原版没烧上：调试口被别的程序占着。关掉它（比如串口监视器）再点一次「还原成原版」。" if busy else
+                              "源码已还原，原版没烧上：烧录工具没连上设备，什么都没写，设备里还是原来的固件。再点一次「还原成原版」；"
+                              f"还不行就{download_mode_tip(a.board)}，再点。" if r.get("stage") == "connect" else
                               "源码已还原，原版没烧上：看看线插好没有，再点一次「还原成原版」。")
                 out["detail"] = _plain(r.get("error"))  # 原话放在详情里，不堆在提示里
             done(out)
