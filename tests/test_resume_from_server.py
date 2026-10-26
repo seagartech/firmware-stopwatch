@@ -42,13 +42,14 @@ def test_page_uses_server_progress_when_it_has_none_of_its_own():
 
 @pytest.mark.skipif(not shutil.which("node"), reason="没有 node")
 def test_server_snapshot_has_the_fields_the_page_restores():
-    fn = re.search(r"function srvSnap\(S,old\)\{.*?\n.*?\n.*?\n.*?last:''\}\}", JS, re.S).group(0)
+    fn = re.search(r"function srvSnap\(S,old\)\{.*?\n.*?\n.*?\n.*?autoT0:[^}]*\}\}", JS, re.S).group(0)
     S = {"work": "/w", "stage": 2, "page": "flash", "what": "从刷卡到开门", "fsw": "failed", "hSrc": "/src", "pName": "门禁",
          "hBoardQ": "b", "bg": True, "REAL": {"work": "/w", "project_dir": "/p"}}
     js = f"const SCENES={{door:1}};let scene='door';{fn};console.log(JSON.stringify(srvSnap({json.dumps(S)},null)))"
     out = json.loads(subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True).stdout)
     assert out["v"] == 1 and out["scene"] == "door" and out["flow"] == "first" and out["flowMax"] == 2 and out["page"] == "flash"
     assert out["hSay"] == "从刷卡到开门" and out["REAL"]["work"] == "/w" and out["bgSrc"] == "/src" and out["diffOk"] is True
+    assert out["auto"] is True and out["autoHold"] == ""                 # 按后台接上的也是测量页（10-26）
     snap_keys = re.search(r"return \{v:1,scene,page,(.*?)\}\}", JS).group(1)
     for k in ["mode", "flow", "flowMax", "hStage", "hSrc", "hSay", "pName", "hBoardQ", "REAL", "bgSrc", "dropped", "added", "ed"]:
         assert k in snap_keys and k in out                                # 和 uiSnap 存的同样字段

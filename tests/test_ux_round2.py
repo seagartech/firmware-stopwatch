@@ -514,10 +514,11 @@ def test_page_follows_a_stop_made_outside_the_page():
 
 def test_failed_trial_stays_on_the_measurement_page():
     # 真测：试测超时后退回老的「插计时点和烧录」页，试过了还得手点「开始多轮实测」；试测没通过要留在测量页、就地「再试一次」
-    code = ("let AUTO=true,autoHold='',pop=null,page='flash',fl={st:5,err:'try'};" + grab("runView") +
+    # 10-26：编译、烧录出错也留在测量页（错误和重试按钮放在测量页里），不再退回老的插点烧录页
+    code = ("let flow='first',hStage=1,AUTO=true,autoHold='',pop=null,page='flash',fl={st:5,err:'try'};" + grab("runView") +
             "\nconst a=runView();fl.err='build';console.log(JSON.stringify([a,runView()]));")
-    assert json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout) == [True, False]
-    assert 'data-flx="retry"' in grab("runPage")
+    assert json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, check=True).stdout) == [True, True]
+    assert 'data-flx="retry"' in grab("runPage") and "now=flErr()" in grab("runPage")
 
 
 @node

@@ -467,13 +467,13 @@ function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),RE
   <ol class="note" style="margin:8px 0 0;padding-left:20px"><li>连接设备到电脑的 USB 口（烧录前提示）</li><li>按页面提示触发设备 ${AUTO_ROUNDS + 1} 次：第 1 次校验计时点，不计入数据；之后 ${AUTO_ROUNDS} 轮，每轮约 5～15 秒</li></ol>
   </section>`}
 // 自动往下走：每次画完页面看一眼该不该进下一步（同一步只触发一次）
-function autoTick(){if(!AUTO||pop)return;
+function autoTick(){if(!AUTO||pop||autoHold)return;
  const go=(key,fn)=>{if(autoBusy===key)return;autoBusy=key;setTimeout(fn,0)};
  if(page==='home'&&hStage===3&&stepsRead===2){
   const P=REAL&&IDENT&&IDENT.page,bad=P?(P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(P.steps||[]).some(x=>x.struct_ok===false)?'有计时点插下去会落进条件分支或循环里（只在条件成立时才记到），码表结构检查没通过，请核对':(IDENT.provider==='deepseek'?'这次用的是 DeepSeek，准确率较低，请核对关键步骤':'')):'';
-  return go('steps',()=>{hStage=1;mode='boss';if(bad){AUTO=false;autoHold=bad;page='steps';render();window.scrollTo(0,0);return}
+  return go('steps',()=>{hStage=1;mode='boss';if(bad){autoHold=bad;page='steps';render();window.scrollTo(0,0);return}  // 停下请人核对：仍在测量页里核对（10-26：以前关掉自动执行，后面全走老界面）
    page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)})}
- if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){AUTO=false;envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
+ if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){autoHold='编译工具还没准备好：装好或在设置里选好后，点「继续」';envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
  if(page==='flash'&&fl.st===2)return go('collect',()=>{justFlashed=true;page='collect';colStart();render();window.scrollTo(0,0)});
  if(page==='collect'&&col.st===2)return go('report',()=>setTimeout(()=>{if(!AUTO||page!=='collect'||col.st!==2)return;AUTO=false;page='report';mode='boss';render();window.scrollTo(0,0)},1500));
 }
@@ -481,12 +481,13 @@ function autoStart(){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=docum
  if(REAL&&!envKey()){pop='env';render();return}
  hSay=WHOLE;AUTO=true;autoHold='';autoBusy='';autoT0=Date.now();flowReset();flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render()}
 // 测量页（决策 158，原型 ②）：点了「开始测量」就在这一页走到底；要人操作时大字提示，出问题才回到原来的页面让人处理
-function runView(){if(!AUTO||autoHold||pop)return false;
- if(page==='home')return hStage===3&&stepsRead!==3;
- if(page==='flash')return fl.st!==5||fl.err==='try';  // 试测没通过留在测量页，点「再试一次」接着测，不退回老的插点烧录页
- if(page==='collect')return col.st===1||col.st===2||col.st===4;
- return false}
-function runAt(){if(page==='home')return 0;if(page==='flash')return fl.step<=1&&fl.st!==3?1:fl.step<4?2:3;return col.st===2?5:4}
+// 10-26 用户：所有界面都显示新版本。一次测量（flow 'first'）从找关键步骤到多轮实测，每一页都画成测量页：
+// 不再看网页内存里的"自动执行"开关（停下请人核对、刷新网页、点「查看并修改计时点位置」都会丢掉它，丢了就退回老的一页一页界面）；
+// 停下要人处理的（核对步骤、编译出错、没装编译工具、实测停了）都在测量页里处理
+function runView(){if(flow!=='first')return false;
+ if(page==='home')return hStage===3;
+ return page==='steps'||page==='flash'||page==='collect'}
+function runAt(){if(page==='home'||page==='steps')return 0;if(page==='flash')return fl.step<=1&&fl.st!==3?1:fl.step<4?2:3;return col.st===2?5:4}
 let runT=null,runPrev=-1,runS0=0,runLeft=()=>0;  // 剩余时间：后面几步的预计 + 当前这步预计减去已做的时间（至少留 30 秒）  // 测量页顶上的已用时、剩余时间每秒走
 function runTick(){if(runT)return;runT=setInterval(()=>{if(!runView()){clearInterval(runT);runT=null;return}const e=document.getElementById('runused');if(e)e.textContent=mmss((Date.now()-autoT0)/1000);const l=document.getElementById('runleft');if(l)l.textContent=Math.max(1,Math.round(runLeft()/60))+' 分钟'},1000)}
 function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/1000:0;
@@ -497,8 +498,15 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  const done=i=>i===0&&P?`<div class="note">${htmlEsc(P.measure||'')}；${n} 个关键步骤，位置已逐个核对</div>`:i===3?`<div class="note">计时点收到，顺序校验通过</div>`:'';
  const tl=L.map((x,i)=>{const c=i<at?'done':i===at?(col.st===4&&i===4?'err':'doing'):'wait';
   return `<li class="${c}"><span class="tdot"></span><div>${x[0]}<span class="who ${x[1]}">${x[1]==='hum'?'人工操作':'自动执行'}</span>${c==='done'?done(i):''}</div><span class="note">${c==='done'?'✓':'约 '+(x[2]>=60?Math.round(x[2]/60)+' 分钟':x[2]+' 秒')}</span></li>`}).join('');
- let now;
- if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
+ let now;const holdBox=autoHold?`<div class="why" style="border-left-color:var(--warn)"><b>自动执行在这里停下：</b>${htmlEsc(autoHold)}</div>`:'';
+ if(page==='steps'&&stepsRead===2)now=stepsPage();  // 核对关键步骤（DeepSeek 要人核对、校验没过回来改位置）：步骤清单就在测量页里，确认后接着自动走
+ else if(page==='home'&&stepsRead===3)now=`<section class="panel">${modalHTML().replace(' id="dlg-t"','')}</section>`;  // 没找完：重试在这里
+ else if(page==='flash'&&fl.st===5&&fl.err!=='try')now=flErr();  // 编译、烧录、插点出错：错误和重试按钮放在测量页里
+ else if(page==='flash'&&fl.st===0)now=`<div class="bigask"><span class="lab">接着做</span><b>插入计时点、编译、烧录</b><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-goins="1">插入计时点</button></div></div>`;
+ else if(page==='flash'&&fl.st===3&&(!AUTO||autoHold))now=`${holdBox}<div class="bigask"><span class="lab">接着做</span><b>计时点已插好，下一步编译、烧录</b><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-autoresume="1">继续</button></div></div>`;
+ else if(page==='flash'&&fl.st===2)now=`<div class="bigask"><span class="lab">接着做</span><b>计时版已烧好，试测通过</b><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-go="collect" data-keepflow="1">${col.st?'回到多轮实测':'开始多轮实测'}</button></div></div>`;
+ else if(page==='collect'&&(col.st===0||col.st===3))now=collectPage();  // 还没开始 / 停下了：开始、接着测、看报告的按钮都在这里
+ else if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
  else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>未检测到设备：连接 USB，或按电源键开机</b><span class="note">设备闲置一段时间会自动关机。计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
  else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?'AI 读取源码，确定每个计时点的插入位置':fl.step===3?'正在写入设备，请勿拔线':'编译带计时点的固件')}</span></div>`;
  else if(at===3&&fl.st===5){const E=(FSWJ&&FSWJ.err)||{};now=`<div class="errbox"><b>试测没通过${htmlEsc(E.error||'')}</b><p style="margin:6px 0">${htmlEsc(E.message||'')}</p>${E.why?`<p class="note" style="margin:0 0 6px">${htmlEsc(E.why)}</p>`:''}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-flx="retry">再试一次</button></div></div>`}
@@ -509,7 +517,7 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  return `<div class="stack"><div class="acts" style="justify-content:space-between;align-items:flex-start;margin:0"><div><h1 style="font-size:22px;margin:0">测量：全程</h1><p class="note" style="margin:2px 0 0">已用时 <span class="num" id="runused">${mmss(used)}</span>　剩余约 <span class="num" id="runleft">${Math.max(1,Math.round(left/60))} 分钟</span></p></div><button class="btn" data-autostop="1">停止测量</button></div>
  ${now}<section class="panel"><h2>执行进度</h2><ul class="runtl">${tl}</ul></section>
  <p class="note">计时点变更明细、关键步骤位置在报告「技术细节」中查看</p></div>`}
-function autoStop(){AUTO=false;clearInterval(runT);runT=null;
+function autoStop(){AUTO=false;autoHold='';clearInterval(runT);runT=null;flow=null;flowReset();
  if(page==='collect')post('/api/collect/stop',{}).catch(()=>{});
  if(page==='flash'){clearInterval(fswT);fswT=null;post('/api/fsw/stop',{}).catch(()=>{});fl.st=0}
  page='home';hStage=1;render();window.scrollTo(0,0)}
@@ -1397,7 +1405,8 @@ function flowReset(){flowMax=0}
 // 回看首页时换了固件或板子：真改了东西，这次测量的步骤条作废，后面要重新做（停在回看不作废）
 function newRun(){if(flow!=='first'||flowMax<1)return;flow=null;flowReset();toast('换了固件或板子：后面的步骤要重新做')}
 function stepsChanged(){if(flow==='first'&&flowMax>1){flowMax=1;flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;colStop();col={st:0,att:0,got:[],phase:0};toast('步骤改了：插计时点和烧录、多轮实测要重新做')}}
-function flowBar(){if(!flow&&page!=='home')return '';let st;
+function flowAdvance(){if(flow!=='first')return;const ci=FLOW1.findIndex(x=>x[0]===page);if(ci>flowMax)flowMax=ci}  // 走到哪一步（以前在画老步骤条时顺带记，测量页不画它，刷新后接不上）
+function flowBar(){if(flow!=='retest')return '';let st;
  if(flow==='first'||!flow){if(!FLOW1.some(x=>x[0]===page))return '';st=FLOW1.map(([id,n])=>[id,n,0])}
  else{const C0=rtC(),pre=page==='retest'&&rtSrc<2,C={steps:C0.steps.map(x=>pre?[x[0],1]:x)};const ids=['retest','steps','flash','collect','compare'];if(!ids.includes(page))return '';st=[['retest','查改了什么',0],['steps','找关键步骤',!C.steps[0][1]],['flash','插计时点和烧录',!C.steps[1][1]],['collect','多轮实测',0],['compare','前后对比',!C.steps[3][1]]]}
  const ci=st.findIndex(x=>x[0]===page);if(flow&&ci>flowMax)flowMax=ci;const mx=flow?flowMax:ci;
@@ -1480,7 +1489,7 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   if(page==='report'&&JREP&&JREP._key===repKey()&&repKey().startsWith('real')&&!ADV&&D0ok())advStart();
   const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
   document.getElementById('nav-home').toggleAttribute('aria-current',page==='home');document.getElementById('nav-set').toggleAttribute('aria-current',page==='settings');
-  morphHTML(document.getElementById('flowbar'),runView()?'':flowBar());bgPill();
+  flowAdvance();morphHTML(document.getElementById('flowbar'),runView()?'':flowBar());bgPill();
   const isReport=page==='report',isHome=page==='home';
   document.getElementById('verseg').hidden=!isReport;document.getElementById('v-exp').hidden=!isReport;
   const PN=realFlash()?htmlEsc(pName):(PROJ.find(p=>p.scene===scene)||{}).name;morphHTML(document.getElementById('crumb'),isReport?`${flow?'':'<button class="lnk2" data-go="home">首页</button> › '}${String(D.S.crumb).replace(/\d+ 轮\s*$/,D.n+' 轮')}${D.S.real?'':'<span class="mock">模拟数据，不是实测</span>'}`:page==='range'?(RLP?'<button class="lnk2" data-rlback="1">设置</button> › 合理范围清单':`<button class="lnk2" data-go="report" data-keepflow="1">${PN} 的报告</button> › 合理范围`):page==='compare'&&!flow?`<button class="lnk2" data-go="home">首页</button> › ${PN} › 前后对比`:'');
@@ -1541,7 +1550,7 @@ function canViewNear(p){const L=flow==='retest'?['retest','steps','flash','colle
 window.addEventListener('popstate',()=>{if(booting)return;let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}if(!PAGES.some(p=>p.id===h)||h===page)return;
  navPop=true;pop=null;if(hStage>=2)hStage=1;page=canView(h)?h:canViewNear(h);render();window.scrollTo(0,0)});
 function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(STEPS||[]),...added].find(r=>r.p===p);if(x)ed[p]=[x.f,x.l]}
- return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:''}}
+ return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:'',auto:AUTO,autoHold,autoT0}}
 let uiLast='',uiT=null;
 const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
 function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;try{sessionStorage.setItem('fsw-ui',s)}catch(e){}  // 这个标签页自己也存一份：别的标签页开了新的一轮，这里刷新也不丢
@@ -1551,7 +1560,7 @@ window.addEventListener('pagehide',()=>{if(!uiT)return;clearTimeout(uiT);uiT=nul
 function srvSnap(S,old){const o=old&&old.v===1?old:{};
  return {v:1,scene:SCENES[o.scene]?o.scene:scene,page:S.page,mode:'boss',flow:'first',flowMax:S.stage,hStage:1,hSrc:S.hSrc,hSay:S.what,pName:S.pName,hBoardQ:S.hBoardQ,
   REAL:S.REAL,bgSrc:S.bg?S.hSrc:'',alsoFace:true,dropped:[],added:[],ed:{},mapSel:o.mapSel,diffOk:S.stage>=2&&S.fsw!=='inserted',flashVar:'b',colVar:'b',adv:null,
-  rtCase:o.rtCase,remeasure:false,last:''}}
+  rtCase:o.rtCase,remeasure:false,last:'',auto:true,autoHold:'',autoT0:S.at?S.at*1000:0}}
 async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return r.ok?await r.json():null}catch(e){return null}};
  const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),J=(U&&U.jobs)||{};let u=U&&U.ui;
  let own=false;if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')||'null');if(m&&m.v===1){u=m;own=true}}catch(e){}}
@@ -1568,6 +1577,8 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  if(FRESH&&!fromSrv){const cj=await get('/api/collect'),fj=await get('/api/fsw'),run=x=>!!x&&['running','waiting_device'].includes(x.status);if(!run(cj)&&!run(fj)){page='home';return}}
  scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
  REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;remeasure=!!u.remeasure;
+ // 测量页接着显示、接着自动走（10-26）：存过的照存的；老的存档没有这一项时，第一次测（flow first）就是测量页流程
+ AUTO=flow==='first'&&(u.auto===undefined?true:!!u.auto);autoHold=AUTO?String(u.autoHold||''):'';autoT0=u.autoT0||Date.now();autoBusy='';
  const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;
   for(const [p,v] of Object.entries(u.ed||{})){const x=[...STEPS,...added].find(r=>r.p===p);if(x&&v){x.f=v[0];x.l=v[1];edits[p]=true}}};
  const quiet=j=>{const b=beep;beep=false;try{colApply(j)}finally{beep=b}};  // 接上已测的轮：不再一轮轮"叮"
@@ -1615,12 +1626,14 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
   if(e.target.closest('[data-autostart]')){autoStart();return}
   if(e.target.closest('[data-autostop]')){autoStop();return}
-  if(e.target.closest('[data-autofix]')){AUTO=false;const SS=(COLJ&&COLJ.suspect)||[];api('/api/collect/choice',{choice:'fix'}).catch(()=>{});  // 选了什么记进这次的结果（报告里写）
+  if(e.target.closest('[data-autofix]')){const SS=(COLJ&&COLJ.suspect)||[];api('/api/collect/choice',{choice:'fix'}).catch(()=>{});  // 选了什么记进这次的结果（报告里写）
    autoHold=SS.some(x=>x.kind)?`测量停下来了：${SS.map(x=>x.why).join('；')}`:'第 1 轮自动校验没通过：'+SS.map(x=>`「${x.name}」${fms(Math.abs(x.seconds))} 秒`).join('、')+'。请检查这一段起止两个计时点的位置，改好后重新插入。';page='steps';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-mclose]')){hStage=1;render();return}
-  if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}
+  if(e.target.closest('[data-mfind]')){const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');autoStart();window.scrollTo(0,0);return}  // 老的"开始找关键步骤"也走测量页（10-26）
   if(e.target.closest('[data-cdskip]')){clearInterval(cdT);cdT=null;cd=0;hStage=4;render();return}
   if(e.target.closest('[data-mnext]')){clearInterval(cdT);cdT=null;cd=0;hStage=1;page='steps';mode='boss';render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-goins]')&&flow==='first'){autoHold='';autoBusy='';AUTO=true}  // 核对完确认插入：自动执行接着往下走
+  if(e.target.closest('[data-autoresume]')){AUTO=true;autoHold='';autoBusy='';render();return}
   if(e.target.closest('[data-goins]')&&realFlash()){page='flash';flashVar='b';flStop();flNoDev=false;fswInsert();render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-goins]')){page='flash';flashVar='b';flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1);render();window.scrollTo(0,0);return}
   const dop=e.target.closest('[data-dopen]');if(dop){const k=dop.dataset.dopen;diffOpen.has(k)?diffOpen.delete(k):diffOpen.add(k);render();return}
@@ -1643,7 +1656,8 @@ document.addEventListener('click',e=>{
   const pc=e.target.closest('[data-pop]');if(pc){render();if(pc.dataset.nudge)nudge(pc.dataset.nudge);return}
   const g=e.target.closest('[data-go]');if(g){const to=g.dataset.go;
 if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
-  const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig'}if(hStage>=2)hStage=1;if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;/* 第一次测时点首页只是回看，步骤条留着（D 组） */page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
+if(flow==='first'&&(to==='flash'||to==='collect'))autoHold='';  // 核对完没改步骤、回到后面那步：不再停着
+  const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');if(hStage>=2&&to==='steps'){autoStart();window.scrollTo(0,0);return}if(hStage>=2)hStage=1;if(to==='home'&&!g.dataset.keepflow&&flow!=='first')flow=null;/* 第一次测时点首页只是回看，步骤条留着（D 组） */page=to;if(!g.dataset.keepflow)mode='boss';render();window.scrollTo(0,0);return}
   const rt=e.target.closest('[data-retest]');if(rt){flowReset();scene=rt.dataset.retest;rtSrc=0;rtOther=false;rtReading=false;rtPath='';page='retest';rtCase=RTCASE;flow='retest';render();window.scrollTo(0,0);return}
   const rv2=e.target.closest('[data-rtvar]');if(rv2){rtCase=rv2.dataset.rtvar;rtSrc=0;rtOther=false;render();return}
   const rs2=e.target.closest('[data-rtsrc]');if(rs2){const a=rs2.dataset.rtsrc,P=PROJ.find(p=>p.scene===scene),F=FF[scene];
@@ -1721,7 +1735,7 @@ if(to==='home')LASTP='';  // 点首页＝不接着看了，那条提示收起
   if(e.target.closest('[data-beeptest]')){resetAudio();unlockAudio();beepBlocked=false;ding(false);setTimeout(()=>{beepMsg=actx?actx.state:'none';beepLog('试听');render()},400);return}
   if(e.target.closest('[data-beep]')){beep=!beep;render();return}
   const ca=e.target.closest('[data-col]');if(ca){unlockAudio();const a=ca.dataset.col;if(a==='go')colStart();else if(a==='stop'){colStop();col.st=3;api('/api/collect/stop',{}).then(colApply)}else if(a==='resume'){if(col.st===4)autoBusy='';colStart(true)}else if(a==='restart'){pop='colre'}else if(a==='restart2'){colStart(false)}render();return}
-  if(e.target.closest('[data-resume]')){page='home';hStage=2;render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-resume]')){page=flow==='first'&&envBack!=='home'?envBack:'home';hStage=Math.min(hStage,1);envBack='home';render();window.scrollTo(0,0);return}  // 不再回老的"确认要测的内容"窗口（那里走的是老的一页一页流程）
   const tk=e.target.closest('[data-test]');if(tk){const i=document.getElementById('set-key'),v=i?i.value.trim():'';keyErr='';if(v&&!v.startsWith('•'))keyDraft=v;tk.disabled=true;tk.textContent='正在测试……';
    api('/api/llm/test',{provider:setLLM,key:v&&!v.startsWith('•')?v:null}).then(r=>{keyTested=!!r.ok;keyErr=r.ok?'':r.message;render()}).catch(()=>{keyErr='码表后台没有回应，看看运行码表的窗口是不是关了。';render()});return}
   const fil=e.target.closest('[data-fill]');if(fil){const i=document.getElementById('h-what');if(i)i.value=fil.dataset.fill;hSay=fil.dataset.fill;return}
