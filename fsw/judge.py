@@ -9,7 +9,8 @@
 - 达标率：没超过体验标准的轮次占几成（10-20 用户定，换掉自造的"10 次里最慢"）；后两条测满 10 轮才判
 - 出错：对错问题（比如回答开头被吞），单独一块，只写出错的轮次，不分必须 / 建议
 - 未判：既没有体验标准、也没有上次可比，这次只记用时，明说
-- 达标：体验标准内，且没比上次慢；放回答的线不判快慢，也收在这里（页面上只写"另有 N 条达标 / 不判快慢"）
+- 达标：体验标准内，且没比上次慢
+- 放回答的线（看回答长短）不判快慢：等级是"未判"，理由写"取决于回答长短，不判快慢"；报告里单列"只记录、不判快慢"
 "偶发特别慢"不再单独出标签：偶尔慢由达标率 < 90% 管
 """
 
@@ -117,6 +118,10 @@ def _big(line, seg_st, segs_def, st):
     return segs_def[k]["name"], seg_st[k]["med"], round(seg_st[k]["med"] / st["med"] * 100)
 
 
+def _owners(o):
+    return [x.strip() for x in str(o or "").replace("/", "、").replace("，", "、").replace(",", "、").split("、") if x.strip()]
+
+
 def merge_overruns(scenario, rounds):
     """"记最后一次"的中间点越过了下一步（比如"最后一包录音发出"：服务器回了听写之后设备还会再发几包），
     这一步后面那段就会变成负数、前面那段多算：只要有一轮这样，就把前后两段合成一段（从前一步直接到下一步），写明为什么。
@@ -135,6 +140,13 @@ def merge_overruns(scenario, rounds):
         nk = f"{g1['from']}-{g2['to']}" if k1 == f"{g1['from']}-{a}" else k1
         name = f"{pn[g1['from']]}到{pn[g2['to']]}" if g1["from"] in pn and g2["to"] in pn else f"{g1['name']}、{g2['name']}"
         merged = {**{x: v for x, v in g1.items() if x not in ("range", "slow")}, "to": g2["to"], "name": name}  # 合理范围不再用（10-19）
+        # 谁负责：两段的合起来（10-26 核对：上传 + 服务器听写合成一段，只写了前一段的「固件、网络」，服务器那份没了）；
+        # 两段都在设备外才算设备外
+        own = [o for g in (g1, g2) for o in _owners(g.get("owner"))]
+        if own:
+            merged["owner"] = "、".join(dict.fromkeys(own))
+        if "side" in g1 or "side" in g2:
+            merged["side"] = "outside" if g1.get("side") == g2.get("side") == "outside" else "device"
         segs = {(nk if k == k1 else k): (merged if k == k1 else g) for k, g in segs.items() if k != k2}
         rounds = [{**r, "segs": {**{k: v for k, v in r["segs"].items() if k not in (k1, k2)},
                                  nk: None if r["segs"].get(k1) is None or r["segs"].get(k2) is None
@@ -271,8 +283,8 @@ def judge(scenario, rounds, prev=None):
         vs = l["vs"]
         fair = (l.get("exp_std") or {}).get("fair")
         sev = 0   # 同一级里谁更重：超标越多越靠前
-        if l["verdict"] == ANSWER:
-            lv, why = "达标", ANSWER_TXT
+        if l["verdict"] == ANSWER:  # 不判快慢就是"未判"，不写"达标"（10-26 核对：等级达标、理由不判快慢，自相矛盾）
+            lv, why = "未判", ANSWER_TXT
         elif l["exp"] == "差":
             lv, why, sev = "必须改", rate_txt(l), 2 - l["pass_rate"]
         elif "pass_rate" in l and l["count"] >= 10 and l["big_n"] / l["count"] > round(1 - PASS_OK, 6):  # 1 - 0.9 算出来是 0.0999…，不取整会把正好 10% 判成大于 10%

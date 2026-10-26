@@ -323,7 +323,7 @@ def test_playing_the_answer_is_not_judged_by_range_and_every_line_is_listed():
     assert last["verdict"] == jdg.ANSWER and last["combo"] == jdg.ANSWER_TXT
     labels = {x["line"]: x for x in out["labels"] if x["kind"] == "line"}
     assert set(labels) == {"到喇叭出第一声", "到喇叭最后一声"}  # 没问题的线也列（收在"另有 N 条不用改"里）
-    assert labels["到喇叭最后一声"]["level"] == "达标" and labels["到喇叭最后一声"]["why"] == jdg.ANSWER_TXT
+    assert labels["到喇叭最后一声"]["level"] == "未判" and labels["到喇叭最后一声"]["why"] == jdg.ANSWER_TXT
 
 
 def test_steady_segment_while_playing_is_still_judged():

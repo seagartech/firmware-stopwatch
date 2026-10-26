@@ -70,9 +70,10 @@ def test_tiny_segments_fold_into_the_next_big_stage_and_list_shows_each_stage():
     out = svg(door())
     items = re.findall(r"<li[^>]*>(.*?)</li>", out)
     assert len(items) == 2                                                   # 读卡号；亮灯响一声（含校验、查名单）
-    assert "①" in items[0] and "读卡号" in items[0] and "13%" in items[0] and "含" not in items[0]
-    assert "②" in items[1] and "亮灯&lt;响一声&gt;" in items[1] and "含 2 个极短段" in items[1] and "87%" in items[1]
-    assert "校验" not in out.split("<ol")[1] and "查名单" not in out.split("<ol")[1]   # 并进去的段名不在这里列
+    # 10-26：写的是这一段自己的中位数（和「分段用时」一样），占这条线中位数的几成；并进来的极短段单独写名字和秒数
+    assert "①" in items[0] and "读卡号" in items[0] and "0.06 秒" in items[0] and "12%" in items[0] and "含" not in items[0]
+    assert "②" in items[1] and "亮灯&lt;响一声&gt;" in items[1] and "0.40 秒" in items[1] and "80%" in items[1]
+    assert "另含极短段：校验&lt;权限&gt; 0.00 秒、查名单 0.00 秒" in items[1]
     assert 'class="top"' not in out                                        # 不标哪块最长（10-20 用户定）
     assert "鼠标移上去" not in out and "…" not in out                       # 不靠悬停、段名不截断
 
@@ -92,12 +93,13 @@ def test_line_length_is_its_median_and_shared_segment_split_by_ratio():
     items = re.findall(r"<li[^>]*>(.*?)</li>", out)
     shared = [t for t in items if "听写" in t]
     assert len(shared) == 2 and all("（共用）" in t for t in shared)
-    assert "56%" in shared[0] and "36%" in shared[1]                         # 0.5/(0.5+0.4)、0.5/(0.5+0.9)
+    # 10-26：共用的一段两条线写同一个数（它自己的中位数 0.50），不再按比例摊成两个数
+    assert all("0.50 秒" in t for t in shared) and "60%" in shared[0] and "34%" in shared[1]   # 0.5/0.83、0.5/1.45
 
 
 def test_note_under_chart_is_one_short_line_without_scene_words():
     out = svg(door())
-    assert "按 2 轮中位数画；不到 5% 的段并进相邻的段，各段明细见「分段用时」。" in out
+    assert "按 2 轮中位数画：每条线总长是这条线的中位数；块里和上面列的秒数是这一段自己的中位数" in out
     assert "颜色规则" not in out and "图例" not in out                     # 原来的一大段说明删了
     for w in ("说话", "语音", "开口", "表情", "服务器"):
         assert w not in out

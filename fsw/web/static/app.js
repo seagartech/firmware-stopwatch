@@ -55,7 +55,9 @@ function lenByContent(J){const sc=J.scenario,hide=new Set((J.lines||[]).filter(x
  if(!hide.size||!keep.length)return sc;
  const used=new Set(keep.flatMap(l=>l.segments)),gone=new Set(sc.lines.filter(l=>hide.has(l.name)).flatMap(l=>l.segments).filter(k=>!used.has(k)));
  const main=keep[keep.length-1];
- return {...sc,lines:keep,segments:Object.fromEntries(Object.entries(sc.segments).filter(([k])=>!gone.has(k))),cutEnd:main.end||main.name}}
+ // 不进图和结论，但不丢（10-26 用户要看全程）：报告里单列"只记录、不判快慢"，写一般、最快、最慢
+ return {...sc,lines:keep,segments:Object.fromEntries(Object.entries(sc.segments).filter(([k])=>!gone.has(k))),cutEnd:main.end||main.name,
+  recOnly:{lines:sc.lines.filter(l=>hide.has(l.name)).map(l=>l.name),segments:[...gone]}}}
 // 报告顶上一行带上芯片（10-21：测量条件那块删了，芯片挪到这里）：项目名（芯片，板子）
 const withChip=n=>{const c=REAL&&REAL.chip;if(!c||String(n).includes(c))return n;return /（[^）]*）$/.test(n)?n.replace(/（([^）]*)）$/,`（${c}，$1）`):`${n}（${c}）`};
 function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.status==='done';
@@ -70,7 +72,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(withChip(pName))} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
-  firstBeforeSecond:lines.length>1,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],
+  firstBeforeSecond:lines.length>1,recOnly:sc.recOnly||null,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],
   tech:{
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
@@ -167,17 +169,22 @@ function timeline(D){
     st.forEach((x,j)=>{const a=t0,b=t0+x.d;t0=b;const last=j===st.length-1,k=x.parts[0].k,shared=x.parts.some(p=>D.use[p.k]>1),no=NO[rows.length]||String(rows.length+1),w=sx(b)-sx(a);
       const c=last?l.col:shared?'var(--soft)':l.soft,fg=last?'#fff':'var(--fg)';
       const th=x.parts.find(p=>(D.allSegs.find(s=>s.k===p.k)||{}).thin),ths=th&&D.allSegs.find(s=>s.k===th.k);
-      rows.push({no,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:x.d,share:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,shared});
+      // 块里、图下写的秒数是这一段自己的中位数，和「分段用时」同一个数（10-26 核对：按比例摊到整条线后写成 0.29 / 0.30，表里是 0.28）；
+      // 并进来的极短段单独写名字和秒数，不加进这个数里。色块长短仍按比例画到整条线的中位数
+      const own=x.parts[0].real,tiny=x.parts.slice(1).map(p=>({name:D.S.segs[p.k].name,v:p.real}));
+      rows.push({no,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:own,share:l.med>0&&own!=null?own/l.med:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,tiny,shared});
       g+=`<g><rect x="${sx(a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
-      if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(x.d)}</text>`;
+      if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(own)}</text>`;
       else if(w>16)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${no}</text>`;g+='</g>'});
     g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
   const L0=D.lines[0],L1=D.lines[1];
-  if(L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)){const a=L0.med,b=L1.med,y=top+gap-12;
-    g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(b-a,2)} 秒</text>`;}
-  const list=rows.map(r=>`<li><span class="no">${r.no}</span><span class="nm">${htmlEsc(r.name)}${r.shared?'（共用）':''}</span><span class="r num">${f(r.d)} 秒</span><span class="r num">${Math.round(r.share*100)}%</span><span class="ow">${htmlEsc(r.owner)}</span><span class="ow">${r.inc?`含 ${r.inc} 个极短段`:''}</span></li>`).join('');
+  // "早多少秒"用后台按每轮算的差的中位数（judge lead），和逐轮一致；没有才用两条线中位数相减（10-26 核对：图上 0.38、逐轮中位 0.36）
+  const LD=D.J&&D.J.lead&&D.J.lead.first===L0.name&&L1&&D.J.lead.second===L1.name?D.J.lead.med:null;
+  if(L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)){const a=L0.med,b=L1.med,y=top+gap-12,early=LD!=null?LD:b-a;
+    g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(early,2)} 秒</text>`;}
+  const list=rows.map(r=>`<li><span class="no">${r.no}</span><span class="nm">${htmlEsc(r.name)}${r.shared?'（共用）':''}</span><span class="r num">${f(r.d)} 秒</span><span class="r num">${Math.round(r.share*100)}%</span><span class="ow">${htmlEsc(r.owner)}</span><span class="ow">${r.inc?`另含极短段：${r.tiny.map(t=>`${htmlEsc(t.name)} ${f(t.v)} 秒`).join('、')}`:''}</span></li>`).join('');
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
-  <ol class="tlst">${list}</ol><p class="note" style="margin:6px 0 0">按 ${D.n} 轮中位数画；不到 5% 的段并进相邻的段，各段明细见「分段用时」。</p>`;
+  <ol class="tlst">${list}</ol><p class="note" style="margin:6px 0 0">按 ${D.n} 轮中位数画：每条线总长是这条线的中位数；块里和上面列的秒数是这一段自己的中位数，和「分段用时」一样（各段中位数加起来和整条线的中位数不一定相等，色块按比例画）。不到 5% 的段并进相邻的块，名字和秒数单独写出。</p>`;
 }
 // 把一条线的各段归成阶段：share 不到 5% 的段并进后面那个大段，排在最后的并进前一个大段；全都极短时合成一块
 function stages(parts){const out=[];let pend=[];
@@ -316,7 +323,7 @@ function dev(D){const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,C
   const outside=s=>{const j=D.J&&D.J.segments.find(x=>x.k===s.k);return j&&j.outside};
   return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>技术细节</h1>${vsTag()}</div><p class="sub">给研发：每段在代码哪里、慢在哪、怎么改。单位秒。${realFlash()?'':'这里只演示样子。'}</p></div>
   <section class="panel scroll"><h2>分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段</th><th class="loc">代码位置</th><th class="own">谁负责</th><th class="r">一般<br>（中位数）</th><th class="r">最差</th>${PV?`<th class="r">上次<br><span class="note">${htmlEsc(String(PV.measured_at||'').replace(/^\d{4}-/,''))}</span></th>`:''}<th>判断</th></tr></thead><tbody>${groups}</tbody></table>
-  <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>
+  <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>${recOnlyBox(D)}
   ${bad.length?`<section class="panel scroll"><h2>有问题的轮</h2><table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}<th>慢在哪段</th></tr></thead><tbody>${bad.map(r=>{const c=why(r);return `<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${e==null?'—':f(e)}</td>`).join('')}<td ${SANS}>${c?`${htmlEsc(c.name)}：${f(c.v)} 秒（一般 ${f(c.med)}）`:'<span class="note">没有哪一段特别慢，各段都慢一点</span>'}</td></tr>`}).join('')}</tbody></table>${one?`<p class="note" style="margin:8px 0 0">这几轮都慢在「${htmlEsc(one.name)}」${outside(one)?'，这段在设备外':''}。</p>`:''}</section>`:''}${fixDev(D)}
   <section class="panel"><h2>原始日志</h2><p style="margin:0 0 6px"><span class="code">${T.log}</span></p><p class="note" style="margin:0 0 8px">设备调试口原样输出，没有删改；码表插的计时点行以 FSW 开头。报告里的数都从它算。</p><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
@@ -762,6 +769,15 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);if(!FX.length)return '';
    <table><tbody><tr><th style="width:7em">推算</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table></div>`).join('')}
    <h3 style="margin:4px 0 6px;font-size:15px">方案</h3>${opts.map(o=>`<div class="optdev ${o.rec?'on':''}"><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''} <span class="note">${FX.length>1?`对应问题 ${o.for.join('、')} · `:''}找谁：${o.who}</span><ul class="notes"><li>改法：${o.how}</li>${has(o.size)?`<li>改动大小：${o.size}</li>`:''}${has(o.rk)?`<li>风险：${o.rk}</li>`:''}</ul></div>`).join('')}</section>`;
 }
+// 只记录、不判快慢（10-26）：长短看回答说了多少字的线（比如到回到聆听）和只在它上面的段，不进图和结论，但数照写
+function recOnlyBox(D){const R=D.S.recOnly,J=D.J;if(!R||!J||!R.lines.length)return '';
+ const sc=J.scenario||{},SG=sc.segments||{},jl=n=>(J.lines||[]).find(x=>x.name===n),js=k=>(J.segments||[]).find(x=>x.k===k);
+ const cell=x=>x&&x.med!=null?`<td class="r">${f(x.med)}</td><td class="r">${f(x.min)}</td><td class="r">${f(x.max)}</td><td class="r">${x.count!=null?`${x.count}/${x.of!=null?x.of:D.n}`:''}</td>`:'<td class="r" colspan="4">没有数</td>';
+ const rows=R.lines.map(n=>{const l=jl(n)||{},end=l.end||n;
+   return `<tr class="grp"><td ${SANS}><b>${htmlEsc(D.S.startShort)}到${htmlEsc(end)}</b></td><td ${SANS}><span class="chip c-gray">只记录、不判快慢</span></td>${cell(l)}</tr>`}).join('')
+  +R.segments.map(k=>{const g=SG[k]||{},x=js(k);return `<tr><td ${SANS}>${htmlEsc(g.name||k)}</td><td class="note" ${SANS}>${htmlEsc(g.owner||'')}</td>${cell(x)}</tr>`}).join('');
+ return `<section class="panel scroll" id="sec-rec"><h2>只记录、不判快慢</h2><table class="num segtab"><thead><tr><th class="segn">线 / 段</th><th class="own">谁负责</th><th class="r">一般<br>（中位数）</th><th class="r">最快</th><th class="r">最慢</th><th class="r">有数的轮</th></tr></thead><tbody>${rows}</tbody></table>
+ <p class="note" style="margin:8px 0 0">长短主要看这次回答说了多少字，不判快慢，也不画进上面的图、不进结论；数照样从原始日志算，单位秒。</p></section>`}
 function reportPage(D){
   if(mode==='dev')return dev(D);
   return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>${headline(D)}</h1>${vsTag()}</div><p class="sub">${subline(D)}</p>${D.S.real&&JREP?checksBox(JREP):''}${D.S.real&&JREP?`<details class="fold"><summary>数据怎么来的、起点怎么算</summary>${qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged)}</details>`:''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
@@ -769,7 +785,7 @@ function reportPage(D){
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2>
-  <section class="panel" id="sec-tiers"><h2>用时和达标率</h2>${tiers(D)}${stdNote(D)}</section>
+  <section class="panel" id="sec-tiers"><h2>用时和达标率</h2>${tiers(D)}${stdNote(D)}</section>${recOnlyBox(D)}
   <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
