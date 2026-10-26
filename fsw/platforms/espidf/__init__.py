@@ -47,6 +47,104 @@ class ToolEnvError(RuntimeError):
         self.detail = detail
 
 
+# ---- 编译 / 烧录要用的命令行工具：码表不管怎么启动（比如从图形界面、精简的 PATH 起的服务）都要找得到 ----
+# 常见的装工具的位置（Homebrew、MacPorts、pipx / uv 的 ~/.local/bin）；Windows 上靠乐鑫的 export 脚本，不补这些
+COMMON_TOOL_DIRS = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/opt/local/bin", "~/.local/bin",
+                    "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+# 编译要用的命令：名字 → 缺了时给人看的说法
+NEEDED_TOOLS = {"cmake": "生成编译清单用（CMake）", "ninja": "真正编译用（Ninja）"}
+# 工具没找到时各家的原话：乐鑫 idf.py、shell、Python 的 FileNotFoundError、esptool 没装在乐鑫的 Python 环境里
+_TOOL = r"(cmake|ninja|idf\.py|python3?|esptool(?:\.py)?|git|ccache|make|(?:xtensa|riscv32)-[\w-]*-(?:gcc|g\+\+|ld|as))"
+TOOL_MISSING = [
+    re.compile(r'"?([\w.+-]+)"? must be available on the PATH', re.I),   # 乐鑫 idf.py 自己的原话，名字照抄
+    re.compile(r"(?:^|[\s:/])" + _TOOL + r"(?:\.exe)?: (?:command )?not found", re.I),
+    re.compile(r"No such file or directory: '(?:[^']*[/\\])?" + _TOOL + r"(?:\.exe)?'", re.I),
+    re.compile(r"can't open file '(?:[^']*[/\\])?(idf\.py)'", re.I),
+    re.compile(r"No module named '?(esptool)'?", re.I),
+    re.compile(r"'" + _TOOL + r"' is not recognized as an internal or external command", re.I),
+]
+
+
+def _tool_root(env=None):
+    env = os.environ if env is None else env
+    return Path(env.get("IDF_TOOLS_PATH") or Path.home() / ".espressif")
+
+
+def idf_tool_dirs(env=None):
+    """乐鑫安装器自己下载的 cmake、ninja 放在 ~/.espressif/tools/<工具>/<版本>/ 下面（cmake 在 Mac 上是 CMake.app 里的 bin）。"""
+    out, root = [], _tool_root(env) / "tools"
+    for name in NEEDED_TOOLS:
+        for d in sorted(root.glob(f"{name}/*"), reverse=True):
+            for sub in ("bin", "CMake.app/Contents/bin", "."):
+                exe = d / sub / (name + (".exe" if os.name == "nt" else ""))
+                if exe.exists():
+                    out.append(str((d / sub).resolve()))
+                    break
+    return out
+
+
+def with_tool_dirs(path, env=None, extra=None):
+    """PATH 后面补上常见的工具目录和乐鑫自带工具的目录：只补电脑上真有的，已经在 PATH 里的不重复，原来的顺序不动。"""
+    parts = [d for d in str(path or "").split(os.pathsep) if d]
+    seen = {os.path.normcase(os.path.normpath(d)) for d in parts}
+    cands = (list(extra or []) + idf_tool_dirs(env)
+             + ([] if os.name == "nt" else [os.path.expanduser(d) for d in COMMON_TOOL_DIRS]))
+    for d in cands:
+        k = os.path.normcase(os.path.normpath(d))
+        if k not in seen and os.path.isdir(d):
+            parts.append(d)
+            seen.add(k)
+    return os.pathsep.join(parts)
+
+
+def missing_tools(text):
+    """编译、烧录的输出里认出"工具没找到"：返回缺的工具名（去重，按出现的顺序）；没认出返回空列表。"""
+    out = []
+    for line in ANSI.sub("", str(text or "")).splitlines():
+        for rx in TOOL_MISSING:
+            m = rx.search(line)
+            if m and m.group(1) not in out:
+                out.append(m.group(1))
+    return out
+
+
+def tool_missing_message(names):
+    what = "、".join(names) if names else "编译要用的工具"
+    return (f"编译工具没准备好（缺 {what}），不是你的源码问题。到设置页看看编译工具那一栏缺哪个，"
+            f"装好后点「重试」。")
+
+
+def check_tools(idf_path=None, env=None):
+    """编译前自检：cmake、ninja 在补过常见目录的 PATH 上找不找得到；选中的乐鑫工具里有没有 idf.py、乐鑫的 Python 环境里有没有烧录工具 esptool。
+    只按位置找文件，不跑乐鑫的 export 脚本（首页每隔几秒会查一次）。"""
+    env = dict(os.environ if env is None else env)
+    path = with_tool_dirs(env.get("PATH"), env)
+    found, missing = {}, []
+    for name, why in NEEDED_TOOLS.items():
+        w = shutil.which(name, path=path)
+        if w:
+            found[name] = w
+        else:
+            missing.append({"name": name, "why": why})
+    if idf_path:
+        idf_py = Path(idf_path) / "tools" / "idf.py"
+        if idf_py.exists():
+            found["idf.py"] = str(idf_py)
+        else:
+            missing.append({"name": "idf.py", "why": "乐鑫编译工具的入口（ESP-IDF 里的 tools/idf.py）"})
+        py_env = EspIdf(idf_path).installed_python_env(env)
+        if py_env is None:
+            missing.append({"name": "乐鑫 Python 环境", "why": "乐鑫安装脚本 install.sh 装的 Python 环境，编译、烧录都要用"})
+        else:
+            lib = py_env.parent / ("Lib" if os.name == "nt" else "lib")
+            hit = next(iter(lib.glob("site-packages/esptool")), None) or next(iter(lib.glob("python*/site-packages/esptool")), None)
+            if hit:
+                found["esptool"] = str(hit)
+            else:
+                missing.append({"name": "esptool", "why": "烧录工具，装在乐鑫的 Python 环境里"})
+    return {"ok": not missing, "missing": missing, "found": found}
+
+
 def version_tuple(v):
     parts = [int(x) for x in re.findall(r"\d+", str(v))[:3]]
     return tuple(parts + [0] * (3 - len(parts)))
@@ -259,6 +357,14 @@ def _subprocess_runner(cmd, cwd, env):
     return proc.wait()
 
 
+def _tool_or(r, tail):
+    """烧录失败时先看是不是烧录工具本身没找到（比如 esptool 没装）：是的话按"编译工具没准备好"报，不当成线松了、口被占了。"""
+    miss = missing_tools("\n".join(tail))
+    if miss:
+        r = {**r, "cause": "tool", "missing": miss, "message": tool_missing_message(miss), "error": "\n".join(tail[-8:])}
+    return r
+
+
 def pick_errors(tail):
     """编译输出里挑报错：先找编译器的报错行（文件:行: error:）连同"在哪里展开的宏"那几行（报错指到头文件里时靠它找到真正的那一句），
     再找 CMake 的报错段（原话常常分好几行），找不到再退而求其次。最多 8 行。"""
@@ -295,6 +401,8 @@ class EspIdf:
         rec = self.idf_path / ".fsw_tools_path"
         if rec.exists():
             env["IDF_TOOLS_PATH"] = rec.read_text(encoding="utf-8").strip()
+        # 码表可能是从精简的 PATH 起的（图形界面、服务）：常见的工具目录补在后面，乐鑫的 export 脚本和编译时都找得到 cmake、ninja
+        env["PATH"] = with_tool_dirs(env.get("PATH"), env)
         # 乐鑫按 PATH 上第一个合用的 python 的版本去找"idfX.Y_pyA.B_env"。这台电脑上已经装好的那套环境放到 PATH 最前面，
         # 就一定用它：电脑上有好几个 Python 时（比如 Mac 自带 3.9、另装了 3.10，环境却是用 3.12 装的）也不会挑错
         py_env = self.installed_python_env(env)
@@ -331,6 +439,7 @@ class EspIdf:
             if "IDF_PYTHON_ENV_PATH" not in env:  # 没跑通不记下来，装好或修好后再点一次就能重新加载
                 tail = [l for l in ANSI.sub("", said).splitlines() if l.strip()][-8:]
                 raise ToolEnvError("\n".join(tail))
+            env["PATH"] = with_tool_dirs(env.get("PATH"), env)  # export 脚本改过 PATH：再补一遍，不重复
             self._env = env
         return self._env
 
@@ -347,6 +456,8 @@ class EspIdf:
                 line = next(gen)
             except StopIteration as stop:
                 return stop.value or 0, tail
+            except FileNotFoundError as e:  # 要跑的程序本身不在：当成工具没找到，按"缺哪个"报
+                return 127, tail + [f"No such file or directory: '{e.filename or cmd[0]}'"]
             tail = (tail + [line])[-40:]
             on_line(line)
 
@@ -419,7 +530,10 @@ class EspIdf:
             return {"ok": True, "seconds": secs, "error": None}
         # 先找编译器的报错行（文件:行: error:），再找 CMake 的报错段（原话常常分好几行），找不到再退而求其次
         out = {"ok": False, "seconds": secs, "error": "\n".join(pick_errors(tail))}
-        if NET_FAIL.search("\n".join(tail)):  # 下载组件连不上：是网络的问题，不是源码编不过
+        miss = missing_tools("\n".join(tail))
+        if miss:  # 工具报一行"找不到 cmake"就正常退出了：是电脑上编译工具的问题，不是源码编不过
+            out.update(cause="tool", missing=miss, message=tool_missing_message(miss), error="\n".join(tail[-8:]))
+        elif NET_FAIL.search("\n".join(tail)):  # 下载组件连不上：是网络的问题，不是源码编不过
             out.update(cause="network", message=NET_MESSAGE)
         return out
 
@@ -450,7 +564,7 @@ class EspIdf:
         if code == 0:
             on_progress(100, "烧录完成")
             return {"ok": True, "port": port, "seconds": round(time.time() - t, 1), "error": None}
-        return _flash_failed(port, tail)
+        return _tool_or(_flash_failed(port, tail), tail)
 
     # ---- 任务 14：两份固件（原版、计时版）各存一份，随时烧哪个 ----
     @staticmethod
@@ -540,12 +654,12 @@ class EspIdf:
                     on_progress(100, "烧录完成")
                     return {"ok": True, "port": port, "seconds": round(time.time() - t, 1), "error": None,
                             "attempts": attempts, "log": str(log) if log else None}
-                r = _flash_failed(port, tail)
+                r = _tool_or(_flash_failed(port, tail), tail)
                 attempts.append({"n": n, "before": before, "ok": False, "stage": r["stage"], "seconds": round(time.time() - t1, 1)})
                 if logf:
                     logf.write(f"===== 第 {n} 次失败：阶段 {r['stage']}，{'已开始写' if r['written'] else '还没开始写'}（退出码 {code}）\n")
                     logf.flush()
-                if r["stage"] != "connect":  # 只有"没连上、什么都没写"才自动再试
+                if r["stage"] != "connect" or r.get("cause") == "tool":  # 只有"没连上、什么都没写"才自动再试；工具不在重试也没用
                     break
         finally:
             if logf:

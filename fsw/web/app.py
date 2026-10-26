@@ -31,7 +31,7 @@ from fsw import rangelist as rl
 from fsw import carry as cy
 from fsw import llm as llms
 from fsw.workspace.picker import native_pick
-from fsw.platforms.espidf import EspIdf, ToolEnvError, chip_name, download_mode_tip, find_idf, find_ports, pick_idf, port_holders, port_key
+from fsw.platforms.espidf import EspIdf, ToolEnvError, check_tools, tool_missing_message, chip_name, download_mode_tip, find_idf, find_ports, pick_idf, port_holders, port_key
 from fsw.platforms.espidf.install import MacInstaller, choose_version
 from fsw.workspace import workspace as ws
 from fsw.workspace.workspace import ascii_work_root, prepare
@@ -388,8 +388,10 @@ def code_ctx(job):
 
 
 def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
-               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None):
+               config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None, tool_check=None):
     app = FastAPI(title="固件码表")
+    # 编译前自检：cmake、ninja、idf.py、esptool 找不找得到（只按位置找文件）。换了假的找编译工具（测试）又没给自检时不查这台电脑
+    tool_check = tool_check or (check_tools if idf_finder is None else (lambda idf_path: {"ok": True, "missing": [], "found": {}}))
     demos = load_demos()
     cfg = lambda: load_config(config_dir)  # 设置文件夹默认 ~/.config/firmware-stopwatch/，测试时换成临时文件夹
     data_dir = Path(data_dir) if data_dir else cfg().data_dir
@@ -554,6 +556,15 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                    "seconds": None, "error": None, "idf": idf["version"], "idf_path": idf["path"],
                    "board": body.board, "target": re.sub(r"[^a-z0-9]", "", (body.chip or "esp32").lower())}
             bg["job"] = job
+            try:  # 编译前自检：缺 cmake、ninja、idf.py 这些就直接点名，不等编到一半才报"编不过"
+                pre = tool_check(idf["path"])
+            except Exception:
+                pre = {"missing": []}
+            block = [m["name"] for m in pre.get("missing") or [] if m.get("name") != "esptool"]
+            if block:
+                job.update(state="failed", cause="tool", missing=block, seconds=0, error="编译前自检：" + "、".join(block) + " 没找到",
+                           message=tool_missing_message(block))
+                return job
         target = re.sub(r"[^a-z0-9]", "", (body.chip or "esp32").lower())
 
         def progress(pct, msg):
@@ -571,8 +582,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job["seconds"] = r.get("seconds")
             if r.get("ok"):
                 job.update(state="done", pct=100, message="原始代码已编好")
-            elif r.get("cause"):  # 编译工具没加载起来、组件没下载下来：都不是源码的问题
-                job.update(state="failed", cause=r["cause"], error=r.get("error"), message=r["message"])
+            elif r.get("cause"):  # 编译工具没加载起来、缺 cmake 之类、组件没下载下来：都不是源码的问题
+                job.update(state="failed", cause=r["cause"], error=r.get("error"), message=r["message"], missing=r.get("missing"))
             else:
                 job.update(state="failed", error=r.get("error"),
                            message="原版编译没通过，不是码表改的：你选的源码本身在这台电脑上编不过"
@@ -973,7 +984,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             job.update(phase="build", pct=0, log="准备编译")
             b = _wait_bg(job, a.work)
             if b and b["state"] == "failed":
-                return _fail(job, "orig", b.get("message") or "原版编译没通过", error=b.get("error"), cause=b.get("cause"))
+                return _fail(job, "orig", b.get("message") or "原版编译没通过", error=b.get("error"), cause=b.get("cause"),
+                             missing=b.get("missing"))
             if not b or b["state"] != "done":
                 return _fail(job, "orig", "原始代码还没编好，没法编计时版。回首页重新选一次源码。")
             if not b.get("reused") and not _orig_ok(a.project_dir, a.board):
@@ -991,7 +1003,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 return _fail(job, "build", ToolEnvError.message, error=getattr(e, "detail", None) or str(e), cause="tool")
             job["seconds"]["build"] = r.get("seconds", round(time.time() - t0, 1))
             if r.get("cause"):
-                return _fail(job, "build", r["message"], error=r.get("error"), cause=r["cause"])
+                return _fail(job, "build", r["message"], error=r.get("error"), cause=r["cause"], missing=r.get("missing"))
             if not r.get("ok"):
                 rec = ins.current(_fsw_dirs(a)[0]) or {"steps": {}}
                 place = ins.error_place(r.get("error"), rec, a.work)
@@ -1045,7 +1057,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 T().end("flash", result="failed", stage=r.get("stage") or r.get("cause") or "other",
                         attempts=len(r.get("attempts") or []) or None, log=r.get("log"))
             if r.get("cause") == "tool":
-                return _fail(job, "burn", r["message"], error=r.get("error"), cause="tool")
+                return _fail(job, "burn", r["message"], error=r.get("error"), cause="tool", missing=r.get("missing"))
             if r.get("wrong_chip"):  # 选的板子和设备芯片不同：乐鑫工具没写进去，设备里原来的东西没动
                 w = r["wrong_chip"]
                 _remember_chip(port, w["device"])
@@ -2512,7 +2524,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
     @app.get("/api/env")
     def env_status(cc: bool = True):
         """电脑上的环境：装了哪些乐鑫编译工具、本机 Claude Code 登没登录、插着哪些设备。都不用大模型、不花钱。"""
-        return {"idf": idf_finder(), "claude_code": cc_status() if cc else None, "ports": port_finder()}
+        idfs = idf_finder()
+        best = pick_idf(idfs, None) if idfs else None
+        try:  # 自检出错不挡别的：首页照常显示
+            tools = tool_check(best["path"] if best else None)
+        except Exception as e:
+            tools = {"ok": False, "missing": [], "found": {}, "error": str(e)}
+        return {"idf": idfs, "claude_code": cc_status() if cc else None, "ports": port_finder(), "tools": tools}
 
     # ---- 设备上是哪种芯片：选板子时核对，芯片对不上的板子不让选（10-21 用户定）----
     chip_lock = threading.Lock()

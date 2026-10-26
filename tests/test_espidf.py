@@ -249,7 +249,9 @@ def test_own_python_is_not_passed_to_espressif(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", os.pathsep.join([str(venv / ("Scripts" if os.name == "nt" else "bin")), "/usr/local/bin", "/usr/bin"]))
     env = EspIdf(idf_install(tmp_path / "idf", 6, 1)).export_env()
     assert "VIRTUAL_ENV" not in env and "PYTHONHOME" not in env
-    assert env["PATH"].split(os.pathsep) == ["/usr/local/bin", "/usr/bin"]
+    parts = env["PATH"].split(os.pathsep)
+    assert parts[:2] == ["/usr/local/bin", "/usr/bin"]  # 后面会补常见的工具目录（见 test_tool_env），码表自己的 Python 不在里面
+    assert str(venv / ("Scripts" if os.name == "nt" else "bin")) not in parts
 
 
 @pytest.mark.skipif(os.name == "nt", reason="用 bash 跑假的 export.sh")

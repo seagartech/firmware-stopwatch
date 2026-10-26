@@ -149,6 +149,8 @@ def test_quick_env_check_skips_claude_code(make):
     c = make(cc_status=lambda: calls.append(1) or {"found": True, "logged_in": True},
              idf_finder=lambda: [{"path": "/x/esp-idf", "version": "6.1.0"}], port_finder=lambda: ["COM3"])
     env = c.get("/api/env?cc=0").json()
+    tools = env.pop("tools")  # 编译前自检（换了假的找编译工具时不查这台电脑，见 test_tool_env）
+    assert tools["missing"] == []
     assert env == {"idf": [{"path": "/x/esp-idf", "version": "6.1.0"}], "claude_code": None, "ports": ["COM3"]}
     assert calls == []
 

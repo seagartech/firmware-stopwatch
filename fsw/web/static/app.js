@@ -447,7 +447,7 @@ const ccOK=()=>!!(CCST&&CCST.logged_in),hasKey=ui=>!!SAVED.has_key[UI2P[ui]];
 const keyOK=()=>setLLM==='cc'?ccOK():keyTested||hasKey(setLLM);
 const tilde=p=>String(p||'').replace(/^\/Users\/[^/]+|^\/home\/[^/]+/,'~');
 // 每 2 秒查一次设备和编译工具（不跑 claude 命令）：插上设备、自己装好编译工具，灯和设置页都自动变
-async function portsPoll(){try{const e=await (await fetch('/api/env?cc=0')).json(),n=e.ports||[],idf=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);const ch=n.join()!==PORTS.join()||idf.map(i=>i.path).join()!==IDFS.map(i=>i.path).join();PORTS=n;IDFS=idf;if(!ch)return;if(page==='flash'&&fl.st===4&&PORTS.length&&!realFlash()){fl.st=1;flRun(3,fl.to);return}  // 真插计时点时后台自己接着烧
+async function portsPoll(){try{const e=await (await fetch('/api/env?cc=0')).json(),n=e.ports||[],idf=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1),tm=JSON.stringify(e.tools||null)!==JSON.stringify(TOOLS);TOOLS=e.tools||null;if(tm&&(page==='home'||page==='settings'))render();const ch=n.join()!==PORTS.join()||idf.map(i=>i.path).join()!==IDFS.map(i=>i.path).join();PORTS=n;IDFS=idf;if(!ch)return;if(page==='flash'&&fl.st===4&&PORTS.length&&!realFlash()){fl.st=1;flRun(3,fl.to);return}  // 真插计时点时后台自己接着烧
  if(page==='home'){const lt=document.querySelector('.lights');if(lt)lt.outerHTML=envStatus();return}  // 首页只换灯，不打断正在输入的
  if(page==='steps'){const bj=document.querySelector('.bgjob');if(bj)bj.outerHTML=bgBox();return}  // 找关键步骤页只换"查设备"那块
  if(page==='settings'){const k=document.getElementById('set-key');if(k&&k.value.trim()&&!k.value.startsWith('•'))keyDraft=k.value.trim();render()}else if(page==='flash')render()}catch(e){}}
@@ -455,18 +455,21 @@ async function portsPoll(){try{const e=await (await fetch('/api/env?cc=0')).json
 const devNow=()=>REAL?{on:PORTS.length>0,port:PORTS[0]||''}:{on:!flNoDev,port:PORTS[0]||(setOS==='mac'?'/dev/cu.usbmodem1101':'COM3')};
 function portsWatch(on){if(on&&!portT)portT=setInterval(portsPoll,2000);if(!on&&portT){clearInterval(portT);portT=null}}
 // 电脑上真装了的乐鑫编译工具（后台 /api/env 查的）；够项目要求的版本就算装好了
-let IDFS=[];
+let IDFS=[],TOOLS=null;  // TOOLS：编译前自检（/api/env 的 tools）：cmake、ninja、idf.py、esptool 找没找到
+const toolMiss=()=>TOOLS&&TOOLS.missing?TOOLS.missing:[],toolBlock=()=>toolMiss().filter(m=>m.name!=='esptool');
 const vt=v=>String(v||'0').split('.').map(Number).concat([0,0,0]).slice(0,3),vge=(a,b)=>{const x=vt(a),y=vt(b);for(let i=0;i<3;i++){if(x[i]!==y[i])return x[i]>y[i]}return true};
 const realIdf=()=>{const min=REAL?REAL.idf_min:null;const ok=IDFS.filter(i=>!min||vge(i.version,min));return ok.sort((a,b)=>vge(a.version,b.version)?-1:1)[0]||null};
 const shortV=v=>String(v).replace(/\.0$/,'');
 // 首页灯和"用到时再检查"都按已保存的设置和真查的结果：没保存就回首页，缺的灯仍是红的
 const envKey=()=>{const p=SAVED.llm_provider;return p==='claude-code'?ccOK():(p==='claude-api'||p==='deepseek')&&!!SAVED.has_key[p]},envComp=()=>!!realIdf();
-function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm',SAVED.llm_provider==='claude-code'?'大模型：本机 Claude Code 登录':'大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${IDF()}`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);return m}
+function missing(only){const m=[];if(!envKey()&&only!=='comp')m.push(['set-llm',SAVED.llm_provider==='claude-code'?'大模型：本机 Claude Code 登录':'大模型密钥','找关键步骤要用大模型读代码，<b>不填就没法往下走</b>。']);if(hSrc&&!envComp()&&only!=='key')m.push(['set-idf',`乐鑫编译工具 ESP-IDF ${IDF()}`,inst.st===1?'正在后台安装，装好就能编译。':'编译这个固件要用（从源码里读到的要求）。<b>不挡找关键步骤</b>，烧录前装好就行。']);
+ if(hSrc&&envComp()&&toolMiss().length&&only!=='key')m.push(['set-idf',`编译要用的工具：缺 ${toolMiss().map(x=>htmlEsc(x.name)).join('、')}`,`${toolMiss().map(x=>htmlEsc(x.why)).join('；')}。<b>不挡找关键步骤</b>，烧录前装好就行。`]);return m}
 let envBack='home',compPending=false;
 function envStatus(){const L=(c,t)=>`<span class="light"><i class="dot" style="background:var(--${c})"></i>${t}</span>`;
  const sp=P2UI[SAVED.llm_provider],llmName={claude:'Claude',deepseek:'DeepSeek',cc:'本机 Claude Code'}[sp];
  const a=[envKey()?L('ok',`大模型：${llmName}，${sp==='cc'?'已登录':'密钥已填'}`):L('bad',sp==='cc'?(CCST&&!CCST.found?'大模型：没找到本机 Claude Code':'大模型：本机 Claude Code 还没登录'):'大模型：还没填密钥'),PORTS.length?L('ok',`设备：已插上 ${PORTS[0]}`):L('muted','设备：没插上（烧录前插上就行）')];
  if(hSrc&&!hReading)a.push(!envComp()&&inst.st===1?L('warn',`乐鑫 ESP-IDF ${IDF()}：正在后台装 ${Math.round(((inst.step||0)+(inst.pct||0)/100)/5*100)}%`):envComp()?L('ok',`乐鑫 ESP-IDF ${IDF()}：已装 v${realIdf()?shortV(realIdf().version):'6.1'}`):L('bad',`乐鑫 ESP-IDF ${IDF()}：没装`));
+ if(hSrc&&!hReading&&envComp()&&toolMiss().length)a.push(L(toolBlock().length?'bad':'warn',`编译工具缺 ${toolMiss().map(x=>htmlEsc(x.name)).join('、')}（设置页看详情）`));
  return `<div class="lights">${a.join('<span class="lsep" aria-hidden="true">|</span>')}</div>`}
 // 提示（决策 129）：成功（✓）绿色、自己消失；出错（✕）红色、一直在，点 × 才关；其他黄色，按字数多留一会儿
 let toastT=null;function toast(m){const t=document.getElementById('toast');m=String(m||'');const kind=m.startsWith('✓')?'ok':m.startsWith('✕')?'bad':'warn';
@@ -694,7 +697,7 @@ let instPoll=null;
 const INSTV=()=>inst.version||'v6.1',instPath=()=>(inst.path||INSTALL[setOS].path).replace(/^\/Users\/[^/]+/,'~');
 function instApply(j){inst.step=j.step||0;inst.pct=j.pct||0;inst.log=j.log||'';inst.version=j.version;inst.path=j.path;inst.msg=j.message;
  if(j.state==='done'){inst.st=2;clearInterval(instPoll);instPoll=null;if(compPending)compPending=false
-  fetch('/api/env').then(r=>r.json()).then(e=>{IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);render()});toast('✓ 编译工具装好了')}
+  fetch('/api/env').then(r=>r.json()).then(e=>{IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);TOOLS=e.tools||null;render()});toast('✓ 编译工具装好了')}
  else if(j.state==='failed'){inst.st=3;clearInterval(instPoll);instPoll=null}
  const b=document.getElementById('instbox');if(page==='settings'&&b)morphHTML(b,installBox());
  if(page==='flash')render();else if(page==='home'){const lt=document.querySelector('.lights');if(lt)lt.outerHTML=envStatus()}  // 别的页也跟着显示"正在装 xx%" 
@@ -717,6 +720,11 @@ function installBox(){const I=INSTALL[setOS],S=I.steps,n=S.length;
   ${inst.st!==2?`<div class="ilog"><span class="note">最新一行</span><code>${htmlEsc(inst.log)||'…'}</code></div>`:''}
   ${inst.st===3?`<p class="note">已下载的部分留着，重试会从断的地方接着装。多次失败可以换网络，或照手动步骤自己装，装好这里也会自动变绿。</p><div class="acts" style="justify-content:flex-start;margin:6px 0 10px"><button class="btn pri" data-inst="retry">重试</button><button class="btn" data-inst="manual">看手动安装步骤</button></div>`:''}
   ${inst.st===1?`<p class="note">关掉这页没关系，安装在后台继续；关掉码表会停，下次打开从断的地方接着装。</p>`:''}`}
+// 编译前自检（设置页「乐鑫编译工具」一栏）：cmake、ninja、idf.py、esptool 各自找没找到；缺了点名、写清做什么用
+function toolsBox(){if(!TOOLS)return '';const F=TOOLS.found||{},M=toolMiss();
+ const ok=Object.keys(F).map(k=>`<span><i class="dot" style="background:var(--ok)"></i>${htmlEsc(k)}：<span class="code">${htmlEsc(tilde(F[k]))}</span></span>`).join('');
+ const bad=M.map(x=>`<span><i class="dot" style="background:var(--bad)"></i>缺 ${htmlEsc(x.name)}：${htmlEsc(x.why)}</span>`).join('');
+ return `<div class="status" id="tools-check" style="margin-top:8px"><span class="note" style="width:100%">编译前自检（码表编译、烧录时会自动把 Homebrew 等常见目录补进 PATH）：</span>${bad}${ok}</div>${M.length?`<p class="note" style="color:var(--bad);margin:4px 0 0">缺的装好后，点上面「重新查找」再看一次${setOS==='mac'?'；Mac 上 cmake、ninja 可以用 Homebrew 装：<span class="code">brew install cmake ninja</span>':'；也可以重新跑一遍乐鑫的安装脚本'}。</p>`:''}`}
 function settingsPage(){
   const first=setFirst;
   const guide=setOS==='mac'?`<ol class="guide"><li>打开"终端"，复制这一行粘贴回车：<span class="code">mkdir -p ~/esp &amp;&amp; cd ~/esp &amp;&amp; git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git esp-idf-v6.1</span></li><li>再复制这一行：<span class="code">cd esp-idf-v6.1 &amp;&amp; ./install.sh esp32s3</span>，等它装完（十几分钟）</li><li>装完这里会自动变绿</li></ol>`:`<ol class="guide"><li>下载乐鑫官方的 Windows 安装器（ESP-IDF Installer），选 v6.1</li><li>安装路径用纯英文，比如 <span class="code">C:\\esp</span>（不要放在中文用户名的文件夹里）</li><li>装完这里会自动变绿</li></ol>`;
@@ -726,7 +734,7 @@ function settingsPage(){
   const cnt=done.filter(Boolean).length;
   const head=first?`<section class="panel" style="border-color:var(--speak)"><h1 style="font-size:22px">第一次用码表，先准备三样东西</h1><p class="note" style="margin:0">已准备 <b class="num">${cnt}</b> / 3。都准备好后，点最下面的「保存」。</p></section>`:'';
   const idfE=idfErr?`<p class="note" style="color:var(--bad);margin:6px 0 0">✕ ${htmlEsc(idfErr)}</p>`:'';
-  const compiler=!IDFS.length||(hSrc&&!realIdf())?`<div id="instbox">${installBox()}</div>${idfE}`:`<div class="status">${IDFS.map((i,k)=>`<span><i class="dot" style="background:var(--${k?'muted':'ok'})"></i>找到 v${shortV(i.version)}：<span class="code">${htmlEsc(tilde(i.path))}</span></span>`).join('')}<button class="pill" data-idf="find">重新查找</button><button class="pill" data-idf="pick">手动指定位置</button></div>${idfE}<p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`;
+  const compiler=!IDFS.length||(hSrc&&!realIdf())?`<div id="instbox">${installBox()}</div>${idfE}`:`<div class="status">${IDFS.map((i,k)=>`<span><i class="dot" style="background:var(--${k?'muted':'ok'})"></i>找到 v${shortV(i.version)}：<span class="code">${htmlEsc(tilde(i.path))}</span></span>`).join('')}<button class="pill" data-idf="find">重新查找</button><button class="pill" data-idf="pick">手动指定位置</button></div>${idfE}${toolsBox()}<p class="note">每个项目要哪个版本，码表读项目文件自动挑；项目要的版本没装时，这里会出现"帮我安装"。</p>`;
   return `<div class="stack">${head}
   <section class="panel ${page==='settings'&&envMark&&!keyOK()?'miss':''}" id="set-llm"><h2>${first?(done[0]?'✓ ':'① '):''}大模型（找关键步骤、写报告建议时用）</h2>
    <div class="radio">${opt('claude','Claude','识别准确率最高（验证期 9 个对 8 个）。需要你自己的 Claude API 密钥，按用量付费。',' <span class="chip c-ok">推荐</span>')}
@@ -943,7 +951,8 @@ const bgDone=()=>bgSec>=bgDur,bgPct=()=>Math.min(100,Math.round(bgSec/bgDur*100)
 let BG=null,bgPoll=null;
 const bgFailed=()=>!!(BG&&BG.state==='failed'),bgWaitTool=()=>!!(BG&&BG.state==='waiting_tool'),bgToolErr=()=>bgFailed()&&!!BG.cause;
 // 不是源码的问题（编译工具没加载起来、组件没下载下来）：标题按原因说，正文去掉和标题重复的那句
-const TOOLT=c=>c==='network'?'组件没下载下来，不是源码的问题':'编译工具没加载起来，不是源码的问题',toolSay=m=>String(m||'').replace(/^.*?不是源码的问题[。：]/,'');
+// 缺哪个工具（后台从报错里认出来、或编译前自检查出来的）就点名：编译工具没准备好（缺 cmake），不是你的源码问题
+const TOOLT=(c,m)=>c==='network'?'组件没下载下来，不是源码的问题':m&&m.length?`编译工具没准备好（缺 ${m.map(htmlEsc).join('、')}），不是你的源码问题`:'编译工具没加载起来，不是源码的问题',toolSay=m=>String(m||'').replace(/^.*?不是(你的)?源码(的)?问题[。：]/,'');
 const lnTxt=l=>+l>0?`第 ${l} 行`:'行号待核对';  // 大模型没给出行号时记成 0（识别时已标需核对）
 const htmlEsc=t=>String(t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const BGTIME=()=>{if(BG&&BG.seconds!=null){const t=Math.round(BG.seconds);return t>=60?`${Math.floor(t/60)} 分 ${t%60} 秒`:`${t} 秒`}return FF[scene].bg};
@@ -1011,7 +1020,7 @@ function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='�
 let bgShownDone=0;
 const BGTIP='原始代码：你选的那份源码，码表复制一份，一个字没改、没插计时点。<br>点「开始找关键步骤」时开始编，这时源码和要测的内容都定了。插完计时点后的「编译」要用它，只重编改过的几个文件（验证期实测：从头编 119 秒，只重编 80 秒）。<br>没编完，只有「编译」那一步会先等它，其他步骤照常做。你原来的文件夹不动。';
 function bgPill(){const el=document.getElementById('bgpill');if(!el)return;let h='';
- if(bgSrc&&hSrc){if(bgFailed())h=`<button class="bgp warn" data-bgpop="1">${bgToolErr()?TOOLT(BG.cause).split('，')[0]:'原始代码编译没通过'}</button>`;else if(!envComp()||bgWaitTool())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
+ if(bgSrc&&hSrc){if(bgFailed())h=`<button class="bgp warn" data-bgpop="1">${bgToolErr()?TOOLT(BG.cause,BG.missing).split('，')[0]:'原始代码编译没通过'}</button>`;else if(!envComp()||bgWaitTool())h=`<button class="bgp warn" data-bgpop="1">后台编原始代码：等编译工具装好</button>`;
   else if(!bgDone())h=`<button class="bgp" data-bgpop="1" title="点开看详情"><span class="spin"></span>后台在编原始代码 ${bgPct()}%</button>`;
   else if(Date.now()-bgShownDone<5000)h=`<span class="bgp ok">✓ 原始代码已编好</span>`}
  morphHTML(el,h)}
@@ -1173,7 +1182,7 @@ function flRun(from,to){flStop();fl={st:1,step:from,pct:0,log:'',to};
 function flErrReal(){const J=FSWJ,E=J.err,C=CC(),F=FF[scene];
  const box=(t,d,code,acts)=>`<div class="errbox"><b>${t}</b><p style="margin:6px 0">${d}</p>${code?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(code)}</code>${fullLogBtn()}</div>${fullLog()}`:''}<div class="acts" style="margin:8px 0 0">${acts}</div></div>`;
  if(E.wrong_chip)return box('板子选错了',htmlEsc(E.message),E.error,`<button class="btn pri" data-go="home">回首页换板子</button>`);  // 芯片对不上：重烧没用，要换板子
- if(E.cause)return box(TOOLT(E.cause),htmlEsc(toolSay(E.message)),E.error,`<button class="btn pri" data-flx="${E.kind==='orig'?'origretry':E.kind==='burn'?'reburn':'rebuild'}">重试</button>${E.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}`);
+ if(E.cause)return box(TOOLT(E.cause,E.missing),htmlEsc(toolSay(E.message)),E.error,`<button class="btn pri" data-flx="${E.kind==='orig'?'origretry':E.kind==='burn'?'reburn':'rebuild'}">重试</button>${E.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}`);
  if(E.kind==='insert')return box('计时点没插上',E.message,E.error||'',`<button class="btn pri" data-fl="redo">重新插入</button>`);
  if(E.kind==='orig')return box('原版编译没通过，不是码表改的',`你选的源码本身在这台电脑上编不过（编译工具、依赖或板子配置的问题），和插的计时点无关，烧录前要先解决。码表不替你改代码。`,E.error,`<button class="btn" data-bgpop="1">看详情</button>`);
  if(E.kind==='build')return E.step?box('编译没通过：是码表插的计时点引起的',`原版在找关键步骤时已经编译通过，所以问题出在插进去的计时点：「${htmlEsc(E.step_name||E.step)}」那一处（${htmlEsc(E.where)}）。<br>码表自己的问题，不用你改代码。`,E.error,`<button class="btn pri" data-flx="drop">撤掉这处计时点，重新编译</button><button class="btn" data-flx="move">回去换个位置</button>`)
@@ -1526,7 +1535,7 @@ function popHTML(){const F=FF[scene],C=CC();
    `<button class="btn pri" data-pop="close" data-nudge="#sideask" data-msg="先回答这个问题">开始核对</button>`)}
  if(pop==='flash')return box('设备准备好了',`<p>插计时点、编译、烧录都完成了。刚才试的那一次，${live().length} 个计时点都收到了。</p><p>下一步<b>多轮实测</b>：照提示${C.act} ${colN} ${C.unit}，码表记下每一${C.unit}里每一段用了多久，最后出报告。</p>`,
    `<button class="btn" data-pop="close">留在这页</button><button class="btn pri" data-go="collect">开始多轮实测</button>`);
- if(pop==='bg'&&bgToolErr())return box(TOOLT(BG.cause),`<p>${htmlEsc(toolSay(BG.message))}</p>${BG.error?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div>`:''}<p class="note">找关键步骤照常做；烧录前解决就行。</p>`,`${BG.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}<button class="btn pri" data-bgretry="1">重试</button>`);
+ if(pop==='bg'&&bgToolErr())return box(TOOLT(BG.cause,BG.missing),`<p>${htmlEsc(toolSay(BG.message))}</p>${BG.error?`<div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div>`:''}<p class="note">找关键步骤照常做；烧录前解决就行。</p>`,`${BG.cause==='tool'?'<button class="btn" data-go="settings">到设置页</button>':''}<button class="btn pri" data-bgretry="1">重试</button>`);
  if(pop==='bg'&&bgFailed())return box('原版编译没通过，不是码表改的',`<p>${htmlEsc(String(BG.message||'').replace(/^原版编译没通过，不是码表改的：/,''))}</p><div class="ilog"><span class="note">报错</span><code>${htmlEsc(BG.error)}</code></div><p class="note">找关键步骤照常做；烧录前要先让原版编得过。</p>`,`<button class="btn pri" data-pop="close">知道了</button>`);
  if(pop==='bg'){const d=bgDone(),no=!envComp()||bgWaitTool();return box(d?'✓ 原始代码已编好':no?'后台编原始代码：等编译工具装好':`后台在编原始代码：${bgPct()}%`,`${d||no?'':`<span class="pbar" style="display:block;margin:0 0 12px"><i style="width:${bgPct()}%"></i></span>`}<ul class="notes" style="font-size:14px;color:var(--fg)">${BGTIP.split('<br>').map(x=>`<li>${x}</li>`).join('')}</ul>${no?'<p class="note">编译工具装好后自动开始，不用点。</p>':''}`,`<button class="btn pri" data-pop="close">知道了</button>`)}
  if(pop==='colre')return box('从头重测？',`<p>会清掉已测的 ${okRounds().length} 轮，从第 1 轮重新开始。</p><p class="note">只是想补几轮，用「接着测」就行。</p>`,`<button class="btn" data-pop="close">取消</button><button class="btn pri" data-col="restart2">清掉，从头测</button>`);
@@ -1755,9 +1764,9 @@ document.addEventListener('click',e=>{
    fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({llm_provider:setLLM,key:setLLM!=='cc'&&kv&&!kv.startsWith('•')?kv:null,data_dir:dataDraft,reuse:reuseLast})}).then(async r=>{const j=await r.json();if(!r.ok){sb.disabled=false;toast('✕ '+(j.detail||'没保存上'));return}
    SAVED=j.settings;keyDraft='';dataDraft=null;compPending=inst.st===1;envMark=false;toast(compPending?'✓ 已保存。编译工具还在后台装，装好自动变绿':'✓ 保存成功');const back=hSrc?envBack:'home';envBack='home';setTimeout(()=>{page=back;if(hStage>=2)hStage=1;render();window.scrollTo(0,0)},compPending?1800:1000)}).catch(()=>{sb.disabled=false;toast('✕ 码表后台没有回应，看看运行码表的窗口是不是关了')});return}
   if(e.target.closest('[data-cc]')){CCST=null;render();fetch('/api/env').then(r=>r.json()).then(j=>{CCST=j.claude_code;render()});return}
-  const ib=e.target.closest('[data-idf]');if(ib){idfErr='';if(ib.dataset.idf==='find'){ib.textContent='正在查找……';fetch('/api/env').then(r=>r.json()).then(j=>{IDFS=(j.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast(IDFS.length?`✓ 找到 ${IDFS.length} 个`:'没找到乐鑫编译工具');render()});return}
+  const ib=e.target.closest('[data-idf]');if(ib){idfErr='';if(ib.dataset.idf==='find'){ib.textContent='正在查找……';fetch('/api/env').then(r=>r.json()).then(j=>{IDFS=(j.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);TOOLS=j.tools||null;toast(IDFS.length?`✓ 找到 ${IDFS.length} 个`:'没找到乐鑫编译工具');render()});return}
    api('/api/source/pick',{kind:'dir'}).then(async p=>{if(!p.path)return;const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idf_path:p.path})});const j=await r.json();if(!r.ok){idfErr=j.detail;render();return}
-    SAVED=j.settings;const e2=await (await fetch('/api/env')).json();IDFS=(e2.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);toast('✓ 已记下这个位置');render()});return}
+    SAVED=j.settings;const e2=await (await fetch('/api/env')).json();IDFS=(e2.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);TOOLS=e2.tools||null;toast('✓ 已记下这个位置');render()});return}
   if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
   if(e.target.closest('[data-autostart]')){autoStart();return}
   if(e.target.closest('[data-autostop]')){autoStop();return}
@@ -1896,7 +1905,7 @@ document.getElementById('v-dev').addEventListener('click',()=>{mode='dev';render
  const list=await (await fetch('/api/demo')).json();
  for(const d of list){const x=await (await fetch('/api/demo/'+encodeURIComponent(d.id))).json();SCENES[d.id]=x.S;FF[d.id]=x.F;COLLECT[d.id]=x.C;RUNS[d.id]=x.R;RT[d.id]=x.RT;if(!d.hidden)PROJ.push({...x.P,scene:d.id})}  // 只用来核对报告的演示数据（hidden）不进"以前测过的"
  scene=DEMO&&SCENES[DEMO]?DEMO:list[0].id;pName=FF[scene].pname;mapSel=FF[scene].mapSel;
- try{const e=await (await fetch('/api/env')).json();IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);CCST=e.claude_code||null;PORTS=e.ports||[]}catch(e){}
+ try{const e=await (await fetch('/api/env')).json();IDFS=(e.idf||[]).sort((a,b)=>vge(a.version,b.version)?-1:1);TOOLS=e.tools||null;CCST=e.claude_code||null;PORTS=e.ports||[]}catch(e){}
  try{SAVED=(await (await fetch('/api/state')).json()).settings;if(P2UI[SAVED.llm_provider])setLLM=P2UI[SAVED.llm_provider];reuseLast=SAVED.reuse_last!==false;setFirst=!SAVED.llm_provider}catch(e){}
  await histLoad();
  try{await uiRestore()}catch(e){page='home'}  // 接上次的进度（D 组）
