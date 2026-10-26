@@ -258,3 +258,18 @@ def test_side_review_bad_reply_keeps_nothing(tmp_path):
     r = _r_for_side(tmp_path)
     rv = idf.apply_side_review(str(tmp_path), r, idf.side_candidates(r), "看不懂")
     assert all(x["keep"] is None for x in rv) and not any(s["line_of"] == "side" for s in r["steps"])
+
+
+def test_report_api_passes_parallel_segments(tmp_path, monkeypatch):
+    """报告接口把"并行的段"带给网页（10-26 核对 8784：后台算了，接口没带，报告里没有那几段）。"""
+    from tests.test_report_api import measured
+    from tests.test_collect_api import FakeSerialDevice
+    from tests.test_advise_api import real_log
+    from fastapi.testclient import TestClient
+    from fsw.web.app import create_app
+    c = TestClient(create_app(data_dir=tmp_path / "data", config_dir=tmp_path / "cfg", idf_finder=lambda: [],
+                              cc_status=lambda: {"found": True, "logged_in": True}, port_finder=lambda: ["/dev/cu.usbmodem1101"],
+                              device=FakeSerialDevice(real_log()), wait_step=0.01, opener=lambda p: None))
+    measured(c, tmp_path)
+    sc = c.get("/api/report").json()["scenario"]
+    assert "parallel" in sc and isinstance(sc["parallel"], list)

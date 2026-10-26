@@ -1820,7 +1820,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         out["merged"] = merged
         sc = {**sc, "first_run": not (prev and prev.get("segs") is not None)}  # 没有上次可比：第一次测
         keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points",
-                "first_run", "exp_skip")
+                "first_run", "exp_skip", "parallel")  # parallel：同时在走、不在哪条线路径上的段，报告单列（10-26）
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
