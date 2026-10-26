@@ -11,6 +11,7 @@
 """
 
 import json
+import re
 from pathlib import Path
 
 from fsw.scenario import experiences
@@ -194,21 +195,25 @@ def real_scenario(page, standard, values=None):
     steps = page.get("steps") or []
     mp = match_points(steps, standard) if standard else {}
     main = [(g["a"], g["b"], g) for g in page.get("segs") or []]
-    side = [(g["a"], g["b"], g) for g in page.get("fsegs") or []]
     on_main = {a for a, _, _ in main} | {b for _, b, _ in main}
-    if side and side[0][0] in on_main:  # 顺带那条线从起点算：先走要测的这条，到分叉的地方再拐过去
-        # 分叉点不在要测的这条上（比如发生在起点之前的"按下变色"）：从它自己的第一个点单独量，不和主线拼
-        prefix = []
-        for a, b, g in main:
-            if a == side[0][0]:
-                break
-            prefix.append((a, b, g))
-        side = prefix + side
+    ln = page.get("ln") or {}
+    sides = {}  # 顺带的线可以好几条（码表从候选里补的带 sl）：各自从起点算
+    for g in page.get("fsegs") or []:
+        sides.setdefault(g.get("sl") or "", []).append((g["a"], g["b"], g))
+    for k, items in sides.items():
+        if items[0][0] in on_main:  # 顺带那条线从起点算：先走要测的这条，到分叉的地方再拐过去
+            # 分叉点不在要测的这条上（比如发生在起点之前的"按下变色"）：从它自己的第一个点单独量，不和主线拼
+            # 只接从起点走到分叉点的那一串（主线的段里还有同时在走的，不接进来）
+            by = {f"{a}-{b}": (a, b, g) for a, b, g in main}
+            sides[k] = [by[x] for x in _path_keys(main, items[0][0]) if x in by] + items
+    side = [x for items in sides.values() for x in items]
     segments = {}
     extra = [(g["a"], g["b"], g) for g in page.get("xsegs") or []]  # 不在哪条线上的段（你自己加的步骤）：只记用时
     main, extra, mend = _measure_end(page, steps, main, extra)
     for a, b, g in main + side + extra:
         k = f"{a}-{b}"
+        if k in segments:
+            continue  # 几条顺带的线共用的前缀段
         rng, slow, basis = None, None, "measured"
         if standard and a in mp and b in mp:
             ch = _chain(standard, mp[a], mp[b])
@@ -227,7 +232,6 @@ def real_scenario(page, standard, values=None):
                 return l
         return None
 
-    ln = page.get("ln") or {}
     # 要测的这条线按一轮真正结束的那一步（结果页主线最后一个点，比如回到聆听）收尾：从同一个点分出去的几段（放完、回到聆听）
     # 原来按段的先后取最后一段，总的那条线叫"到播放全部放完"，量的不是一轮的结尾（10-26 真测）
     # 插计时点时码表定的一轮结束那一步（放清零的那一步，roundEnd）优先：报告的总时长和清零按同一步算
@@ -238,26 +242,43 @@ def real_scenario(page, standard, values=None):
         k = max(i for i, (_, b, _) in enumerate(main) if b == tail_end)
         main = main[:k] + main[k + 1:] + [main[k]]
     lines = []
-    for name, items in ([(ln.get("face", "顺带的那条"), side)] if side else []) + [(ln.get("talk", "要测的这条"), main)]:
+    ends = {x.get("name"): x.get("end") for x in page.get("sides") or []}
+    for name, items in [(k or ln.get("face", "顺带的那条"), v) for k, v in sides.items()] + [(ln.get("talk", "要测的这条"), main)]:
         if not items:
             continue
         sl = std_line(items[0][0], items[-1][1])
-        lines.append({"name": name, "end": name, "segments": [f"{a}-{b}" for a, b, _ in items],
+        lines.append({"name": name, "end": ends.get(name) or name, **({"sl": True} if name in ends else {}), "segments": [f"{a}-{b}" for a, b, _ in items],
                       "range": sl["range"] if sl else None, "slow": sl["slow"] if sl else None, "std": sl["name"] if sl else None})
-    # 要测的这条线中途有"第一下感觉到的结果"（AI 标的 felt=first，比如开始出声、锁开始动）、终点在它之后：
-    # 另记一条到那一步的线。体验标准只套在这条上；到最后一下的长短常常取决于内容多少（回答多长、门多重）
+    # 要测的这条线中途有"第一下感觉到的结果"（AI 标的 felt=first，比如开始出声、锁开始动、识别文字上屏）、终点在它之后：
+    # 每一个都另记一条到那一步的线，互不顶替。主指标（标题、首屏、计时图、体验标准都挂它，first=True）是设备往外给出结果的第一下：
+    # 识别时标了"输出"的那一步（声音、动作、灯、显示）；没标的按先后取第一个，但 AI 自己说用户看不到的（比如字幕被藏起来）不当主指标。
+    # 其余的（比如识别文字到达这类中间结果）是次要的线（also_first），排在主指标前面（10-26 8784：主指标原来是看不到的识别文字）。
+    # 到最后一下的长短常常取决于内容多少（回答多长、门多重）
     pn = {x["p"]: x["n"] for x in steps}
-    felt = {x["p"]: x.get("felt") for x in steps}
-    cut = next((i for i, (_, b, _) in enumerate(main[:-1]) if felt.get(b) == "first"), None)
-    if mend and cut is None and lines:
+    sp = {x["p"]: x for x in steps}
+    firsts = []
+    for _, b, _ in main[:-1]:
+        if (sp.get(b) or {}).get("felt") == "first" and b not in firsts:
+            firsts.append(b)
+    primary = primary_first(firsts, sp)
+    if mend and not firsts and lines:
         lines[-1].update(name=mend["line"], end=mend["n"], measure=True)
-    if cut is not None:
-        end = pn[main[cut][1]]
-        lines[-1].update(name=f"到{pn[main[-1][1]]}", end=pn[main[-1][1]])  # 两条都按终点叫，免得"开口这条"其实量到全部放完
+    if firsts:
+        lines[-1].update(name=f"到{pn[main[-1][1]]}", end=pn[main[-1][1]])  # 几条都按终点叫，免得"开口这条"其实量到全部放完
         if mend:
             lines[-1].update(name=mend["line"], end=mend["n"], measure=True)
-        lines.insert(len(lines) - 1, {"name": f"到{end}", "end": end, "first": True, "range": None, "slow": None, "std": None,
-                                      "segments": [f"{a}-{b}" for a, b, _ in main[:cut + 1]]})
+        for b in [x for x in firsts if x != primary] + [primary]:
+            ks = _path_keys(main, b)
+            lines.insert(len(lines) - 1, {"name": f"到{pn[b]}", "end": pn[b], **({"first": True} if b == primary else {"also_first": True}),
+                                          "range": None, "slow": None, "std": None, "segments": ks})
+    # 每条线只放从起点走到它终点的那一串段（图、表、合计都按它）；从中间分出去、同时在走的段（比如一直在发的上传、
+    # 从同一步量起的几段）不进哪条线，单独列"并行的段"，照样有数（10-26：图和表把它们当先后的几段加起来，合计对不上）
+    side_names = {k or ln.get("face", "顺带的那条") for k in sides}
+    for l in lines:
+        if l["name"] not in side_names:
+            l["segments"] = _path_keys(main, None, l["segments"])
+    on_line = {k for l in lines for k in l["segments"]}
+    parallel = [f"{a}-{b}" for a, b, _ in main if f"{a}-{b}" not in on_line]
     exps = []  # 体验标准每条线一条：标准里那条线对上了真线，就挂到真线上
     for e in experiences(standard or {}):
         hit = [l for l in lines if l["std"] == e.get("line")]
@@ -277,7 +298,7 @@ def real_scenario(page, standard, values=None):
     sname = next((x["n"] for x in steps if x["p"] == start), steps[0]["n"] if steps else "起点")
     return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": start, "name": sname},
             "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
-            "experiences": exps, "problems": problems, "standard": (standard or {}).get("name"),
+            "experiences": exps, "problems": problems, "parallel": parallel, "standard": (standard or {}).get("name"),
             "point_names": {x["p"]: x["n"] for x in steps},
             "point_kinds": {x["p"]: x.get("kind") or "" for x in steps if x.get("felt")},
             "category": page.get("category") or "",
@@ -290,6 +311,45 @@ def real_scenario(page, standard, values=None):
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l"),
                                 **({"at": a} if (a := point_at(x)) else {})} for x in steps},
             "matched": mp}
+
+
+UNSEEN = re.compile(r"看不到|看不见|不显示|不会显示|显示不出|藏起来|被隐藏|隐藏了|听不到|听不见|不可见|用户感觉不到|感觉不到")
+
+
+def unseen(step):
+    """AI 在这一步的说明里自己说了用户感觉不到（比如字幕被藏起来、屏幕上实际看不到）。"""
+    return bool(UNSEEN.search(" ".join(str(step.get(k) or "") for k in ("note", "why", "doubt"))))
+
+
+def primary_first(firsts, sp):
+    """几个"第一下感觉到的结果"里当主指标的那个：设备往外给出结果的第一下（识别时标了输出的那一步，out=True）；
+    没标的取第一个用户感觉得到的（AI 说明里没说看不到）；都说看不到就取第一个。"""
+    if not firsts:
+        return None
+    seen = [p for p in firsts if not unseen(sp.get(p) or {})]
+    return next((p for p in seen if (sp.get(p) or {}).get("out")), None) or next((p for p in firsts if (sp.get(p) or {}).get("out")), None) \
+        or (seen or firsts)[0]
+
+
+def _path_keys(main, end, keys=None):
+    """从起点走到 end（不给就是 keys 里最后一段的终点）经过的那几段的名字（和 measure._path 一样往回接）；接不回起点就原样。"""
+    segs = [(a, b) for a, b, _ in main] if keys is None else [tuple(k.split("-", 1)) for k in keys]
+    if not segs:
+        return []
+    start = main[0][0] if main else segs[0][0]
+    x = end or segs[-1][1]
+    if keys is None:
+        k = max((i for i, (_, b) in enumerate(segs) if b == x), default=None)
+        if k is None:
+            return []
+    path = []
+    while x != start:
+        prev = next((g for g in reversed(segs) if g[1] == x and g not in path), None)
+        if prev is None:
+            return [f"{a}-{b}" for a, b in segs] if keys is not None else [f"{a}-{b}" for a, b in segs[:k + 1]]
+        path.insert(0, prev)
+        x = prev[0]
+    return [f"{a}-{b}" for a, b in path]
 
 
 def _measure_end(page, steps, main, extra):
@@ -332,12 +392,8 @@ def _measure_end(page, steps, main, extra):
         return main, extra, None  # 终点之间还串着别的段：不合，原样
     first = (m, rend) if rend_felt else (rend, m)  # 一轮结束本身也是感觉到的最后一下：段名按量到的那一步叫，不叫"到结束消息"
     base = next((g for a, b, g in sinks if b == first[0]), None) or next((g for a, b, g in sinks if b == first[1]), None) or sinks[-1][2]
-    who = []
-    for _, _, g in sinks:
-        for w in (g.get("who") or "").replace(" + ", "、").split("、"):
-            if w and w not in who:
-                who.append(w)
-    seg = {**base, "a": br, "b": m, "who": " + ".join(who) or base.get("who", ""), "any": cands}
+    # 谁负责按量到的那一段写（10-26：几段的负责方全拼在一起成了"固件 + 硬件 + 网络 + 服务器"，看不出是谁）
+    seg = {**base, "a": br, "b": m, "who": base.get("who", ""), "any": cands}
     at = min(i for i, (a, b, g) in enumerate(main) if b in cands)
     main = [x for x in main[:at] if x[1] not in cands] + [(br, m, seg)] + [x for x in main[at:] if x[1] not in cands]
     start = main[0][0]
@@ -355,6 +411,8 @@ def _merge(parts):
             who.append(g["who"])
     out = {"a": parts[0]["a"], "b": parts[-1]["b"], "t": "＋".join(g.get("t") or f"{g['a']}-{g['b']}" for g in parts),
            "who": "、".join(who)}
+    if any(g.get("sl") for g in parts):
+        out["sl"] = next(g["sl"] for g in parts if g.get("sl"))
     if all(g.get("out") for g in parts):
         out["out"] = True
     return out
@@ -400,15 +458,20 @@ def inserted_page(page, steps=None, inserted=None):
     keep_line = keep - {s["p"] for s in steps if (orig.get(s["p"]) or s).get("opt")
                         and (orig.get(s["p"]) or s).get("line") != "face"}
     main = _contract(page.get("segs") or [], keep_line)
-    side = list(page.get("fsegs") or [])
-    while side and side[0]["a"] not in keep:  # 顺带的线从一个没插的点分出去：往前接到要测的这条线上插了的那个点
-        prev = next((g for g in page.get("segs") or [] if g["b"] == side[0]["a"]), None)
-        if not prev:
-            break
-        side.insert(0, prev)
-    side = _contract(side, keep_line)
-    if side and side[-1]["b"] in {x for g in main for x in (g["a"], g["b"])}:
-        side = []  # 顺带那条线自己的点一个都没插（不测这条线）：只剩和要测的这条重合的那段，不算一条线
+    groups = {}
+    for g in page.get("fsegs") or []:  # 顺带的线可以好几条（sl 分开），各自接、各自收
+        groups.setdefault(g.get("sl") or "", []).append(g)
+    side = []
+    for sl, side1 in groups.items():
+        while side1 and side1[0]["a"] not in keep:  # 顺带的线从一个没插的点分出去：往前接到要测的这条线上插了的那个点
+            prev = next((g for g in page.get("segs") or [] if g["b"] == side1[0]["a"]), None)
+            if not prev:
+                break
+            side1.insert(0, {**prev, **({"sl": sl} if sl else {})})
+        side1 = _contract(side1, keep_line)
+        if side1 and side1[-1]["b"] in {x for g in main for x in (g["a"], g["b"])}:
+            side1 = []  # 顺带那条线自己的点一个都没插（不测这条线）：只剩和要测的这条重合的那段，不算一条线
+        side += side1
 
     def re_id(g):
         return {**g, "a": ren[g["a"]], "b": ren[g["b"]]}

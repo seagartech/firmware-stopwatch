@@ -91,4 +91,5 @@ def test_start_is_the_last_one_before_the_first_felt_result():
     out += c.finish()
     first = next(r for r in meas.merge_updates(out) if r.get("ok"))
     assert first["t"][1] == 5.0
-    assert first["ends"][0] == 0.6  # 说完到收到识别文字（不是从唤醒词说完算的 3.6 秒）
+    k = next(i for i, l in enumerate(sc["lines"]) if l.get("first"))  # 主指标那条线（10-26 起次要的线排在它前面）
+    assert first["ends"][k] == 0.6  # 说完到收到识别文字（不是从唤醒词说完算的 3.6 秒）

@@ -173,7 +173,8 @@ def test_report_says_how_many_rounds_were_used_and_dropped():
     assert "1 次没记到起点「设备听出你停了」" in out and "没有丢掉的" not in out  # 决策 133
     # 10-19：中间的点不是这一轮的（上一轮被中途打断），这一轮照样算，写清是哪几轮哪一个点、哪几段空着
     out = run(["qualityLine", "gapLine"], 'qualityLine({ok:10,missing:0,stale:0,half:0,gap:[{n:4,names:["收到开始说话"]},{n:5,names:["收到开始说话"]}]})')
-    assert "第 4、5 轮的「收到开始说话」记在这一轮开始之前" in out and "两段空着" in out
+    # 不再一律说"上一轮被打断"（10-26）：写实际看到的——起点之后没记到，只有起点之前、上一轮的那次
+    assert "第 4、5 轮没记到起点之后的「收到开始说话」" in out and "两段空着" in out and "被中途打断" not in out
 
 
 def test_report_api_counts_rounds_without_start(tmp_path):

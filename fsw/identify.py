@@ -266,6 +266,19 @@ def _json_block(text):
 PICK_FIX_AGAIN = "码表核对你选的计时点时发现下面几处不对，其余都对：\n{items}\n不要再读源码，只改这几个点（id 不变，段照旧连好），把完整的结果重新输出一个 ```json 代码块。"
 FIX_AGAIN = "码表核对你的流程时发现下面几处不对，其余都对：\n{items}\n不要再读源码，只改这几处，把完整的结果重新输出一个 ```json 代码块。"
 FORMAT_AGAIN = "你上一条回答最后的 JSON 码表读不懂（格式不对，比如少了引号或逗号）。不要再读源码，只按要求的格式把同样的内容重新输出一个 ```json 代码块。"
+# 主线以外、收到某种消息后会改变用户看到或听到的东西的分支（码表从候选里列出，大模型逐条留或不留）：可以有好几条顺带的线（10-26 8784：换表情那一支在候选里，大模型没提）
+SIDE_REVIEW = """码表在源码里还找到下面这些分支：收到某种消息后会改变用户看到或听到的东西，但不在要测的这条线上。
+{items}
+要测的这条线上的计时点：{points}
+逐条判断，不要再读源码：连续使用时一轮里通常会走到、用户能感觉到（看到或听到）、值得和要测的这条线一起测的，keep 写 true；只在出错、升级、提醒、第一次连接时才走，或用户感觉不到的，写 false。
+只输出一个 ```json 代码块：
+```json
+{{"review": [{{"id": "候选编号，比如 K3", "keep": true, "name": "这条线的名字，比如：表情这条", "end": "终点短名字，6 个字以内，比如：换上表情", "from": "它在要测的这条线上哪个计时点之后发生，写计时点编号", "kind": "声音 / 画面 / 灯光 / 动作 / 其他", "why": "留或不留的理由，一句话"}}]}}
+```"""
+# 会改变用户看到或听到的东西的那句代码里常见的词（显示、灯、表情、声音、动作、继电器）：只看通用写法，不认具体固件
+VISIBLE = re.compile(r"display|screen|lcd|oled|lvgl|\blv_|\bled|light|emotion|expression|face|show|draw|chat_?message|text|glyph|"
+                     r"motor|servo|vibrat|beep|buzzer|sound|play|speaker|relay|unlock|alert|notif", re.I)
+SIDE_MAX = 8
 
 
 def _fail(kind, message, **extra):
@@ -1259,12 +1272,82 @@ def _segs(items, ids):
             seg = {"a": g["from"], "b": g["to"], "t": g.get("name") or "", "who": g.get("who") or ""}
             if g.get("outside"):
                 seg["out"] = True
+            if g.get("sl"):
+                seg["sl"] = g["sl"]  # 码表从候选里补的顺带的线（可以好几条）：属于哪一条
             out.append(seg)
+    return out
+
+
+def side_candidates(r):
+    """主线以外、收到某种消息后改变用户看到或听到的东西的那几支（每支一句）：已经在事件链上、已经有计时点的那一支不算。"""
+    chain = [c for c in ((r.get("flow") or {}).get("chain") or r.get("chain") or []) if isinstance(c, dict)]
+    taken = [(c.get("file"), c.get("line")) for c in chain] + [(x.get("file"), x.get("line")) for x in r.get("steps") or []]
+    out, areas = [], set()
+    for c in r.get("candidates") or []:
+        if not isinstance(c, dict) or c.get("role") != "消息" or not isinstance(c.get("line"), int):
+            continue
+        a = tuple(c.get("area") or (c["line"], c["line"]))
+        if (c.get("file"), a) in areas or any(f == c.get("file") and isinstance(n, int) and a[0] <= n <= a[-1] for f, n in taken):
+            continue
+        if not VISIBLE.search(c.get("code") or ""):
+            continue
+        areas.add((c.get("file"), a))
+        out.append(c)
+    return out[:SIDE_MAX]
+
+
+def review_items(cands):
+    return "\n".join(f"- {c['id']}：{Path(c['file']).name}:{c['line']} `{c.get('code') or ''}`（{c.get('where') or ''}）" for c in cands)
+
+
+def apply_side_review(root, r, cands, text):
+    """大模型逐条留或不留的回答 → 留下的每一支加一个顺带的计时点、一条顺带的线（和大模型自己写的那条并列）。
+    返回 [{id, keep, name, end, why, ...}]（每个候选一条，没回答到的记 keep=None）。"""
+    data = _json_block(text or "")
+    got = {str(x.get("id")): x for x in (data or {}).get("review") or [] if isinstance(x, dict)} if isinstance(data, dict) else {}
+    steps = r.get("steps") or []
+    main_ids = [x["id"] for x in steps if x.get("line_of") in ("start", "main")]
+    mine = [x for x in steps if x.get("line_of") == "side"]
+    used = {(x.get("file"), x.get("line")) for x in steps}
+    nums = [int(m.group(1)) for x in steps for m in [re.fullmatch(r"P(\d+)", str(x.get("id")))] if m]
+    nxt = max(nums, default=0) + 1
+    out, names = [], {str((r.get("side") or {}).get("name") or "")}
+    for c in cands:
+        x = got.get(str(c["id"])) or {}
+        keep = x.get("keep") in (True, "true", "是") if x else None
+        rec = {"id": c["id"], "file": c["file"], "line": c["line"], "code": c.get("code") or "", "keep": keep,
+               "name": str(x.get("name") or "").strip(), "end": str(x.get("end") or "").strip(), "why": str(x.get("why") or "").strip()}
+        out.append(rec)
+        if not keep or (c["file"], c["line"]) in used or any(m.get("file") == c["file"] and (c.get("area") or [0, 0])[0] <= m.get("line", 0) <= (c.get("area") or [0, 0])[-1] for m in mine):
+            continue  # 不留、或大模型自己那条顺带的线已经量了这一支
+        end = rec["end"][:8] or "顺带的一步"
+        name = rec["name"] or f"{end}这条"
+        while name in names:
+            name += "（另一条）"
+        names.add(name)
+        fr = str(x.get("from") or "")
+        fr = fr if fr in main_ids else (main_ids[0] if main_ids else None)
+        if fr is None:
+            continue
+        pid = f"P{nxt}"
+        nxt += 1
+        kind = str(x.get("kind") or "")
+        steps.append({"id": pid, "name": end, "file": c["file"], "line": c["line"], "func": "", "where": "before", "once": "once",
+                      "line_of": "side", "sure": "中", "why": rec["why"] or "收到这种消息后，用户能看到或听到的变化", "doubt": "",
+                      "code": c.get("code") or "", "loc_ok": True, "always": False, "felt": "first",
+                      "kind": kind if kind in ("声音", "画面", "灯光", "动作", "其他") else "", "chain_step": None, "side_name": name})
+        r.setdefault("side_segments", []).append({"from": fr, "to": pid, "name": f"到{end}", "who": "固件", "outside": False, "sl": name})
+        r.setdefault("sides", []).append({"name": name, "end": end, "from": fr, "point": pid, "cand": c["id"], "why": rec["why"]})
+        rec["point"] = pid
+        used.add((c["file"], c["line"]))
+    r["side_review"] = out
+    structure.check(root, steps, r.get("segments"), r.get("side_segments"), r.get("chain"), strict=bool(r.get("strict")))
     return out
 
 
 def to_page(r, what):
     """换成网页"找关键步骤"那页要的样子（和演示数据同样的字段）。"""
+    out_steps = {c.get("n"): c for c in ((r.get("flow") or {}).get("chain") or []) if isinstance(c, dict)}
     steps = [{"p": s["id"], "n": s["name"], "f": Path(s["file"]).name or s["file"], "path": s["file"], "l": s["line"],
               "line": LINE_OF[s["line_of"]], "why": s["why"], "sure": s["sure"], "code": s["code"], "loc_ok": s["loc_ok"],
               "where": s["where"], "once": s["once"], "func": s["func"],
@@ -1272,10 +1355,18 @@ def to_page(r, what):
               **({"note": s["doubt"]} if s["doubt"] else {}), **({} if s.get("always", True) else {"opt": True}),
               **({"felt": s["felt"], "kind": s.get("kind") or ""} if s.get("felt") else {}),
               **({"whole": True} if s.get("every_why") else {}),
-              **({"follow": True} if s.get("follow") else {})} for s in r["steps"]]  # follow：跟着起点记（见 follow_start_points）  # whole：一轮里报好几次，取最后那次（全部放完）
+              **({"follow": True} if s.get("follow") else {}),
+              # out：设备往外给出结果的那一步（链里标了输出），它的"第一下"是报告的主指标（见 standards.primary_first）
+              **({"out": True} if s.get("felt") == "first" and OUTPUT in _roles_of(out_steps.get(s.get("chain_step")) or {}) else {})}
+             for s in r["steps"]]  # follow：跟着起点记（见 follow_start_points）  # whole：一轮里报好几次，取最后那次（全部放完）
     ids = {s["p"] for s in steps}
     start, main, side = r.get("start") or {}, r.get("main") or {}, r.get("side")
     side_steps = [s["p"] for s in steps if s["line"] == "face"]
+    extra = [x for x in r.get("sides") or [] if x.get("point") in ids]  # 码表从候选里补、大模型说留的顺带的线
+    if not [p for p in side_steps if p not in {x["point"] for x in extra}]:
+        side = None
+    if side is None and extra:  # 大模型自己没写顺带的线：问"要不要一起测"用补上的第一条
+        side = {"name": extra[0]["name"], "end": extra[0]["end"], "found": f"收到这种消息后会{extra[0]['end']}", "why": extra[0].get("why") or ""}
     if not side_steps:
         side = None
     main_ids = [s["p"] for s in steps if s["line"] != "face"]
@@ -1293,6 +1384,8 @@ def to_page(r, what):
         "measure": f"{sname} → {mend}", "mainTitle": f"{mname}：{sname} → {mend}",
         "act": str(r.get("act") or "").strip(), "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "", "startLate": start.get("late") in (True, "true", "是"),
         "sideAsk": None, "sideTitle": "", "sideLbl": "",
+        "sides": [{"name": x["name"], "end": x["end"], "from": x["from"], "nodes": [x["point"]], "cand": x.get("cand"), "why": x.get("why") or ""} for x in extra],
+        "sideReview": [{k: v for k, v in x.items() if k in ("id", "keep", "name", "end", "why", "file", "line", "point")} for x in r.get("side_review") or []],
     }
     if side:
         k, send = len(side_steps), side.get("end") or "顺带的那一步"
@@ -1302,8 +1395,13 @@ def to_page(r, what):
             "why": side.get("why") or "", "k": k, "q": send, "addEx": "", "addGuess": None,
             "h": f"码表读代码发现：{(side.get('found') or '').rstrip('。')}。{side.get('why') or ''}要不要把\"{send}\"也一起测？",
             "no": f"不用，只测{mend}", "d1": f"{side.get('name')}一起测（多 {k} 个计时点）",
-            "note": f"一起测：多插 {k} 个计时点，报告里多一条线；不影响{mname}的结果。",
+            "note": f"一起测：多插 {k} 个计时点，报告里多{len({x['name'] for x in extra} | ({side.get('name')} if any(p not in {x['point'] for x in extra} for p in side_steps) else set())) or 1} 条线；不影响{mname}的结果。",
         }
+        if extra:
+            also = "、".join(x["end"] for x in extra if x["end"] != send)
+            if also:
+                page["sideAsk"]["h"] = page["sideAsk"]["h"].replace("也一起测？", f"也一起测？另外还有：{also}。")
+                page["sideAsk"]["d1"] = f"顺带的这几条一起测（多 {k} 个计时点）"
     return page
 
 
@@ -1461,6 +1559,31 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
             if after is not None and after < before:  # 改好了或者少了，用新的；更糟就留原来那份
                 reply_first = reply_first or reply
                 r, reply = r2, again
+    if r.get("ok"):
+        # 主线以外会改变用户看到、听到的东西的那几支：同一段对话里问一次留不留（不读源码），留下的各成一条顺带的线
+        pool = cands
+        if not pool:
+            try:
+                pool = cands_mod.find(root, category)
+            except Exception:  # noqa: BLE001 找不到候选只是少问一句
+                pool = []
+        sc = side_candidates({**r, "flow": flow, "candidates": pool})
+        if sc:
+            t = time.time()
+            pts = "、".join(f"{x['id']} {x['name']}" for x in r["steps"] if x.get("line_of") in ("start", "main"))
+            try:
+                ans = llm.followup(SIDE_REVIEW.format(items=review_items(sc), points=pts))
+            except LLMError:
+                ans = None  # 问不到只是少几条顺带的线，不算识别失败
+            took_retries("pick")
+            if ans is not None:
+                rv = apply_side_review(root, r, sc, ans)
+                followups.append({"stage": STAGES["pick"], "kind": "side", "ok": any(x["keep"] is not None for x in rv),
+                                  "kept": [x["id"] for x in rv if x["keep"]], "seconds": round(time.time() - t, 1)})
+                print(f"[识别] 主线以外会改变看到、听到的分支 {len(sc)} 支，留下 {sum(1 for x in rv if x['keep'])} 支", file=sys.stderr, flush=True)
+            else:
+                r["side_review"] = [{"id": c["id"], "file": c["file"], "line": c["line"], "code": c.get("code") or "", "keep": None,
+                                     "name": "", "end": "", "why": ""} for c in sc]
     r.update(seconds=round(time.time() - t0, 1), reply=reply, flow=flow, calls=calls, stage="pick", chain_category=category or "",
              retries=retries, followups=followups, candidates=cands)
     if reply_first:
