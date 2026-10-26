@@ -229,8 +229,9 @@ def real_scenario(page, standard, values=None):
     ln = page.get("ln") or {}
     # 要测的这条线按一轮真正结束的那一步（结果页主线最后一个点，比如回到聆听）收尾：从同一个点分出去的几段（放完、回到聆听）
     # 原来按段的先后取最后一段，总的那条线叫"到播放全部放完"，量的不是一轮的结尾（10-26 真测）
-    tail_end = (page.get("main") or [None])[-1]
-    if tail_end and main and main[-1][1] != tail_end and any(b == tail_end for _, b, _ in main):
+    # 插计时点时码表定的一轮结束那一步（放清零的那一步，roundEnd）优先：报告的总时长和清零按同一步算
+    tail_end = page.get("roundEnd") or (page.get("main") or [None])[-1]
+    if tail_end and main and main[-1][1] != tail_end and any(b == tail_end for _, b, _ in main[1:]):
         k = max(i for i, (_, b, _) in enumerate(main) if b == tail_end)
         main = main[:k] + main[k + 1:] + [main[k]]
     lines = []

@@ -281,3 +281,33 @@ def test_stopped_half_way_does_not_restore(setup, door_page):
     wait_col(c, lambda j: j["status"] == "stopped")
     time.sleep(0.2)
     assert "restore" not in c.get("/api/fsw").json() and not dev.flashed[-1].endswith("firmware/orig")
+
+
+def test_point_wrong_round_after_round_pauses_and_asks(make):  # noqa: F811
+    """测到一半同一个点连着几轮不对：和第 1 轮自动校验没通过一样停下来问（不只是一行提示）；
+    选"接着测"记下来、不再为同一个点停；报告的数据检查里写选了什么（10-26 真测：提示了没人停，那几段只有 1 轮的数）。"""
+    page = {"segs": [{"a": "P1", "b": "P2"}, {"a": "P2", "b": "P3"}],
+            "steps": [{"p": "P1", "n": "刷卡"}, {"p": "P2", "n": "核对完"}, {"p": "P3", "n": "开锁"}]}
+    dev = FakeSerialDevice(rounds_log(["P1", "P2"], n=3) + rounds_log(["P1", "P2", "P3"], n=4))
+    c, _ = make(device=dev)
+    c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3})
+    j = wait_col(c, lambda j: j["status"] == "suspect")
+    assert j["suspect"][0]["kind"] == "miss" and j["suspect"][0]["name"] == "开锁"
+    assert "连着 3 轮都没收到" in j["suspect"][0]["why"]
+    c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3, "resume": True})
+    j = wait_col(c, lambda j: j["status"] in ("done", "suspect", "stopped"))
+    assert j["status"] == "done" and j["choices"][0]["choice"] == "continue"
+    assert json.loads((Path(j["raw_log"]).parent / "choices.json").read_text(encoding="utf-8"))[0]["items"][0]["name"] == "开锁"
+    rep = c.get("/api/report").json()
+    assert any(x["kind"] == "choice" and "接着测" in x["why"] for x in rep["checks"])
+
+
+def test_fix_choice_is_recorded(make):  # noqa: F811
+    page = {"segs": [{"a": "P1", "b": "P2"}, {"a": "P2", "b": "P3"}],
+            "steps": [{"p": "P1", "n": "刷卡"}, {"p": "P2", "n": "核对完"}, {"p": "P3", "n": "开锁"}]}
+    c, _ = make(device=FakeSerialDevice(rounds_log(["P1", "P2"], n=3)))
+    assert c.post("/api/collect/choice", json={"choice": "fix"}).status_code == 409
+    c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 3})
+    wait_col(c, lambda j: j["status"] == "suspect")
+    j = c.post("/api/collect/choice", json={"choice": "fix"}).json()
+    assert j["choices"][-1]["choice"] == "fix"

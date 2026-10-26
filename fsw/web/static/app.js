@@ -75,12 +75,13 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
 // 段、线的判定（10-19 去掉合理范围清单）：第一次只记录用时，第二次起和上次比
-const VCLS={'慢了':'c-warn','快了':'c-ok','持平':'c-ok','已记录':'c-gray','推算':'c-gray','看回答长短':'c-gray'};
+const VCLS={'慢了':'c-warn','快了':'c-ok','持平':'c-ok','已记录':'c-gray','推算':'c-gray','看回答长短':'c-gray','数据不足':'c-warn'};
 const VTXT={'慢了':'比上次慢了','快了':'比上次快了','持平':'和上次持平','已记录':'只记录用时'};
 function withJudge(D,J){const L=n=>J.lines.find(x=>x.name===n)||{};
   // 一般、最差、达标率都用后台算好的，网页不再自己算一遍（两边规则不一样就会对不上：10-19 报告写 1.22、实际 1.34）
   D.lines.forEach(l=>{const b=L(l.name);if(b.med!=null)Object.assign(l,{med:b.med,p90:b.p90,max:b.max,count:b.count,pass_n:b.pass_n,pass_rate:b.pass_rate})});
-  D.allSegs.forEach(g=>{const b=(J.segments||[]).find(x=>x.k===g.k);if(b&&b.med!=null)Object.assign(g,{med:b.med,max:b.max})});
+  D.allSegs.forEach(g=>{const b=(J.segments||[]).find(x=>x.k===g.k);if(b&&b.med!=null)Object.assign(g,{med:b.med,max:b.max});
+   if(b&&b.thin)Object.assign(g,{thin:true,count:b.count,of:b.of,thinWhy:b.why||''})});  // 不到八成轮次有数：不当完整的段显示（见 judge.ENOUGH）
   D.verdict=l=>{const v=L(l.name).verdict||'已记录';return [VTXT[v]||v,VCLS[v]||'c-gray']};
   const e=L(D.main.name).exp;D.exp=e?[e,e==='差'?'c-bad':'c-ok']:null;
   const sp=J.labels.find(x=>x.kind==='spiky'&&!x.with);  // 和对错问题同一根因的，算进那条
@@ -109,7 +110,7 @@ const cardOf=(FX,d)=>FX.findIndex(F=>F.when.includes(d.k)||(d.seg&&F.when.includ
 function decisionsJ(D){const J=D.J,out=[];
   const src={line:['tiers','用时和达标率'],spiky:['rounds',`${D.n} 轮逐轮`],order:['rounds',`${D.n} 轮逐轮`],problem:['rounds',`${D.n} 轮逐轮`]};  // 「依据」链接：点一下跳到下面对应的数据
   for(const x of J.labels){const lv=LV.findIndex(v=>v[0]===x.level);if(x.level==='达标')continue;  // 达标的不列（10-20 用户定）：要你拍板只写要处理的
-   if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=isMain?D.biggest:([...D.allSegs].filter(s=>l.segs.includes(s.k)).sort((p,q)=>q.med-p.med)[0]||D.biggest),share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
+   if(x.kind==='line'){const l=D.lines.find(y=>y.name===x.line);if(!l)continue;const isMain=l===D.main,b=isMain?D.biggest:([...D.allSegs].filter(s=>l.segs.includes(s.k)&&!s.thin).sort((p,q)=>q.med-p.med)[0]||D.biggest),share=Math.round(b.med/l.med*100),[v,c]=D.verdict(l),ex=isMain?D.exp:null;
     out.push({k:isMain?'main':'line:'+l.name,lv,src:src.line,tag:ex?[`体验${ex[0]}`,ex[1]]:[v,c],t:`${l.end} ${f(l.med)} 秒`,
      d:x.why==='取决于回答长短，不判快慢'?`长短主要看这次回答说了多少字，不判快慢。`:x.level==='未判'?`${x.why}。`
        :`${x.why}。`,
@@ -165,7 +166,8 @@ function timeline(D){
     const st=stages(lineParts(D,l));
     st.forEach((x,j)=>{const a=t0,b=t0+x.d;t0=b;const last=j===st.length-1,k=x.parts[0].k,shared=x.parts.some(p=>D.use[p.k]>1),no=NO[rows.length]||String(rows.length+1),w=sx(b)-sx(a);
       const c=last?l.col:shared?'var(--soft)':l.soft,fg=last?'#fff':'var(--fg)';
-      rows.push({no,name:D.S.segs[k].name,d:x.d,share:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,shared});
+      const th=x.parts.find(p=>(D.allSegs.find(s=>s.k===p.k)||{}).thin),ths=th&&D.allSegs.find(s=>s.k===th.k);
+      rows.push({no,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:x.d,share:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,shared});
       g+=`<g><rect x="${sx(a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
       if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(x.d)}</text>`;
       else if(w>16)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${no}</text>`;g+='</g>'});
@@ -257,7 +259,10 @@ function startLagLine(name,L,gap){return `<p class="note" style="margin:4px 0 0"
 // 「记最后一次」的中间点越过了下一步：前后两段合成了一段（见 judge.merge_overruns），写明合了哪两段、为什么
 const mergedLine=M=>(M||[]).map(m=>`<p class="note" style="margin:4px 0 0">「${htmlEsc(m.names[0])}」和「${htmlEsc(m.names[1])}」合成一段算：${htmlEsc(m.why)}。</p>`).join('');
 function qualityLine(Q){if(!Q)return '';const drop=[Q.missing?`${Q.missing} 轮没收全`:'',Q.stale?`${Q.stale} 轮记到的是上一轮剩下的`:'',Q.half?`${Q.half} 次开头没收到`:'',Q.nostart?`${Q.nostart} 次没记到起点「${Q.startName||'起点'}」`:''].filter(Boolean);
- return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}${gapLine(Q.gap)}。数字都是码表按这些轮算的，不经过 AI。</p>`}
+ return `<p class="note" style="margin:4px 0 0">数据检查：用了 ${Q.ok} 轮，都是完整收齐、计时点先后正常的${drop.length?`；另有 ${drop.join('、')}，这些不算进来，已经自动补测`:'，没有丢掉的'}${gapLine(Q.gap)}${(Q.late||[]).map(x=>`；「${htmlEsc(x.name)}」有 ${x.n} 次在每轮清零 1 秒以后才到，没算进那一轮`).join('')}${(Q.choices||[]).map(c=>`；测量中停下来问过，选了${c.choice==='continue'?'接着测':'去改计时点'}`).join('')}。数字都是码表按这些轮算的，不经过 AI。</p>`}
+// 报告最上面的数据检查（judge 的数据不足 + 测量过程里要提醒的）：不收在折叠里，一眼看得到
+function checksBox(J){const C=(J&&J.checks)||[];if(!C.length)return '';const thin=C.filter(x=>x.kind==='thin'||x.kind==='thin_line');
+ return `<div class="errbox" style="border-color:var(--warn);background:color-mix(in srgb,var(--warn) 7%,var(--panel))"><b>数据检查：有 ${C.length} 条要注意${thin.length?`（${thin.length} 段 / 条线数据不足，那几处的数不当结论）`:''}</b>${C.map(x=>`<p style="margin:4px 0">${htmlEsc(x.why)}</p>`).join('')}</div>`}
 // 中间的点不是这一轮的（打断回答后服务器补发的那次）：这一轮照样算，用到它的两段空着，整条线按首尾算
 function gapLine(G){if(!G||!G.length)return '';const by={};G.forEach(g=>g.names.forEach(x=>(by[x]=by[x]||[]).push(g.n)));
  return '；'+Object.entries(by).map(([x,ns])=>`第 ${ns.join('、')} 轮的「${x}」记在这一轮开始之前（多半是上一轮被中途打断，剩下的一次晚到了），这几轮用到它的两段空着，整条线照样按首尾算`).join('；')}
@@ -289,12 +294,13 @@ function prevCell(PV,now,p,nz){if(!PV)return '';return `<td class="r wrap">${p==
 const brk=t=>htmlEsc(t).replace(/(\/|::)/g,'$1<wbr>');
 const OKNOTE='<span class="note">正常</span>';
 function segVerdict(D,s){const j=D.J&&D.J.segments.find(x=>x.k===s.k);
+ if(j&&j.thin)return `<span class="chip c-warn">数据不足（${j.count}/${j.of} 轮）</span>`;
  if(j?j.spiky:s.max>s.med*2.5&&s.max-s.med>.3)return '<span class="chip c-warn">偶发特别慢</span>';
  if(j&&j.verdict==='慢了')return '<span class="chip c-warn">比上次慢</span>';return OKNOTE}
 function dev(D){const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,CODE=(JREP&&JREP.code)||{},cols=PV?7:6;
   const segRow=s=>{const to=String(s.code||'').split('→')[1],C=D.S.real?CODE[to]:null;
    const loc=C?`<span class="code">${brk(C.path)}:${C.l}</span>${C.func?`<br><span class="note code">${brk(C.func)}</span>`:''}<br><button class="pill codebtn" data-code="1">展开代码</button>`:`<span class="code">${T.loc[s.k]||''}</span>`;
-   return `<tr><td ${SANS}>${s.name}</td><td>${loc}</td><td class="own" ${SANS}>${s.owner}</td><td class="r">${fms(s.med)}</td><td class="r">${fms(s.max)}</td>${prevCell(PV,s.med,PV&&PV.segs[s.k],PV&&(PV.noise||{})[s.k])}<td ${SANS}>${segVerdict(D,s)}</td></tr>${codeRows(C,cols)}`};
+   return `<tr><td ${SANS}>${s.name}</td><td>${loc}</td><td class="own" ${SANS}>${s.owner}</td>${s.thin?`<td class="r wrap" colspan="${PV?3:2}" ${SANS}>数据不足（${s.count}/${s.of} 轮）<br><span class="note">${htmlEsc(s.thinWhy)}</span></td>`:`<td class="r">${fms(s.med)}</td><td class="r">${fms(s.max)}</td>${prevCell(PV,s.med,PV&&PV.segs[s.k],PV&&(PV.noise||{})[s.k])}`}<td ${SANS}>${segVerdict(D,s)}</td></tr>${codeRows(C,cols)}`};
   const groups=D.lines.map(l=>{const [v]=D.verdict(l),jl=D.J&&D.J.lines.find(x=>x.name===l.name),ex=jl?(jl.exp?[jl.exp,jl.exp==='差'?'c-bad':'c-ok']:null):l===D.main?D.exp:null;
    const jd=(v==='比上次慢了'?'<span class="chip c-warn">比上次慢</span> ':'')+(ex?`<span class="chip ${ex[1]}">体验${ex[0]}</span>`:'')||OKNOTE;
    const segs=l.segs.map(k=>D.allSegs.find(s=>s.k===k)).filter(Boolean),worst=l.max!=null?l.max:Math.max(...l.ends.filter(x=>x!=null));
@@ -500,7 +506,9 @@ function autoStop(){AUTO=false;clearInterval(runT);runT=null;
  if(page==='collect')post('/api/collect/stop',{}).catch(()=>{});
  if(page==='flash'){clearInterval(fswT);fswT=null;post('/api/fsw/stop',{}).catch(()=>{});fl.st=0}
  page='home';hStage=1;render();window.scrollTo(0,0)}
-const suspectBox=()=>{const S=(COLJ&&COLJ.suspect)||[];return `<div class="errbox"><b>第 1 轮自动校验没通过，已暂停</b>${S.map(x=>`<p style="margin:6px 0">「${htmlEsc(x.name)}」这一段 ${fms(Math.abs(x.seconds))} 秒${x.seconds<0?'（先后反了）':''}：${htmlEsc(x.why)}。计时点位置可能不对，接着测的数据不可信。</p>`).join('')}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-autofix="1">查看并修改计时点位置</button><button class="btn" data-col="resume">忽略，继续测量</button></div></div>`};
+const suspectBox=()=>{const S=(COLJ&&COLJ.suspect)||[],run=S.some(x=>x.kind);  // kind：测到一半某个点连着几轮不对（gap / miss / stale）；没有 kind 是第 1 轮自动校验
+ const head=run?`「${htmlEsc(S[0].name)}」连着几轮不对劲，已暂停`:'第 1 轮自动校验没通过，已暂停';
+ return `<div class="errbox"><b>${head}</b>${S.map(x=>x.kind?`<p style="margin:6px 0">${htmlEsc(x.why)}</p><p class="note" style="margin:4px 0">接着测的话，用到它的段这次多半没有数（报告里会标"数据不足"）。</p>`:`<p style="margin:6px 0">「${htmlEsc(x.name)}」这一段 ${fms(Math.abs(x.seconds))} 秒${x.seconds<0?'（先后反了）':''}：${htmlEsc(x.why)}。计时点位置可能不对，接着测的数据不可信。</p>`).join('')}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-autofix="1">查看并修改计时点位置</button><button class="btn" data-col="resume">忽略，继续测量</button></div></div>`};
 
 const HOME={
 m:{label:'合并版',idea:'首页（A 的表单 + C 的两点）：选完文件夹马上显示读到的芯片和编译工具；出发前用一句话复述要测什么，你点"对"再去找关键步骤。',
@@ -734,7 +742,7 @@ function fixB(D){const FX=activeFixes(D);
    :'<p class="note">还没勾任何方案。</p>';
   return `<div class="panel">${rows}</div><div class="panel" style="border-left:3px solid var(--speak)"><h3 style="margin:0 0 4px">你勾了 ${chosen.length} 个方案</h3>${sum}</div>${ESTNOTE}`;
 }
-function segJudge(D,s){if(D.J){const j=D.J.segments.find(x=>x.k===s.k);if(j){if(j.spiky)return ['偶发特别慢','c-warn'];return [VTXT[j.verdict]||j.verdict,VCLS[j.verdict]||'c-gray']}}const spk=s.max>s.med*2.5&&s.max-s.med>.3;return spk?['偶发特别慢','c-warn']:['只记录用时','c-gray']}
+function segJudge(D,s){if(D.J){const j=D.J.segments.find(x=>x.k===s.k);if(j){if(j.thin)return [`数据不足（${j.count}/${j.of} 轮）`,'c-warn'];if(j.spiky)return ['偶发特别慢','c-warn'];return [VTXT[j.verdict]||j.verdict,VCLS[j.verdict]||'c-gray']}}const spk=s.max>s.med*2.5&&s.max-s.med>.3;return spk?['偶发特别慢','c-warn']:['只记录用时','c-gray']}
 function fixC(D){const FX=activeFixes(D);
   if(!segSel||!D.S.segs[segSel])segSel=FX.length?FX[0].seg:D.allSegs[0].k;
   const s=D.allSegs.find(x=>x.k===segSel),[jv,jc]=segJudge(D,s),fi=FX.findIndex(F=>F.seg===segSel),F=FX[fi];
@@ -756,7 +764,7 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);if(!FX.length)return '';
 }
 function reportPage(D){
   if(mode==='dev')return dev(D);
-  return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>${headline(D)}</h1>${vsTag()}</div><p class="sub">${subline(D)}</p>${D.S.real&&JREP?`<details class="fold"><summary>数据怎么来的、起点怎么算</summary>${qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged)}</details>`:''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
+  return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>${headline(D)}</h1>${vsTag()}</div><p class="sub">${subline(D)}</p>${D.S.real&&JREP?checksBox(JREP):''}${D.S.real&&JREP?`<details class="fold"><summary>数据怎么来的、起点怎么算</summary>${qualityLine(JREP.quality)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged)}</details>`:''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
   <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>一次的计时图</h2>${timeline(D)}</section>
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
@@ -979,7 +987,7 @@ const actClean=t=>t.replace(/(等到?|听到|听见|看到|看见)[^，,；;。]
 const trySay=()=>{if(!realFlash())return FF[scene].big;const act=actClean((IDENT.page.act||'').trim());if(act)return htmlEsc(act);const w=IDENT.page.mapWhat||hSay||'';return /说|话|聊/.test(w)?'先喊唤醒词，再说一句':'按平常的用法完整使用一次设备'};
 // 计时点编号和后台一样：P3 → P3；你自己加的 U1、U2 → P21、P22
 const fswId=p=>{if(/^P\d+$/.test(p))return p;const u=live().filter(x=>!/^P\d+$/.test(x.p)).map(x=>x.p);return 'P'+(20+u.indexOf(p)+1)};
-const fswSteps=()=>live().map(x=>({p:x.p,n:x.n,path:x.path||x.f,l:x.l,line:x.line,why:x.why||'',where:x.where||'',once:x.once||'',...(x.opt?{opt:true}:{})}));
+const fswSteps=()=>live().map(x=>({p:x.p,n:x.n,path:x.path||x.f,l:x.l,line:x.line,why:x.why||'',where:x.where||'',once:x.once||'',...(x.opt?{opt:true}:{}),...(x.follow?{follow:true}:{})}));  // follow：跟着起点记（识别时码表标的）
 function fswApply(j){FSWJ=j;const PH={insert:1,build:2,flash:3,try:4};
  fl.step=PH[j.phase]||1;fl.pct=j.pct||0;fl.log=j.log||'';fl.wait=false;fl.to=4;
  if(j.status==='running')fl.st=1;else if(j.status==='waiting_device'){fl.st=4;fl.log='没看到设备'}
@@ -1591,7 +1599,8 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
   if(e.target.closest('[data-autostart]')){autoStart();return}
   if(e.target.closest('[data-autostop]')){autoStop();return}
-  if(e.target.closest('[data-autofix]')){AUTO=false;autoHold='第 1 轮自动校验没通过：'+((COLJ&&COLJ.suspect)||[]).map(x=>`「${x.name}」${fms(Math.abs(x.seconds))} 秒`).join('、')+'。请检查这一段起止两个计时点的位置，改好后重新插入。';page='steps';render();window.scrollTo(0,0);return}
+  if(e.target.closest('[data-autofix]')){AUTO=false;const SS=(COLJ&&COLJ.suspect)||[];api('/api/collect/choice',{choice:'fix'}).catch(()=>{});  // 选了什么记进这次的结果（报告里写）
+   autoHold=SS.some(x=>x.kind)?`测量停下来了：${SS.map(x=>x.why).join('；')}`:'第 1 轮自动校验没通过：'+SS.map(x=>`「${x.name}」${fms(Math.abs(x.seconds))} 秒`).join('、')+'。请检查这一段起止两个计时点的位置，改好后重新插入。';page='steps';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-mclose]')){hStage=1;render();return}
   if(e.target.closest('[data-mfind]')){flowReset();const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render();return}
   if(e.target.closest('[data-cdskip]')){clearInterval(cdT);cdT=null;cd=0;hStage=4;render();return}

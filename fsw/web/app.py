@@ -707,7 +707,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         try:
             ids = sorted((Path(project_dir) / "identify").glob("*.json"), key=lambda f: f.stat().st_mtime)
             d = json.loads(ids[-1].read_text(encoding="utf-8")) if ids else {}
-            out.update(end=(d.get("main") or {}).get("end"), segs=(d.get("page") or {}).get("segs") or [])
+            out.update(end=(d.get("main") or {}).get("end"), segs=(d.get("page") or {}).get("segs") or [],
+                       follow=[s["p"] for s in (d.get("page") or {}).get("steps") or [] if s.get("follow")])
         except (OSError, ValueError, AttributeError):
             pass
         return out
@@ -840,7 +841,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             if plan["ok"] and fp:
                 (proj / "fsw-plan.json").write_text(json.dumps({"fingerprint": fp, "steps": steps, "reply": again or text, "ver": ins.PLAN_VER,
                                                                 "fixes": plan.get("fixes") or [], "unchecked": plan.get("unchecked") or [],
-                                                                "tail": plan.get("tail") or [], "end": plan.get("end")},
+                                                                "tail": plan.get("tail") or [], "end": plan.get("end"),
+                                                                "follow": plan.get("follow") or []},
                                                                ensure_ascii=False), encoding="utf-8")
             if not plan["ok"]:
                 return _fail(job, "insert", plan["message"])
@@ -1315,6 +1317,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             page = stds.inserted_page(body.page, steps, inserted)
         except (KeyError, TypeError, ValueError):  # 存的步骤和结果页对不上（比如老版本留下的）：按网页传来的算
             return body.page
+        if body.project_dir:
+            # 一轮的结束：和放清零用的同一步（插的时候码表定的，fsw-plan.json），报告里总的那条线按它收尾
+            try:
+                end = (json.loads((Path(body.project_dir) / "fsw-plan.json").read_text(encoding="utf-8")).get("end") or {}).get("step")
+            except (OSError, ValueError, AttributeError):
+                end = None
+            if end and end in (page.get("main") or []):
+                page = {**page, "roundEnd": end}
         if not page["segs"]:
             raise HTTPException(409, "这次插进去的计时点连不成一段，量不出用时：回到「找关键步骤」那一步，至少留下起点和终点再插一次。")
         return page
@@ -1344,6 +1354,8 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         pending = []
         if body.resume and old:
             job, coll = old, old["_coll"]
+            if old.get("suspect"):  # 停下来问过（自动校验没通过 / 某个点连着几轮不对），选了"接着测"：记下来，报告里写
+                _choice(job, "continue", old["suspect"])
             with old["_lock"]:
                 pending = coll.finish()  # 停下时已经收全的那一轮照算；没收全的那一轮不算
         else:
@@ -1389,8 +1401,18 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             with job["_lock"]:
                 take(coll.feed(line))
 
+        def ask(kind, name, why):
+            """测到一半看出某个计时点连着几轮不对：和第 1 轮自动校验没通过一样停下来问（看看改计时点，还是接着测），
+            不只是一行提示（10-26 真测：提示了没人停，报告里那几段只有 1 轮的数）。同一个点问过、选了接着测就不再问。"""
+            if (kind, name) in job.setdefault("_asked", set()):
+                return
+            job["_asked"].add((kind, name))
+            job["suspect"] = [{"kind": kind, "name": name, "why": why}]
+            job["_stop"] = True
+
         def take(results):
             """收尾的轮记下来；进度、提示跟着更新。"""
+            job["late"] = list(coll.late)  # 晚过 1 秒窗口才到的尾巴点：不算数，报告里点名
             for r in results:
                 if r.get("update"):  # 已经记下的一轮，最后一声晚到：只换数，格子颜色和轮数不变
                     k = next((i for i in range(len(job["rounds"]) - 1, -1, -1)
@@ -1423,6 +1445,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     if worst and worst[1] >= MISS_RUN:
                         job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都不在这一轮该在的位置（没打出来，或者比它前一步还早），这几轮用到它的两段空着。"
                                             "要是上一轮没有被中途打断，多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
+                        ask("gap", worst[0], job["half_hint"])
                 elif not r.get("stale"):  # 没收全：同一个点连着几轮都没收到，点名（多半是这一步没走到，或者插的位置走不到）
                     run = {m: job.get("miss_run", {}).get(m, 0) + 1 for m in r.get("missing") or []}
                     job["miss_run"] = run
@@ -1430,6 +1453,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     if worst and worst[1] >= MISS_RUN:
                         job["half_hint"] = (f"「{worst[0]}」连着 {worst[1]} 轮都没收到：多半是这一步没走到，或者计时点插的位置走不到，"
                                             "再测也一样，先停下，回到「插计时点」那一步换个位置，或者删掉它。")
+                        ask("miss", worst[0], job["half_hint"])
                 elif r.get("stale"):
                     run = job.setdefault("stale_run", {})
                     for m in r["missing"]:
@@ -1439,6 +1463,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                         name = worst[0].split("（")[0]
                         job["half_hint"] = (f"「{name}」连着 {worst[1]} 轮都记在起点之前，不像是这一轮的事，再测也一样。"
                                             "多半是这个计时点插的位置不对：先停下，回到「插计时点」那一步换个位置，或者删掉它。")
+                        ask("stale", name, job["half_hint"])
                 job["rounds"].append(r)
             first = next((x for x in job["rounds"] if x["ok"]), None)
             if first and not job.get("_checked") and not (coll.prev and coll.prev.get("sent") is not None and coll.prev["sent"].get("n") == first["n"]):
@@ -1569,6 +1594,30 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         threading.Thread(target=_guarded(run, crashed), daemon=True).start()
         return _col_view(job)
 
+    def _choice(job, choice, items):
+        """停下来问的时候选了什么（接着测 / 去改计时点），存进这次的结果文件夹（choices.json），报告的数据检查里写。"""
+        rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "choice": choice,
+               "items": [{k: x.get(k) for k in ("kind", "name", "why", "seconds") if x.get(k) is not None} for x in items or []]}
+        job.setdefault("choices", []).append(rec)
+        try:
+            (Path(job["raw_log"]).parent / "choices.json").write_text(json.dumps(job["choices"], ensure_ascii=False, indent=1), encoding="utf-8")
+        except (OSError, KeyError):
+            pass
+
+    class ChoiceBody(BaseModel):
+        choice: str
+
+    @app.post("/api/collect/choice")
+    def collect_choice(body: ChoiceBody):
+        """停下来问的时候选了"去改计时点"（接着测由 /api/collect/start resume 记）：记下来。"""
+        job = col["job"]
+        if not job or not job.get("suspect"):
+            raise HTTPException(409, "现在没有在问")
+        if body.choice not in ("fix", "continue"):
+            raise HTTPException(400, "只能选 fix 或 continue")
+        _choice(job, body.choice, job["suspect"])
+        return _col_view(job)
+
     @app.post("/api/collect/stop")
     def collect_stop():
         job = col["job"]
@@ -1640,11 +1689,48 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
                    "nostart": (job or {}).get("nostart", 0) if raw else 0,
                    "startName": (sc.get("start") or {}).get("name", ""),
-                   "gap": [{"n": r["n"], "names": r["gap"]} for r in ok if r.get("gap")]}
+                   "gap": [{"n": r["n"], "names": r["gap"]} for r in ok if r.get("gap")],
+                   "late": _late_names((job or {}).get("late") or []) if raw else [],
+                   "choices": ((job or {}).get("choices") or []) if raw else []}
+        out["checks"] = (out.get("checks") or []) + _run_checks(job, quality) if raw else out.get("checks") or []
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
                 "quality": quality, "start_lag": _start_lag(raw, sc), "code": code_ctx(job) if raw else {},
                 "prev": prev,
                 "measured_at": (job or {}).get("measured_at") if ok and same else None}
+
+    def _late_names(late):
+        """晚到的尾巴点按名字数次数：[{name, n, how}]。"""
+        got = {}
+        for x in late:
+            k = (x.get("name"), x.get("how"))
+            got[k] = got.get(k, 0) + 1
+        return [{"name": n, "how": h, "n": c} for (n, h), c in got.items()]
+
+    def _run_checks(job, quality):
+        """这次测量过程里要提醒的（报告最上面的数据检查一起列）：开头没收到的半轮、晚到的尾巴点、停下来问过选了什么、
+        插计时点时码表没把握的地方（每轮结束是哪一步说不准、结构看不懂没核对的文件）。"""
+        out = []
+        if quality.get("half"):
+            out.append({"kind": "half", "why": f"有 {quality['half']} 次开头没收到（码表开始听的时候它已经开始了），没算进轮数，也不影响数据"})
+        for x in quality.get("late") or []:
+            out.append({"kind": "late", "name": x["name"],
+                        "why": f"「{x['name']}」有 {x['n']} 次在每轮清零 1 秒以后才到，没算进那一轮"
+                               f"（用到它的段那几轮按清零前最后那次算，可能偏短）"})
+        for c in quality.get("choices") or []:
+            names = "、".join(f"「{i['name']}」" for i in c.get("items") or [] if i.get("name"))
+            out.append({"kind": "choice", "choice": c["choice"],
+                        "why": f"{c['at'][11:16]} 测量停下来问过（{names}不对劲），选了"
+                               + ("接着测：用到它的段这次的数要打折扣看" if c["choice"] == "continue" else "去改计时点")})
+        try:
+            plan = json.loads((Path(job["_project_dir"]) / "fsw-plan.json").read_text(encoding="utf-8")) if job.get("_project_dir") else {}
+        except (OSError, ValueError):
+            plan = {}
+        for f in plan.get("fixes") or []:
+            if f.get("kind") == "reset_end_unsure":
+                out.append({"kind": "plan", "why": f"插计时点时：每轮结束是哪一步说不准（{f.get('why')}），清零用的是 AI 给的位置"})
+        for u in plan.get("unchecked") or []:
+            out.append({"kind": "plan", "why": f"插计时点时：{u.get('file')} 的结构码表看不懂，这里插的 {'、'.join(u.get('steps') or [])} 没核对位置"})
+        return out
 
     def _prev_run(job, sc, ok):
         """改完再测（任务 22）：和上次比。上次 = 同一个项目、计时点一样、收齐 10 轮以上的最近一次。
