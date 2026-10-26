@@ -92,9 +92,9 @@ def test_line_length_is_its_median_and_shared_segment_split_by_ratio():
     assert "早 0.62 秒" in out                                               # 两条线中位数之差
     items = re.findall(r"<li[^>]*>(.*?)</li>", out)
     shared = [t for t in items if "听写" in t]
-    assert len(shared) == 2 and all("（共用）" in t for t in shared)
+    assert len(shared) == 1 and "（共用）" in shared[0]          # 共用的段只列一次（10-26：原来两条线各列一遍）
     # 10-26：共用的一段两条线写同一个数（它自己的中位数 0.50），不再按比例摊成两个数
-    assert all("0.50 秒" in t for t in shared) and "60%" in shared[0] and "34%" in shared[1]   # 0.5/0.83、0.5/1.45
+    assert all("0.50 秒" in t for t in shared) and "60%" in shared[0]   # 0.5/0.83
 
 
 def test_note_under_chart_is_one_short_line_without_scene_words():

@@ -87,8 +87,11 @@ def test_chart_numbers_are_the_segment_medians_and_early_uses_per_round_lead():
          "lines": [{"name": "换上表情", "end": "换上表情", "col": "#a", "soft": "#b", "med": 0.7258, "segs": ["P1-P2", "P2-P5", "P5-P7", "P7-P8", "P8-P13"]},
                    {"name": "首段出声", "end": "首段出声", "col": "#c", "soft": "#d", "med": 1.1091, "segs": ["P1-P2", "P2-P5", "P5-P7", "P7-P8", "P8-P9"]}],
          "J": {"lines": [], "lead": {"first": "换上表情", "second": "首段出声", "med": 0.3626}}}
-    h = _run(fn + f"console.log(timeline({json.dumps(D, ensure_ascii=False)}))")
+    D["main"] = D["lines"][1]
+    h = _run(fn + f"const D={json.dumps(D, ensure_ascii=False)};D.main=D.lines[1];console.log(timeline(D))")
     nums = re.findall(r'<span class="r num">([\d.]+) 秒</span>', h)
-    assert nums == ["0.28", "0.04", "0.40", "0.28", "0.75"], nums      # 和「分段用时」表里一样，同一段两条线写同一个数
+    # 和「分段用时」表里一样；编号先给主线，两条线共用的段只列一次，顺带那条开头共用的几段画成一块"同上"（10-26）
+    assert nums == ["0.28", "0.75", "0.40"], nums
+    assert "同上 ①–②" in h
     assert "早 0.36 秒" in h and "早 0.38" not in h
     assert "另含极短段" in h
