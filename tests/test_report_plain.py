@@ -122,6 +122,7 @@ def test_plain_chart_has_no_circles_shared_or_early_line():
     assert "收到识别文字" not in t.split("</svg>")[0]  # 次要的线挪到"其他参考"
     assert "设备内部还有几步，加起来不到 0.05 秒，可忽略。" in t
     assert "这段在设备外，设备改不了" in t and "等云端" in t
+    assert "<b>解码并送到扬声器</b>：一般 0.10 秒，占 5%。属于设备。" in t
     assert "行业标准：平均不超过 2 秒" in t
     assert "图里的数是 10 次里的一般情况（中位数）" in t
 

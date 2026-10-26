@@ -257,7 +257,7 @@ function timeline(D){
   if(!PL&&L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)&&(LD!=null?LD>0:L1.med>L0.med)){const a=L0.med,b=L1.med,y=top+gap-12,early=LD!=null?LD:b-a;  // 上面那条真的更早才写「早多少」
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(early,2)} 秒</text>`;}
   if(PL){const sv=plainServer(D),tiny=rows.flatMap(r=>r.tiny.map(t=>({...t,where:plainWhere(D,t.k)}))),ts=tiny.reduce((t,x)=>t+Math.max(0,x.v||0),0);
-   const say=r=>{const wh=plainWhere(D,r.k);return wh==='cloud'?'这段在设备外，设备改不了。':wh==='dev'?`在${plainWho(r.owner)}上。`:`${plainWho(r.owner)||'网络'}。`};
+   const say=r=>{const wh=plainWhere(D,r.k);return wh==='cloud'?'这段在设备外，设备改不了。':`属于${plainWho(r.owner)||'网络'}。`};
    const li=rows.map(r=>`<li><span class="nm"><b>${htmlEsc(plainWhere(D,r.k)==='cloud'?`等云端${sv?`（${sv}）`:''}`:r.name)}</b>：一般 ${f(r.d)} 秒，占 ${Math.round(r.share*100)}%。${say(r)}</span></li>`).join('');
    const tn=!tiny.length?'':ts<0.05&&tiny.every(x=>x.where==='dev')?'设备内部还有几步，加起来不到 0.05 秒，可忽略。':`另有几步很短，加起来约 ${f(ts)} 秒（${tiny.map(x=>htmlEsc(x.name)).join('、')}）。`;
    return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="时间花在哪">${g}</svg></div>
