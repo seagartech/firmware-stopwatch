@@ -71,7 +71,8 @@ class Spec:
         first = next((i for i, l in enumerate(s["lines"]) if l.get("first")), None)
         if first is not None and first != len(lines) - 1:
             other = {p for i, l in enumerate(lines) if i != len(lines) - 1 for g in l["segs"] for p in g}
-            spec.soft = {p for g in lines[-1]["segs"] for p in g} - other - {spec.start}
+            # 不在哪条线上、只给"同时在走的段"用的点（比如末段输出、放空，10-26 起不进线）也一样：缺了不算没收全
+            spec.soft = ({p for g in lines[-1]["segs"] for p in g} | {p for g in segs.values() for p in g}) - other - {spec.start}
         spec.marks = set(s.get("last_points") or [])
         spec.follow = set(s.get("follow") or []) - {spec.start}
         opt = set(s.get("optional") or [])  # 只在某种触发方式才走的计时点：有就记，一轮收齐不等它
@@ -274,13 +275,31 @@ class Collector:
                 return True, self._prev_update()
             return False, []
         if name not in pv["miss"]:
+            if (name in self.spec.last or tail or (name in self.spec.marks and name != self.spec.start and name not in self.spec.follow)) \
+                    and not self._begun_with(self._before_end(name)):
+                # 上一轮还差别的点、在等：清零后才到的"记最后一次"的点（最后一段声音）也是上一轮的，记上（8784：原来丢了，全程按结束消息算短了）
+                pv["occ"].setdefault(name, []).append((us, val))
+                return True, []
             return False, []
-        if self._before_end(name) in self.cur:  # 这一轮终点前一个点已经到了：这个终点是这一轮的，上一轮等不到了
+        if self._begun_with(self._before_end(name)):  # 这一轮终点前一个点已经到了：这个终点是这一轮的，上一轮等不到了
             return False, [self._prev_do(self._bad_or_stale)]
         pv["cur"].setdefault(name, (us, val))
         pv["occ"].setdefault(name, []).append((us, val))
         pv["miss"].discard(name)
         return True, ([self._prev_do(self._ok_or_stale)] if not pv["miss"] else [])
+
+    def _begun_with(self, b):
+        """这一轮（清零之后）真的开始了、而且点 b 是开始之后才到的：b 在这一轮里、这一轮有起点、b 不早于起点。
+        清零后、下一轮起点之前被上一轮剩下的声音重新触发的"第一次"点（比如回复还没放完就清零，第一段出声又报了一次）
+        不算这一轮开始的证据（8784：拿它当证据，上一轮真正的放完被判给了下一轮、又因为早于起点被扔掉，全程少算 0.1～0.5 秒）。"""
+        if b is None or b not in self.cur:
+            return False
+        st = self.cur.get(self.spec.start)
+        if st is not None:
+            return self.cur[b][0] >= st[0]
+        # 起点还没打出来（起点是补打的，比设备上后面几步晚出现在日志里）：这一轮要的点已经到了一大半，才算真的开始了
+        got = [x for x in self.spec.need if x != self.spec.start and x in self.cur]
+        return len(got) * 2 >= len(self.spec.need) - 1
 
     def _flag_late(self, name, us, how):
         if len(self.late) < 200:
@@ -296,7 +315,8 @@ class Collector:
         if not p and (tm := TAIL.search(line or "")):
             if self.prev and self.prev.get("anchor"):  # 上一轮还开着：晚到的这一次照样是它的（到下一轮起点为止都算），不点名
                 self._tent(tm.group(1), int(tm.group(2)), 0)
-            else:
+            elif tm.group(1) not in self.spec.follow:
+                # 跟着起点记的点（比如一直在发的上传）清零后又走：是下一轮的事，不点名（10-26 8784：数据检查里多了一条无关的"晚到"）
                 self._flag_late(tm.group(1), int(tm.group(2)), "tail")
             return []
         if not p:
@@ -799,7 +819,7 @@ class Collector:
 
 
 ROUNDS_FILE = "rounds.json"
-ROUND_RULE = 2  # 分轮规则的版本：2 = 按起点分轮、清零后的尾巴算回上一轮、全程量到人感觉到的结束（10-26）。存的是老规则的就按原始日志重算
+ROUND_RULE = 3  # 分轮规则的版本：2 = 按起点分轮、清零后的尾巴算回上一轮、全程量到人感觉到的结束（10-26）；3 = 清零后被剩下的声音重新触发的"第一次"点不算新一轮开始（8784）。存的是老规则的就按原始日志重算
 
 
 def save_rounds(run_dir, rounds):
