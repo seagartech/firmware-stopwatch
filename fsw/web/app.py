@@ -608,6 +608,24 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             return
         job.update(status="failed", err={"kind": kind, "message": message, **extra})
 
+    def _net_watch(model, job, as_log=False):
+        """大模型网络不稳、正在重发时，页面上写一句人话（不让页面一直转圈不说话）；重发成功后去掉。"""
+        if model is None or not hasattr(model, "on_retry"):
+            return model
+
+        def cb(info):
+            if info.get("ok"):
+                job.pop("net", None)
+                return
+            mins = max(1, round((info.get("window") or 0) / 60))
+            msg = (f"{getattr(model, 'name', '大模型')} 网络不稳，正在重试第 {info['retry']} 次（最多重试 {info.get('max')} 次，"
+                   f"等 {info['wait']} 秒再发；同一个请求最多试 {mins} 分钟，还不行才报错）")
+            job["net"] = msg
+            if as_log:
+                job["log"] = msg
+        model.on_retry = cb
+        return model
+
     def _flash_with(dev, fw, port, on_progress, **kw):
         """调设备的烧录：新参数（日志文件、第几次尝试）只传给认得它们的实现（测试里的假设备只收前三个）。"""
         import inspect
@@ -785,6 +803,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         p = {"status": "running", "work": body.work, "steps": body.steps, "started": time.time(), "text": None, "seconds": None,
              "read": "", "llm": model, "note": note}  # note：上次看出来的问题，提前准备时也告诉 AI  # llm：插法不合规时在同一段对话里追问一次（见 ins.fix_plan）
         fsw["prep"] = p
+        _net_watch(model, p)
 
         def run():
             needs = stds.needed_values(body.steps, stds.find(body.steps))
@@ -833,6 +852,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                "started": time.time(), "seconds": {}, "view": None, "err": None, "got": [], "total": 0, "port": None,
                "prepared": use_prep, "redo": redo, "calls": calls}
         fsw.update(job=job, args=body)
+        _net_watch(model, job, as_log=True)
         backup, orig_fw, _ = _fsw_dirs(body)
         steps = body.steps
         Path(body.project_dir).mkdir(parents=True, exist_ok=True)
@@ -860,13 +880,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     time.sleep(wait_step / 4)
                 if prep["status"] == "ready":
                     text = prep["text"]
-                    talk["llm"] = prep.get("llm")
+                    talk["llm"] = _net_watch(prep.get("llm"), job, as_log=True)  # 追问时网络不稳也在这一页说
                     job["log"] = "用你核对步骤时 AI 提前准备好的插法"
                 else:
                     job.update(prepared=False, log="提前准备的那次没成，重新生成")
                     try:
                         job["calls"] += 1
-                        talk["llm"] = _model()[1]
+                        talk["llm"] = _net_watch(_model()[1], job, as_log=True)
                         text = talk["llm"].investigate(ins.build_prompt(steps, ins.default_header(body.work), needs, extra=note), body.work,
                                                        on_tool=lambda d: job.update(log=f"AI 在读代码：{d}"))
                     except llms.LLMError as e:
@@ -2130,6 +2150,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             pass
         job = {"status": "running", "started": time.time(), "read": "", "fixes": None, "fine": "", "message": "", "root": root}
         adv["job"] = job
+        _net_watch(model, job)
         T().begin("advise")
         T().count("clicks")
 
@@ -2368,6 +2389,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                "last": "", "seconds": 0, "started": time.time(), "stage": "chain"}
         with ident["lock"]:
             ident["job"], ident["args"] = job, body
+        _net_watch(model, job)
 
         def progress(p):
             job.update(found=p["found"], at=p["at"], read=p["read"], last=p["last"], seconds=p["seconds"],

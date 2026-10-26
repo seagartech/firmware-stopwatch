@@ -52,7 +52,17 @@ def _why(e):
 
 
 RETRY_STATUS = {429, 502, 503}  # 服务器说忙、网关临时出错：可以重发
-MAX_RETRIES = 2  # 每次请求最多重发 2 次
+# 网络不稳时重发（10-26 8783 真测：DeepSeek 连着几次 SSL EOF、RemoteDisconnected、IncompleteRead、握手超时，
+# 原来每次请求只重发 2 次、读回答途中断了一次都不重发，整个识别 99 秒、392 秒后直接失败，用户只能手动重来）：
+# - 等的时间越来越长：2、4、8、15、30、30 秒，最多重发 6 次；
+# - 读回答途中断开（IncompleteRead、RemoteDisconnected、连接被重置、SSL 断开）也重发；
+#   这种情况服务器可能已经算过一次钱，但不重发整个识别就白做了（用户 10-26 定：网络不稳时要自己重试）；
+# - 等回答超时（单次 180 秒）只重发 1 次：再等 180 秒还没回，多半是服务器那边的问题；
+# - 一次请求从第一次发出算起，超过 RETRY_WINDOW 秒就不再重发，报错（页面上写明最多试到多久）。
+RETRY_WAITS = (2, 4, 8, 15, 30, 30)
+MAX_RETRIES = len(RETRY_WAITS)
+SLOW_RETRIES = 1
+RETRY_WINDOW = 600  # 10 分钟
 
 
 CONNECT_TIMEOUT = 30  # 连接、TLS 握手（含经过代理建隧道）的上限：正常 1-2 秒就好，卡住的早点放弃、重发
@@ -346,35 +356,93 @@ class DeepSeek(LLM):
     # 单次请求的上限：以前的复测里一次请求一般 2-4 秒，最长的（写最终结果那次）约 34 秒；
     # 180 秒给长回答留了 5 倍余量，卡住的请求也不会白等 10 分钟。
     # 连接、握手另有 30 秒上限（CONNECT_TIMEOUT）：正常 1-2 秒，卡住的早点放弃并重发，不白等 180 秒。
-    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=180, retry_wait=(1, 2),
-                 connect_timeout=CONNECT_TIMEOUT):
+    def __init__(self, key, model=DEEPSEEK_MODEL, base_url="https://api.deepseek.com", timeout=180, retry_wait=RETRY_WAITS,
+                 connect_timeout=CONNECT_TIMEOUT, retry_window=RETRY_WINDOW, slow_retries=SLOW_RETRIES):
         self.key, self.model, self.base_url, self.timeout = key, model, base_url.rstrip("/"), timeout
         self.connect_timeout = connect_timeout
         self.request_timeout = timeout
-        self.retry_wait = retry_wait  # 第 1、2 次重发前各等几秒
+        self.retry_wait = tuple(retry_wait)  # 第 1、2、3… 次重发前各等几秒；有几个数就最多重发几次
+        self.retry_window = retry_window
+        self.slow_retries = slow_retries
         self.retry_log = []  # 这次调用里重发过的请求：[{request_no, retry, why, wait}]，成功的也记，看得出网络稳不稳
+        self.on_retry = None  # 网页用：重发前告诉它第几次、为什么、等几秒（页面上写"网络不稳，正在重试第 N 次"）；重发后成功了再告诉一次 {"ok": True}
         self._req_no = None
 
-    def _post(self, body):
-        """发一次请求；发请求阶段的连接类错误和 429/502/503 等一会儿重发，最多 MAX_RETRIES 次。读回答途中出的错不在这里，不重发。"""
-        data = json.dumps(body).encode()
-        for attempt in range(MAX_RETRIES + 1):
-            req = urllib.request.Request(self.base_url + "/chat/completions", data=data,
-                                         headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"})
+    def _retry_kind(self, e):
+        """这个错能不能重发：'net'（连接、握手、读回答途中断开）、'slow'（等回答超时）、None（不重发）。"""
+        if isinstance(e, LLMError):
+            return {"dropped": "net", "slow": "slow"}.get(e.kind) if e.info.get("phase") == "read" else None
+        if isinstance(e, urllib.error.HTTPError):
+            return "net" if e.code in RETRY_STATUS else None
+        r = e.reason if isinstance(e, urllib.error.URLError) else e
+        if isinstance(r, ssl.SSLCertVerificationError):
+            return None
+        if isinstance(r, ConnectTimeout):
+            return "net"
+        if isinstance(r, TimeoutError):  # 分不清阶段的超时：按等回答超时算
+            return "slow"
+        return "net" if retryable(e) else None
+
+    def _with_retries(self, send):
+        """send() 发一次请求并读完回答。网络类的错按 retry_wait 越等越久地重发；等回答超时最多重发 slow_retries 次；
+        从第一次发出算起超过 retry_window 秒不再重发。最后还不行，报错里写重发过几次。"""
+        t0, slow, n = time.time(), 0, 0
+        while True:
             try:
-                return _open(req, self.timeout, self.connect_timeout)
-            except (urllib.error.URLError, OSError) as e:
-                if attempt < MAX_RETRIES and retryable(e):
-                    wait = self.retry_wait[min(attempt, len(self.retry_wait) - 1)]
-                    why = redact(f"HTTPError {e.code}" if isinstance(e, urllib.error.HTTPError) else _why(e), 200)
-                    self.retry_log.append({"request_no": self._req_no, "retry": attempt + 1, "why": why, "wait": wait})
-                    print(f"[大模型] {self.name} 第 {self._req_no or '?'} 次请求出错（{why}），{wait} 秒后重发（第 {attempt + 1} 次重发）",
-                          file=sys.stderr, flush=True)
-                    time.sleep(wait)
-                    continue
-                err = self._error(e)
-                err.info["retries"] = attempt
-                raise err from e
+                out = send()
+                if n and self.on_retry:
+                    self.on_retry({"ok": True, "request_no": self._req_no, "retries": n})
+                return out
+            except (urllib.error.URLError, OSError, LLMError) as e:
+                kind = self._retry_kind(e)
+                wait = self.retry_wait[n] if n < len(self.retry_wait) else None
+                if kind == "slow":
+                    slow += 1
+                    if slow > self.slow_retries:
+                        kind = None
+                if not kind or wait is None or time.time() - t0 + wait > self.retry_window:
+                    err = e if isinstance(e, LLMError) else self._error(e)
+                    err.info["retries"] = n
+                    if n:  # 自己重发过还不行：页面上说清楚已经试了多久，不是一出错就放弃
+                        err.message = f"{err.message}（码表已自动重发 {n} 次、试了约 {max(1, round((time.time() - t0) / 60))} 分钟，还是不行）"
+                        err.args = (err.message,)
+                    if isinstance(e, LLMError):
+                        raise
+                    raise err from e
+                n += 1
+                why = e.detail if isinstance(e, LLMError) else \
+                    redact(f"HTTPError {e.code}" if isinstance(e, urllib.error.HTTPError) else _why(e), 200)
+                why = redact(why, 200)
+                self.retry_log.append({"request_no": self._req_no, "retry": n, "why": why, "wait": wait})
+                print(f"[大模型] {self.name} 第 {self._req_no or '?'} 次请求出错（{why}），{wait} 秒后重发（第 {n} 次重发）",
+                      file=sys.stderr, flush=True)
+                if self.on_retry:
+                    try:
+                        self.on_retry({"request_no": self._req_no, "retry": n, "max": len(self.retry_wait), "why": why,
+                                       "wait": wait, "window": self.retry_window, "elapsed": round(time.time() - t0, 1)})
+                    except Exception:  # 页面那边出错不能影响重发
+                        pass
+                time.sleep(wait)
+
+    def _post(self, body):
+        """发一次请求（不重发：重发在 _with_retries 里，连同读回答一起）。"""
+        data = json.dumps(body).encode()
+        req = urllib.request.Request(self.base_url + "/chat/completions", data=data,
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"})
+        return _open(req, self.timeout, self.connect_timeout)
+
+    def _ask(self, body):
+        """发请求、读完整回答（非流式），网络不稳时重发。返回 message。"""
+        def send():
+            with self._post(body) as resp:
+                try:
+                    return json.loads(resp.read())["choices"][0]["message"]
+                except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
+                    err = self._read_error(e)  # 读回复时超时、断开、格式不对，都按大模型的错说
+                    if isinstance(e, (OSError, http.client.HTTPException)):
+                        err.info["phase"] = "read"  # 读到一半断开 / 超时：可以重发；格式不对不重发
+                    raise err from e
+        return self._with_retries(send)
 
     def _error(self, e):
         """把发请求时的错换成大模型错误。"""
@@ -410,11 +478,7 @@ class DeepSeek(LLM):
                 messages.append({"role": "user", "content": "读代码的次数用完了，请按已读的内容直接给出最终结果。"})
             sent = time.time()
             try:
-                with self._post(body) as resp:
-                    try:
-                        msg = json.loads(resp.read())["choices"][0]["message"]
-                    except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
-                        raise self._read_error(e) from e  # 读回复时超时、断开、格式不对，都按大模型的错说
+                msg = self._ask(body)
             except LLMError as e:  # 记下是第几次请求、这次请求等了多久、这次调用一共用了多久
                 e.info.update(request_no=rnd + 1, request_seconds=round(time.time() - sent, 1), elapsed=round(time.time() - t0, 1))
                 raise
@@ -440,11 +504,7 @@ class DeepSeek(LLM):
         messages, sent = self._talk + [{"role": "user", "content": text}], time.time()
         self._req_no = "追问"
         try:
-            with self._post({"model": self.model, "messages": messages}) as resp:
-                try:
-                    msg = json.loads(resp.read())["choices"][0]["message"]
-                except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
-                    raise self._read_error(e) from e
+            msg = self._ask({"model": self.model, "messages": messages})
         except LLMError as e:
             e.info.update(request_no="追问", request_seconds=round(time.time() - sent, 1))
             raise
@@ -454,24 +514,48 @@ class DeepSeek(LLM):
 
     def stream(self, prompt, system=None):
         msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
-        resp = self._post({"model": self.model, "messages": msgs, "stream": True})
+        body = {"model": self.model, "messages": msgs, "stream": True}
+        # 还没收到一个字之前断了（连接、握手、等第一段时断开）：按网络不稳重发；已经交出去一部分文字就不能重来了，直接报错
+        resp = self._with_retries(lambda: self._first_piece(body))
+        first, resp, it = resp
         with resp:
+            if first:
+                yield first
             try:
-                for raw in resp:
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    piece = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
-                    if piece:
-                        yield piece
+                for piece in it:
+                    yield piece
             except (ValueError, AttributeError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
                 raise self._read_error(e) from e  # 读到一半超时、断开，或者流里有坏行
 
+    def _first_piece(self, body):
+        """流式：发请求并读到第一段文字（或读完）为止；返回 (第一段, 回应, 后面的段)。这之前断开可以放心重发。"""
+        resp = self._post(body)
+
+        def pieces():
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    return
+                piece = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
+                if piece:
+                    yield piece
+        it = pieces()
+        try:
+            first = next(it, None)
+        except (ValueError, AttributeError, IndexError, TypeError, OSError, http.client.HTTPException) as e:
+            resp.close()
+            err = self._read_error(e)
+            if isinstance(e, (OSError, http.client.HTTPException)):
+                err.info["phase"] = "read"
+            raise err from e
+        return first, resp, it
+
     def test(self):
         self.timeout = 30
+        self.retry_wait, self.slow_retries = (1,), 0  # 设置页"检查密钥"要马上有答复：只重发 1 次
         return super().test()
 
 

@@ -90,9 +90,9 @@ def test_identify_failure_record_and_log(monkeypatch, tmp_path, capsys):
     door = door_source(tmp_path / "door")
     sent = fake_net(monkeypatch, 3, urllib.error.URLError(ConnectionResetError(54, f"Connection reset by peer {KEY}")))
     r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门")
-    assert not r["ok"] and r["kind"] == "offline" and r["stage"] == "chain" and len(sent) == 5  # 第 3 次请求重发了 2 次
+    assert not r["ok"] and r["kind"] == "offline" and r["stage"] == "chain" and len(sent) == 3 + llms.MAX_RETRIES  # 第 3 次请求重发满
     err = r["error"]
-    assert err["stage"] == "理清流程" and err["request_no"] == 3 and err["kind"] == "offline" and err["retries"] == 2
+    assert err["stage"] == "理清流程" and err["request_no"] == 3 and err["kind"] == "offline" and err["retries"] == llms.MAX_RETRIES
     assert "ConnectionResetError" in err["detail"] and "Connection reset by peer" in err["detail"] and "sk-***" in err["detail"]
     assert err["stage_seconds"] >= 0 and err["seconds"] >= err["stage_seconds"]
     assert "连不上DeepSeek的服务器" in r["message"] and "ConnectionResetError" not in r["message"]
@@ -111,7 +111,7 @@ def test_second_stage_failure_names_the_second_stage(monkeypatch, tmp_path):
     fake_net(monkeypatch, 1, http_error(429, "rate limited"))
     r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门", flow=flow)
     assert r["kind"] == "busy" and r["error"]["stage"] == "选计时点" and r["error"]["status"] == 429 and r["error"]["request_no"] == 1 \
-        and r["error"]["retries"] == 2 and [x["stage"] for x in r["retries"]] == ["选计时点", "选计时点"]
+        and r["error"]["retries"] == llms.MAX_RETRIES and [x["stage"] for x in r["retries"]] == ["选计时点"] * llms.MAX_RETRIES
 
 
 def test_redact():
@@ -156,10 +156,10 @@ def test_send_phase_connection_errors_are_retried(monkeypatch, tmp_path, capsys,
     m = DeepSeek(KEY)
     assert m.investigate("读一读", tmp_path) == "好了"
     reqs = [x for x in sent if not isinstance(x, tuple)]
-    assert len(reqs) == 3 and [x for x in sent if isinstance(x, tuple)] == [("sleep", 1), ("sleep", 2)]
+    assert len(reqs) == 3 and [x for x in sent if isinstance(x, tuple)] == [("sleep", 2), ("sleep", 4)]  # 越等越久
     assert [x["retry"] for x in m.retry_log] == [1, 2] and all(x["request_no"] == 1 for x in m.retry_log)
     log = capsys.readouterr().err
-    assert "第 1 次请求出错" in log and "1 秒后重发（第 1 次重发）" in log and KEY not in log
+    assert "第 1 次请求出错" in log and "2 秒后重发（第 1 次重发）" in log and KEY not in log
 
 
 @pytest.mark.parametrize("code,retried", [(429, True), (502, True), (503, True), (500, False), (401, False), (402, False)])
@@ -175,33 +175,42 @@ def test_http_status_retry(monkeypatch, tmp_path, code, retried):
         assert len([x for x in sent if not isinstance(x, tuple)]) == 1
 
 
-@pytest.mark.parametrize("error", [
-    urllib.error.URLError(socket.timeout("timed out")),  # 分不清是连不上还是在等回答：不重发
-    urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),  # 证书不对：重发也一样
-])
-def test_timeouts_and_bad_certificates_are_not_retried(monkeypatch, tmp_path, error):
-    sent = flaky_net(monkeypatch, [error])
+def test_bad_certificate_is_not_retried(monkeypatch, tmp_path):
+    sent = flaky_net(monkeypatch, [urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))])
     with pytest.raises(LLMError) as got:
         DeepSeek(KEY).investigate("读一读", tmp_path)
-    assert got.value.info["retries"] == 0 and len(sent) == 1
+    assert got.value.info["retries"] == 0 and len(sent) == 1  # 证书不对：重发也一样
 
 
-def test_mid_response_read_failure_is_never_retried(monkeypatch, tmp_path):
+def test_unknown_phase_timeout_is_retried_only_once(monkeypatch, tmp_path):
+    t = urllib.error.URLError(socket.timeout("timed out"))
+    sent = flaky_net(monkeypatch, [t, t, t])
+    with pytest.raises(LLMError) as got:
+        DeepSeek(KEY).investigate("读一读", tmp_path)
+    reqs = [x for x in sent if not isinstance(x, tuple)]
+    assert got.value.kind == "slow" and got.value.info["retries"] == 1 and len(reqs) == 2
+
+
+def test_mid_response_read_failure_is_retried(monkeypatch, tmp_path):
+    """10-26 8783 真测：读回答途中 IncompleteRead / 连接被重置，整个识别直接失败。现在按网络不稳重发。"""
     sent = flaky_net(monkeypatch, ["read"])
-    with pytest.raises(LLMError) as got:
-        DeepSeek(KEY).investigate("读一读", tmp_path)
-    assert got.value.kind == "dropped" and len(sent) == 1  # 回答读到一半断开：重发会重复计费，不重发
+    m = DeepSeek(KEY)
+    assert m.investigate("读一读", tmp_path) == "好了"
+    assert len([x for x in sent if not isinstance(x, tuple)]) == 2 and m.retry_log[0]["retry"] == 1
+    assert "ConnectionResetError" in m.retry_log[0]["why"]
 
 
-def test_gives_up_after_two_retries_and_records_it(monkeypatch, tmp_path, capsys):
-    """整个识别：第一步第 1 次请求连续 3 次 TLS 断开 → 不再重发，出错记录写明重发了 2 次。"""
+def test_gives_up_after_all_retries_and_records_it(monkeypatch, tmp_path, capsys):
+    """整个识别：第一步第 1 次请求一直 TLS 断开 → 重发满 MAX_RETRIES 次后不再重发，出错记录写明重发了几次。"""
+    n = llms.MAX_RETRIES
     door = door_source(tmp_path / "door")
-    sent = flaky_net(monkeypatch, [TLS, TLS, TLS])
+    sent = flaky_net(monkeypatch, [TLS] * (n + 1))
     r = idf.identify(DeepSeek(KEY), door, "从刷卡到开门")
-    assert not r["ok"] and r["error"]["retries"] == 2 and r["error"]["request_no"] == 1 and r["error"]["retried_before"] == 2
-    assert len([x for x in sent if not isinstance(x, tuple)]) == 3
-    assert [x["stage"] for x in r["retries"]] == ["理清流程", "理清流程"] and "SSLEOFError" in r["retries"][0]["why"]
-    assert "这次请求重发过 2 次" in capsys.readouterr().err
+    assert not r["ok"] and r["error"]["retries"] == n and r["error"]["request_no"] == 1 and r["error"]["retried_before"] == n
+    assert len([x for x in sent if not isinstance(x, tuple)]) == n + 1
+    assert [x for x in sent if isinstance(x, tuple)] == [("sleep", w) for w in llms.RETRY_WAITS]
+    assert [x["stage"] for x in r["retries"]] == ["理清流程"] * n and "SSLEOFError" in r["retries"][0]["why"]
+    assert f"这次请求重发过 {n} 次" in capsys.readouterr().err
     assert KEY not in json.dumps(r, ensure_ascii=False)
 
 
@@ -289,10 +298,11 @@ def test_deepseek_request_timeout_is_180s_and_read_timeout_is_clear(monkeypatch,
         seen.append(timeout)
         return Resp(None, fail_read=TimeoutError("The read operation timed out"))
     monkeypatch.setattr(llms, "_open", lambda req, timeout=None, ct=None: urlopen(req, timeout))
+    monkeypatch.setattr(llms.time, "sleep", lambda s: None)
     m = DeepSeek(KEY)
     with pytest.raises(LLMError) as got:
         m.investigate("读一读", tmp_path)
     e = got.value
-    assert seen == [180] and e.kind == "slow" and e.info["timeout_limit"] == 180
+    assert seen == [180, 180] and e.kind == "slow" and e.info["timeout_limit"] == 180 and e.info["retries"] == 1
     assert "等回答超时：单次请求上限 180 秒" in e.detail and "一次请求等了 180 秒还没回完" in e.message
     assert "TimeoutError" not in e.message

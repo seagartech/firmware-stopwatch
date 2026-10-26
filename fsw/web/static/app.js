@@ -543,9 +543,9 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  else if(page==='flash'&&fl.st===3&&(!AUTO||autoHold))now=`${holdBox}<div class="bigask"><span class="lab">接着做</span><b>计时点已插好，下一步编译、烧录</b><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-autoresume="1">继续</button></div></div>`;
  else if(page==='flash'&&fl.st===2)now=`<div class="bigask"><span class="lab">接着做</span><b>计时版已烧好，试测通过</b><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-go="collect" data-keepflow="1">${col.st?'回到多轮实测':'开始多轮实测'}</button></div></div>`;
  else if(page==='collect'&&(col.st===0||col.st===3))now=collectPage();  // 还没开始 / 停下了：开始、接着测、看报告的按钮都在这里
- else if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span></div>`;
+ else if(at===0)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> 正在找关键步骤</b><span class="note">AI 读取源码中，已找到 ${readFound} 个，已用时 ${mmss(readSec)}。需要人工操作时会在此提示并响一声。</span>${REAL&&IDENT&&IDENT.net?`<span class="note" style="color:var(--warn)">${htmlEsc(IDENT.net)}</span>`:''}</div>`;
  else if(page==='flash'&&fl.st===4)now=`<div class="bigask"><span class="lab">人工操作</span><b>未检测到设备：连接 USB，或按电源键开机</b><span class="note">设备闲置一段时间会自动关机。计时版已编译完成，检测到设备后自动烧录，无需点击。</span></div>`;
- else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?'AI 读取源码，确定每个计时点的插入位置':fl.step===3?'正在写入设备，请勿拔线':'编译带计时点的固件')}</span></div>`;
+ else if(at<3)now=`<div class="bigask auto"><span class="lab">自动执行 · 无需值守</span><b><span class="spin"></span> ${at===1?'正在插入计时点':fl.step===3?'正在烧录':'正在编译'}${fl.step>=2?` ${fl.pct||0}%`:''}</b><span class="note">${htmlEsc(at===1?(FSWJ&&FSWJ.net)||'AI 读取源码，确定每个计时点的插入位置':fl.step===3?'正在写入设备，请勿拔线':'编译带计时点的固件')}</span></div>`;
  else if(at===3&&fl.st===5){const E=(FSWJ&&FSWJ.err)||{};now=`<div class="errbox"><b>试测没通过${htmlEsc(E.error||'')}</b><p style="margin:6px 0">${htmlEsc(E.message||'')}</p>${E.why?`<p class="note" style="margin:0 0 6px">${htmlEsc(E.why)}</p>`:''}<div class="acts" style="margin:8px 0 0"><button class="btn pri" data-flx="retry">再试一次</button></div></div>`}
  else if(at===3){const N=FSWJ?FSWJ.need||FSWJ.total||live().length:live().length,got=FSWJ?(FSWJ.got||[]).length:0;now=tryBox(got,N).replace('<div class="bigask">','<div class="bigask"><span class="lab">人工操作 · 试测（校验计时点，不计入数据）</span>')}
  else if(col.st===4)now=suspectBox();
@@ -921,6 +921,7 @@ function readBoxReal(llm){const J=IDENT,fail=stepsRead===3,done=stepsRead===2,fo
   ${row(2,`${llm} 选计时点`,`从理清的流程里选位置。${st===2?`已等 ${mmss(readSec)}，两步合计一般 2～5 分钟。`:''}`)}
   ${row(3,'在这里列出找到的步骤',`${done?'找完了，共':'已找到'} ${done?STEPS.length:found.length} 个`)}</ol>
   ${done?foundList():`${found.length?`<div class="list">${found.map((n,k)=>{const at=((J.at||[])[k]||'').match(/([^/\s]+):(\d+)$/);return `<div class="srow"><b>${htmlEsc(n)}</b>${at?`<span class="note">${htmlEsc(at[1])} 第 ${at[2]} 行</span>`:''}</div>`}).join('')}</div>`:''}`}
+  ${J.net&&!fail&&!done?`<p class="note" style="color:var(--warn)">${htmlEsc(J.net)}</p>`:''}
   ${fail?`<p class="note" style="color:var(--bad)">✕ ${J.message||'没找完'}</p><div class="acts" style="justify-content:flex-start;margin:6px 0"><button class="btn pri" data-idretry="1">重试</button><button class="btn" data-go="settings">到设置页换大模型</button>${/no_start|no_end/.test(J.kind||'')?'<button class="btn" data-mclose="1">换个说法写</button>':''}</div>`:''}
   <p class="note">只给它读代码，没给任何"标准答案"；结果存在本机，源码和要测的都没变，下次直接用，不再花钱调用。关掉这页不影响，读完会留着。</p>`}
 function foundList(){const F=FF[scene],rows=STEPS,mid=rows.filter(x=>x.sure!=='高').length;

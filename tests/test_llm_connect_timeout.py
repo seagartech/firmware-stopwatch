@@ -116,7 +116,7 @@ def test_tcp_connect_timeout_is_retried_then_succeeds(monkeypatch, tmp_path):
     assert [x["retry"] for x in m.retry_log] == [1, 2]
 
 
-def test_read_timeout_is_not_retried_and_says_waiting_for_answer(tmp_path):
+def test_read_timeout_is_retried_once_then_says_waiting_for_answer(tmp_path):
     url, got, close = http_server(delay=1.5)
     try:
         m = DeepSeek(KEY, base_url=url, timeout=0.5, connect_timeout=0.3, retry_wait=(0, 0))
@@ -124,7 +124,7 @@ def test_read_timeout_is_not_retried_and_says_waiting_for_answer(tmp_path):
             m.investigate("读一读", tmp_path)
     finally:
         close()
-    assert len(got) == 1 and m.retry_log == []  # 请求已经发出去了：不重发（免得重复计费）
+    assert len(got) == 2 and len(m.retry_log) == 1  # 等回答超时只重发 1 次（10-26：网络不稳时自己重试，但等回答超时多半是服务器那边）
     assert e.value.kind == "slow" and "等回答超时" in e.value.detail and e.value.info.get("timeout_phase") != "connect"
 
 
@@ -152,7 +152,8 @@ def test_unknown_phase_timeouts_count_as_waiting_for_answer(monkeypatch, tmp_pat
     monkeypatch.setattr(llms, "_open", fake_open)
     with pytest.raises(LLMError) as e:
         DeepSeek(KEY, retry_wait=(0, 0)).investigate("读一读", tmp_path)
-    assert len(sent) == 1 and e.value.kind == "slow" and "等回答超时" in e.value.detail and "连接超时" not in e.value.detail
+    assert len(sent) == 2 and e.value.kind == "slow" and "等回答超时" in e.value.detail and "连接超时" not in e.value.detail
+    assert e.value.info["retries"] == 1
 
 
 def test_default_limits():
