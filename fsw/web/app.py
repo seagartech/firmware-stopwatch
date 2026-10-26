@@ -81,6 +81,14 @@ class BgBuildBody(BaseModel):
     project_dir: str | None = None
 
 
+def _rel_work(f, work):
+    """报错里的文件路径换成相对工作副本的写法（页面上给人看）。"""
+    try:
+        return Path(f).resolve().relative_to(Path(work).resolve()).as_posix() if os.path.isabs(f) else f.lstrip("./")
+    except ValueError:
+        return f
+
+
 def _default_builder(work, target, board, idf_path, on_progress):
     return EspIdf(idf_path).build(work, target=target, board=board, on_progress=on_progress)
 
@@ -996,12 +1004,35 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 if not rec["ok"]:
                     return _fail(job, "insert", rec["message"])
             t0 = time.time()
-            try:
-                r = bg_builder(a.work, b["target"], b.get("board"), b["idf_path"],
-                               lambda pct, msg: _log(job, msg, pct))
-            except Exception as e:  # 编译工具本身出问题，不是计时点引起的
-                return _fail(job, "build", ToolEnvError.message, error=getattr(e, "detail", None) or str(e), cause="tool")
-            job["seconds"]["build"] = r.get("seconds", round(time.time() - t0, 1))
+            job.pop("inc_fixed", None)
+            for attempt in (1, 2):
+                try:
+                    r = bg_builder(a.work, b["target"], b.get("board"), b["idf_path"],
+                                   lambda pct, msg: _log(job, msg, pct))
+                except Exception as e:  # 编译工具本身出问题，不是计时点引起的
+                    return _fail(job, "build", ToolEnvError.message, error=getattr(e, "detail", None) or str(e), cause="tool")
+                job["seconds"]["build"] = r.get("seconds", round(time.time() - t0, 1))
+                if r.get("ok") or r.get("cause"):
+                    break
+                miss = ins.header_missing(r.get("error"))
+                if not miss:
+                    break
+                # 找不到码表的头文件：是 #include 的路径写法不对，不是放的位置不对。码表自己改成相对路径重编一次，不让用户点"重新插入"、不告诉 AI
+                files = [_rel_work(f, a.work) for f in miss]
+                if "fw_stopwatch.h" in str(_redo(a.project_dir).get("note") or "") or "#include" in str(_redo(a.project_dir).get("note") or ""):
+                    _redo_set(a.project_dir, clear_note=True)  # 之前存的"#include 放的地方不对"是误判，不再告诉 AI
+                short = (r.get("error") or "").replace(str(Path(a.work).resolve()) + "/", "").replace(str(a.work) + "/", "")
+                if attempt == 2 or not fsw["plan"]:
+                    return _fail(job, "build", f"编译没通过：计时点头文件的引用路径不对（{'、'.join(files)}），码表自动改正后重编还是找不到头文件。"
+                                               "这是码表自己的问题，不用你改代码；点「重新编译」再试一次，还不行请把下面的报错发给我们。",
+                                 error=short, step=None, step_name=None, where="", include_path=files)
+                plan2 = ins.fix_include_paths(fsw["plan"], a.work)
+                rec2 = ins.apply(a.work, plan2, _fsw_dirs(a)[0])
+                if not rec2["ok"]:
+                    return _fail(job, "build", rec2["message"], error=short, step=None, step_name=None, where="", include_path=files)
+                fsw["plan"] = plan2
+                job["inc_fixed"] = {"files": files, "message": f"计时点头文件的引用路径不对（{'、'.join(files)}），码表已自动改正并重编"}
+                _log(job, job["inc_fixed"]["message"], 0)
             if r.get("cause"):
                 return _fail(job, "build", r["message"], error=r.get("error"), cause=r["cause"], missing=r.get("missing"))
             if not r.get("ok"):

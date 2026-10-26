@@ -14,6 +14,7 @@ import difflib
 import hashlib
 import html
 import json
+import os
 import re
 import shutil
 import time
@@ -296,7 +297,7 @@ PROMPT = """你是"固件码表"工具里的计时点插入助手。固件源码
 {values}## 你的任务
 读代码，确定每个计时点具体插在哪一行的后面（after_line 是原文件现在的行号，0 表示插在文件最前面），写出要插的几行（带上和周围一样的缩进）。
 - 每个计时点插两行：一行中文注释（// 计时点 P编号：中文名），一行计时点语句。辅助语句（清零、武装、打印最后一次）也各配一行注释。
-- 每个用到计时点的文件，在开头的 #include 附近加一行 #include，路径要让编译器能找到 {header}。这一行只写 #include，说明另起一行写注释。
+- 每个用到计时点的文件，在开头的 #include 附近加一行 #include "fw_stopwatch.h"（路径写法码表会按编译器找头文件的规则统一改，不用自己算）。这一行只写 #include，说明另起一行写注释。
 - 只能插注释、#include 和 FSW_ 开头的计时点语句，每行一句；不能加 if、条件判断、变量、赋值或别的代码，不能改、不能删已有的行。
   不用自己筛"只记回复的声音、不记提示音""不记上一轮剩下的"：码表的计时点只认这一轮起点之后记到的（起点之前记到的码表不算），
   提示音、上一轮剩下的不会被算进这一轮；要"某一步之后才记"就用 FSW_MARK_ONCE_AFTER，不写判断。
@@ -343,6 +344,135 @@ def point_id(step, steps):
 
 def default_header(root):
     return "main/fw_stopwatch.h" if (Path(root) / "main").is_dir() else "fw_stopwatch.h"
+
+
+# ---- 计时点头文件的 #include 怎么写：码表按编译器找头文件的规则自己定，不用 AI 写的路径 ----
+INCLUDE_RX = re.compile(r'^(\s*)#include\s*([<"])([^">]*fw_stopwatch\.h)[">](.*)$')
+_CMAKE_KW = {"SRCS", "SRC_DIRS", "EXCLUDE_SRCS", "INCLUDE_DIRS", "PRIV_INCLUDE_DIRS", "LDFRAGMENTS", "REQUIRES", "PRIV_REQUIRES",
+             "REQUIRED_IDF_TARGETS", "EMBED_FILES", "EMBED_TXTFILES", "KCONFIG", "KCONFIG_PROJBUILD", "WHOLE_ARCHIVE",
+             "PUBLIC", "PRIVATE", "INTERFACE", "SYSTEM", "BEFORE", "AFTER"}
+
+
+def _cmake_calls(text, names):
+    """CMake 文件里某几个命令的参数（去掉注释，按括号配对，引号里的算一个参数）。"""
+    text = re.sub(r"#[^\n]*", "", text)
+    out = []
+    for m in re.finditer(r"\b(" + "|".join(names) + r")\s*\(", text, re.I):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        out.append((m.group(1).lower(), re.findall(r'"([^"]*)"|([^\s()"]+)', text[m.end():i - 1])))
+    return [(n, [a or b for a, b in toks]) for n, toks in out]
+
+
+def _cmake_include_dirs(cm):
+    """一个 CMakeLists.txt 里给编译器加的头文件目录：idf_component_register 的 INCLUDE_DIRS / PRIV_INCLUDE_DIRS、
+    include_directories、target_include_directories；${变量} 按同一个文件里的 set / list(APPEND) 展开。"""
+    try:
+        text = cm.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    var = {}
+    for name, args in _cmake_calls(text, ["set", "list"]):
+        if name == "set" and args:
+            var[args[0]] = args[1:]
+        elif name == "list" and len(args) >= 2 and args[0].upper() == "APPEND":
+            var.setdefault(args[1], []).extend(args[2:])
+
+    def expand(tok, depth=0):
+        m = re.fullmatch(r"\$\{(\w+)\}", tok)
+        if m and depth < 5 and m.group(1) in var:
+            return [y for x in var[m.group(1)] for y in expand(x, depth + 1)]
+        return [tok]
+    dirs = []
+    for name, args in _cmake_calls(text, ["idf_component_register", "include_directories", "target_include_directories"]):
+        if name == "idf_component_register":
+            take = False
+            for a in args:
+                if a.upper() in _CMAKE_KW:
+                    take = a.upper() in ("INCLUDE_DIRS", "PRIV_INCLUDE_DIRS")
+                elif take:
+                    dirs += expand(a)
+        else:
+            dirs += [y for a in (args[1:] if name == "target_include_directories" else args)
+                     if a.upper() not in _CMAKE_KW for y in expand(a)]
+    out = []
+    for d in dirs:
+        d = d.replace("${CMAKE_CURRENT_SOURCE_DIR}", str(cm.parent)).replace("${COMPONENT_DIR}", str(cm.parent))
+        if "${" in d:
+            continue
+        p = Path(d) if os.path.isabs(d) else cm.parent / d
+        if p.is_dir():
+            out.append(p.resolve())
+    return out
+
+
+def include_dirs(root, rel):
+    """编译器给 root/rel 这个文件找头文件的目录（引号写法先找文件自己所在的目录，不在这里面）：
+    它所在组件（往上找最近的 CMakeLists.txt）加的头文件目录，加上项目最外层 CMakeLists.txt 的 include_directories。"""
+    root = Path(root).resolve()
+    d, out = (root / rel).resolve().parent, []
+    while True:
+        cm = d / "CMakeLists.txt"
+        if cm.is_file():
+            out += _cmake_include_dirs(cm)
+            break
+        if d == root or root not in d.parents:
+            break
+        d = d.parent
+    if (root / "CMakeLists.txt").is_file() and d != root:
+        out += _cmake_include_dirs(root / "CMakeLists.txt")
+    return list(dict.fromkeys(out))
+
+
+def include_resolves(root, rel, line, header):
+    """这一句 #include 按编译器找头文件的规则能不能找到码表的头文件（root/header，可能还没写出来）。"""
+    m = INCLUDE_RX.match(line or "")
+    if not m:
+        return True
+    root = Path(root).resolve()
+    want = (root / header).resolve()
+    name = m.group(3)
+    if os.path.isabs(name):
+        return Path(name).resolve() == want
+    dirs = ([(root / rel).resolve().parent] if m.group(2) == '"' else []) + include_dirs(root, rel)
+    return any((d / name).resolve() == want for d in dirs)
+
+
+def include_line(root, rel, header, relative=False):
+    """码表定的 #include 写法：头文件所在目录就是编译器找头文件的起点（文件自己所在的目录、组件或项目加的头文件目录）时只写文件名；
+    否则写相对这个文件的路径（引号写法总是先找文件自己所在的目录，相对路径一定找得到）。relative=True 一律写相对路径。"""
+    root = Path(root).resolve()
+    hdr, fdir = (root / header).resolve(), (root / rel).resolve().parent
+    if not relative and (hdr.parent == fdir or hdr.parent in include_dirs(root, rel)):
+        return f'#include "{hdr.name}"'
+    return f'#include "{Path(os.path.relpath(hdr, fdir)).as_posix()}"'
+
+
+def normalize_include(root, rel, line, header, relative=False):
+    """AI 写的任意一种 #include（"main/fw_stopwatch.h"、"../fw_stopwatch.h"、<fw_stopwatch.h>、绝对路径）都换成码表定的写法，
+    缩进和行尾注释照留。不是计时点头文件的那一行原样返回。"""
+    m = INCLUDE_RX.match(line or "") if isinstance(line, str) else None
+    if not m:
+        return line
+    tail = m.group(4).rstrip()
+    return m.group(1) + include_line(root, rel, header, relative) + (" " + tail.strip() if tail.strip() else "")
+
+
+def header_missing(text):
+    """编译报错是"找不到码表的头文件"（gcc：fw_stopwatch.h: No such file or directory；clang：'…fw_stopwatch.h' file not found）：
+    返回出错的那几个文件（按报错顺序、去重）；不是这种报错返回空列表。"""
+    pat = re.compile(r"([^\s:'\"]+\.(?:c|cc|cpp|cxx|h|hpp)):\d+(?::\d+)?:\s*(?:fatal )?error:\s*"
+                     r"(?:[^\s:'\"]*fw_stopwatch\.h: No such file or directory|'[^']*fw_stopwatch\.h' file not found)")
+    return list(dict.fromkeys(m.group(1) for m in pat.finditer(text or "")))
+
+
+def fix_include_paths(plan, root, relative=True):
+    """把插入方案里所有计时点头文件的 #include 改成相对被插入文件的路径（编译说找不到头文件时用，改完直接重编）。"""
+    ins = [{**x, "lines": [normalize_include(root, x["file"], l, plan["header"], relative) for l in x["lines"]]}
+           for x in plan["inserts"]]
+    return {**plan, "inserts": ins}
 
 
 def _needs_by_id(steps, needs):
@@ -1147,7 +1277,7 @@ def parse_plan(text, root, steps, needs=None, flow=None):
     steps, driven = effective_steps(root, steps)
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
     every_fix = _mark_every(data, driven)
-    out, problems, bad, moved, srcs, ifdef = [], [], [], [], {}, []
+    out, problems, bad, moved, srcs, ifdef, incfix = [], [], [], [], {}, [], []
     warn = []  # 每轮结束那一步和识别结果对不上、好几处 case 说不准：照旧插，说清楚
     replaced, auto = _use_tool_reset(data, root, steps, flow, warn)
     flushed = _drop_model_flush(data) if auto else []
@@ -1189,6 +1319,13 @@ def parse_plan(text, root, steps, needs=None, flow=None):
                       "（附加值只能读已有的变量或不带参数的函数返回值）")
             continue
         rel0 = p.relative_to(root).as_posix()
+        norm = [normalize_include(root, rel0, l, header) for l in lines]
+        if norm != lines:  # AI 写的路径不用：码表按编译器找头文件的规则定写法（10-26 AI 写成 "main/fw_stopwatch.h"，四个文件都找不到）
+            incfix.append({"kind": "include_path", "step": step, "file": rel0, "after_line": after,
+                           "lines": [l for l in lines if isinstance(l, str) and INCLUDE_RX.match(l)],
+                           "to_lines": [l for l in norm if isinstance(l, str) and INCLUDE_RX.match(l)],
+                           "why": "计时点头文件的 #include 写法由码表按编译器找头文件的规则定，不用 AI 写的路径"})
+            lines = norm
         if any(isinstance(l, str) and l.strip().startswith("#include") for l in lines):
             to = _include_place(root, rel0, after, srcs)
             if to is not None:  # 码表自己挪，不用问 AI
@@ -1289,7 +1426,7 @@ def parse_plan(text, root, steps, needs=None, flow=None):
     st = next((s for s in steps if s.get("line") == "start"), steps[0] if steps else None)  # 一轮的起点（和场景里一样）
     start = number(st["p"], steps) if st and f"P{number(st['p'], steps)}" in {x["step"] for x in out} else None
     notes += [x["text"] for x in ifdef]
-    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes, "ifdef": ifdef,
+    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes, "include_fixed": incfix, "ifdef": ifdef,
             "tail": tail if start is not None else [], "unchecked": list(unchecked.values()),
             "follow": follow_points(steps, flow) if start is not None else [],
             "end": (lambda e: {"step": point_id(e, steps), "name": e.get("n")} if e else None)(round_end(steps, (flow or {}).get("hint")))
@@ -1382,6 +1519,12 @@ def apply(root, plan, backup):
             if new and not new[-1].endswith(("\n", "\r")):
                 new[-1] += nl  # 文件最后一行没有换行，插在它后面时补一个换行
             start = len(new) + 1
+            # 插之前再核一遍：按编译器找头文件的规则这一句找不到码表的头文件，当场换成相对这个文件的路径（不等编译才报）
+            fixed = [l if include_resolves(root, f, l, plan["header"]) else normalize_include(root, f, l, plan["header"], True)
+                     for l in x["lines"]]
+            rec.setdefault("include_fixed", []).extend({"file": f, "from": a.rstrip(), "to": b.rstrip()}
+                                                       for a, b in zip(x["lines"], fixed) if a != b)
+            x = {**x, "lines": fixed}
             new += [l.rstrip() + nl for l in x["lines"]]
             lines_at = list(range(start, len(new) + 1))
             ctx = old[x["after_line"] - 1].rstrip("\r\n") if x["after_line"] else None
@@ -1563,6 +1706,8 @@ def error_place(text, rec, root):
     """按报错的"文件:行号"（报错在码表头文件里时，按"在哪里展开的这个宏"）对回是插进去的哪一处（计时点或辅助语句）。
     返回 {"step", "file", "at"（原文件第几行后面）, "line"（插完后的行号）, "lines"}；对不上返回 None。"""
     root = Path(root).resolve()
+    if header_missing(text):  # 找不到码表的头文件是 #include 的路径写法不对，不是哪一处放错了（见 fix_include_paths）
+        return None
     hits = []
     for m in re.finditer(ERR.pattern + "|" + EXPAND.pattern, text or ""):
         f, line = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
@@ -1573,8 +1718,14 @@ def error_place(text, rec, root):
         for pl in rec.get("places") or []:
             nl = pl.get("new_lines") or []
             if pl["file"] == rel and nl and (line in nl or line == max(nl) + 1):
-                return {"step": pl["step"], "file": rel, "at": pl["at"], "line": line, "lines": pl.get("lines") or [],
-                        "undeclared": _undeclared(text, rel)}
+                out = {"step": pl["step"], "file": rel, "at": pl["at"], "line": line, "lines": pl.get("lines") or [],
+                       "undeclared": _undeclared(text, rel)}
+                if pl["step"] == "include":  # #include 真是放错了地方（落进 #if/#else、大括号、多行宏里）才说"放的地方不对"
+                    try:
+                        out["misplaced"] = _include_place(root, rel, pl["at"], {}) is not None
+                    except Exception:
+                        out["misplaced"] = False
+                return out
         for sid, s in rec["steps"].items():  # 老的插入记录没有 new_lines
             if s["file"] == rel and s["lines"] and (line in s["lines"] or line == max(s["lines"]) + 1):
                 return {"step": sid, "file": rel, "at": s.get("at"), "line": line, "lines": []}
@@ -1589,6 +1740,9 @@ def error_text(place, steps):
     if place.get("undeclared"):
         return (f"{place['file']} 里的计时点语句编译时说\"没有声明\"：这个文件里码表加的 #include 没被读到"
                 f"（多半落进了 #if/#else 编译开关里没编译的那一支），不是{what}放错了。重新插入时码表会把 #include 放到文件最外层")
+    if sid == "include" and not place.get("misplaced"):
+        return (f"码表加的 #include 那一句编译不过：{place['file']} 第 {place['line']} 行（看下面的报错）；"
+                f"这一句在文件最外层，不是放的位置不对")
     return f"码表插的{what}放的地方不对，编译不过：{place['file']} 第 {place['at']} 行后面（插完后是第 {place['line']} 行）"
 
 

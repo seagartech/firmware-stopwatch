@@ -1206,7 +1206,9 @@ function flList(from=0,to=4){const n=to-from+1;
  const big=fl.st===6&&to>=4?`<div class="bigask"><b>试一次：${trySay()}</b><span class="note">设备烧完会重启。等它准备好（有屏幕的，等回到待命画面），再点「准备好了」；点了以后最多等 ${FSWJ&&FSWJ.try_secs||45} 秒。只是确认计时点能收到，不算进数据。</span><button class="btn pri" data-flx="trygo">准备好了</button></div>`
   :fl.st===1&&fl.step===4&&to>=4?(realFlash()?tryBox(got,N):`<div class="bigask"><b>试一次：${say}</b><span class="note">${FF[scene].bigNote}只是确认计时点能收到，不算进数据。</span><span class="note">已收到 <b class="num">${got}</b> / ${N} 个计时点</span></div>`):fl.st===2&&to>=4?`<div class="bigask ok"><b>✓ 试通了</b><span class="note">${got<N&&realFlash()?`收到 ${got} / ${N} 个计时点。没收到：${tryMissing().join("、")||"—"}。这一次没走到这一步（有的计时点只在某些情况下才走到，比如喊醒那一下设备不会判断你说完了），不影响多轮实测`:`${N} 个计时点都收到了`}，设备准备好了。</span></div>`:'';
  return `<ol class="isteps">${li}</ol>${big}`}
-const stepLog=()=>`<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`;
+// 编译时码表自己改正了计时点头文件的引用路径（找不到头文件）：如实写一句，不让用户去点"重新插入"
+const incFixed=()=>realFlash()&&FSWJ&&FSWJ.inc_fixed?`<small style="color:var(--ok)">✓ ${htmlEsc(FSWJ.inc_fixed.message)}</small>`:'';
+const stepLog=()=>`${incFixed()}<div class="ilog" style="margin:6px 0 0"><code>${htmlEsc(fl.log)||'…'}</code>${fullLogBtn()}</div>${fullLog()}`;
 // 试一次（决策 107、108）：烧完直接开始听，码表自己看设备开机没有，不用人判断"准备好了"；告诉人现在做什么，一句话
 const tryAct=()=>{if(realFlash()&&IDENT&&IDENT.page&&(IDENT.page.act||'').trim())return trySay();const w=(IDENT&&IDENT.page&&IDENT.page.mapWhat)||hSay||'';return /说|话|聊|问|答/.test(w)?'喊唤醒词，再说一句话（比如"一加一等于几"）':trySay()};
 const USB_QUIET=40;  // 试一次这么多秒调试口一个字都没有：提示拔插 USB（口还在但卡住了，拔插就好，10-21 真测）
