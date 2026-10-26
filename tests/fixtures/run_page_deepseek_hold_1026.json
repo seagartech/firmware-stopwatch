@@ -1,0 +1,626 @@
+{
+  "_note": "10-26 11:00 用户在 8778 上看到的那一刻（接口原样存下，只把本机路径换短、板子列表只留选中的那块）",
+  "/api/ui": {
+    "ui": {
+      "v": 1,
+      "scene": "voice",
+      "page": "steps",
+      "mode": "boss",
+      "flow": "first",
+      "flowMax": 1,
+      "hStage": 1,
+      "hSrc": "/src/xiaozhi/",
+      "hSay": "全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果",
+      "pName": "xiaozhi（m5stack/core-s3）",
+      "hBoardQ": "m5stack/core-s3",
+      "REAL": {
+        "ok": true,
+        "kind": "esp-idf",
+        "platform": "ESP-IDF",
+        "root": "/src/xiaozhi",
+        "name": "xiaozhi",
+        "name_why": "项目配置里写的名字（CMakeLists.txt 的 project）",
+        "version": "2.5.2",
+        "idf_min": "6.0.1",
+        "chip": "ESP32-S3",
+        "chip_why": "上次选的板子的配置",
+        "board": "m5stack/core-s3",
+        "boards": [
+          {
+            "id": "m5stack/core-s3",
+            "chip": "ESP32-S3",
+            "type": "m5stack-core-s3"
+          }
+        ],
+        "needs_board": false,
+        "repo": "github.com/78/xiaozhi-esp32",
+        "commit": "73c1385",
+        "archive": null,
+        "board_from": "last",
+        "body": {
+          "path": "/src/xiaozhi/"
+        },
+        "label": "/src/xiaozhi/",
+        "work": "/tmp/fsw/fsw-work/xiaozhi-899bf4/src",
+        "project_dir": "/data/xiaozhi-899bf4",
+        "fingerprint": "7ba83349ad4de7c2",
+        "ai": [
+          "从说完话到听见回应",
+          "从按键唤醒到屏幕亮",
+          "从开机到连上网络"
+        ],
+        "aiCalled": true
+      },
+      "bgSrc": "/src/xiaozhi/",
+      "alsoFace": true,
+      "dropped": [],
+      "added": [],
+      "ed": {},
+      "mapSel": "P11",
+      "diffOk": false,
+      "flashVar": "b",
+      "colVar": "b",
+      "adv": null,
+      "rtCase": "same",
+      "remeasure": false,
+      "last": "",
+      "auto": true,
+      "autoHold": "这次用的是 DeepSeek，准确率较低，请核对关键步骤",
+      "autoT0": 1792983621555
+    },
+    "jobs": {
+      "identify": "/tmp/fsw/fsw-work/xiaozhi-899bf4/src",
+      "fsw": null,
+      "bgbuild": "/tmp/fsw/fsw-work/xiaozhi-899bf4/src"
+    },
+    "server": {
+      "work": "/tmp/fsw/fsw-work/xiaozhi-899bf4/src",
+      "stage": 1,
+      "page": "steps",
+      "what": "全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果",
+      "fsw": null,
+      "at": 1792983616.1002471,
+      "REAL": {
+        "ok": true,
+        "kind": "esp-idf",
+        "platform": "ESP-IDF",
+        "root": "/src/xiaozhi",
+        "name": "xiaozhi",
+        "name_why": "项目配置里写的名字（CMakeLists.txt 的 project）",
+        "version": "2.5.2",
+        "idf_min": "6.0.1",
+        "chip": "ESP32-S3",
+        "chip_why": "上次选的板子的配置",
+        "board": "m5stack/core-s3",
+        "boards": [
+          {
+            "id": "m5stack/core-s3",
+            "chip": "ESP32-S3",
+            "type": "m5stack-core-s3"
+          }
+        ],
+        "needs_board": false,
+        "repo": "github.com/78/xiaozhi-esp32",
+        "commit": "73c1385",
+        "archive": null,
+        "board_from": "last",
+        "body": {
+          "path": "/src/xiaozhi/"
+        },
+        "label": "/src/xiaozhi/",
+        "work": "/tmp/fsw/fsw-work/xiaozhi-899bf4/src",
+        "project_dir": "/data/xiaozhi-899bf4",
+        "fingerprint": "7ba83349ad4de7c2",
+        "ai": [
+          "从说完话到听见回应",
+          "从按键唤醒到屏幕亮",
+          "从开机到连上网络"
+        ],
+        "aiCalled": true
+      },
+      "hSrc": "/src/xiaozhi/",
+      "pName": "xiaozhi（m5stack/core-s3）",
+      "hBoardQ": "m5stack/core-s3",
+      "bg": true
+    }
+  },
+  "/api/identify": {
+    "state": "done",
+    "what": "全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果",
+    "provider": "deepseek",
+    "found": [
+      "说话结束",
+      "静音状态回调",
+      "上传首包",
+      "上传末包",
+      "收到识别结果",
+      "回复开始",
+      "首段出声",
+      "末段出声",
+      "播放全部放完",
+      "回到聆听",
+      "换表情"
+    ],
+    "read": 0,
+    "last": "",
+    "seconds": 0,
+    "started": 1792983621.604089,
+    "stage": "pick",
+    "summary": "这条线共 12 个主计时点：从麦克风判定人说完话，到音频编码上传，再到服务器识别与生成，接着收到识别结果和回复开始，然后扬声器逐段出声，播放队列放空，最后服务器发来回复结束、设备回到聆听。设备上能测到的是采集编码、上行发送、下行收包解码、扬声器输出这几段；语音识别和大模型生成全在服务器上，设备这边只能看到它们的总耗时。板上字幕被隐藏，所以用户对回复的第一下感觉来自扬声器声音，最后一下也是声音放完。另外顺带发现一条表情线。",
+    "doubts": [
+      {
+        "text": "回复结束消息与播放队列放空没有先后约束：网络抖动时结束消息可能先到，设备要等声音放完才真正重新开麦，这段等待会算在下一轮起点之前。",
+        "sure": "中"
+      },
+      {
+        "text": "上行音频是边说边发的，起点说话结束之前已经有音频在传，服务器那边可能已经开始识别，所以识别这一段在起点附近被低估。",
+        "sure": "中"
+      },
+      {
+        "text": "设备在说话状态会把收到的音频包直接丢弃（application.cc:555），如果回复开始消息比音频包晚到，开头几个包会丢，表现为起步稍慢或吞字。",
+        "sure": "中"
+      },
+      {
+        "text": "第 3 步记在整块正好一帧那一支上，若音频引擎走分块分支，这一段的起点会往后偏一帧。",
+        "sure": "低"
+      },
+      {
+        "text": "上行发送包数多于主循环一轮能取走的数量时，上传末包会跨多轮主循环，上传区间会显得比实际长。",
+        "sure": "低"
+      }
+    ],
+    "page": {
+      "steps": [
+        {
+          "p": "P1",
+          "n": "说话结束",
+          "f": "afe_audio_engine.cc",
+          "path": "main/audio/engines/afe_audio_engine.cc",
+          "l": 482,
+          "line": "start",
+          "why": "设备在这一帧判定已由说话转静音，是设备最早知道人说完话的时刻，放在把说话标志置回之前。",
+          "sure": "高",
+          "code": "is_speaking_ = false;",
+          "loc_ok": true,
+          "where": "before",
+          "once": "once",
+          "func": "AfeAudioEngine::HandleVoiceResult",
+          "struct_ok": true,
+          "chk": []
+        },
+        {
+          "p": "P2",
+          "n": "静音状态回调",
+          "f": "afe_audio_engine.cc",
+          "path": "main/audio/engines/afe_audio_engine.cc",
+          "l": 483,
+          "line": "talk",
+          "why": "同一支里紧跟其后把静音通知往上抛（只用于刷新指示灯），能区分出判定完和通知完两个时刻。",
+          "sure": "高",
+          "code": "vad_state_change_callback_(false);",
+          "loc_ok": true,
+          "where": "before",
+          "once": "once",
+          "func": "AfeAudioEngine::HandleVoiceResult",
+          "struct_ok": true,
+          "chk": [],
+          "follow": true
+        },
+        {
+          "p": "P5",
+          "n": "上传首包",
+          "f": "application.cc",
+          "path": "main/application.cc",
+          "l": 242,
+          "line": "talk",
+          "why": "主循环第一次把上行音频真正发出去，是设备把声音交给网络的时刻。",
+          "sure": "高",
+          "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+          "loc_ok": true,
+          "where": "before",
+          "once": "first",
+          "func": "Application::Run",
+          "struct_ok": true,
+          "chk": [
+            {
+              "level": "tip",
+              "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+            }
+          ],
+          "note": "走 MQTT/UDP 还是 WebSocket 取决于运行时下发的配置（application.cc:538），但两种都经这一句发首包，不影响计时。",
+          "follow": true
+        },
+        {
+          "p": "P6",
+          "n": "上传末包",
+          "f": "application.cc",
+          "path": "main/application.cc",
+          "l": 242,
+          "line": "talk",
+          "why": "同一句最后一次执行，本轮录音最后一包离开设备，从这里开始设备等服务器。",
+          "sure": "高",
+          "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+          "loc_ok": true,
+          "where": "before",
+          "once": "last",
+          "func": "Application::Run",
+          "struct_ok": true,
+          "chk": [
+            {
+              "level": "tip",
+              "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+            }
+          ],
+          "follow": true
+        },
+        {
+          "p": "P7",
+          "n": "收到识别结果",
+          "f": "application.cc",
+          "path": "main/application.cc",
+          "l": 667,
+          "line": "talk",
+          "why": "服务器识别结果落到对话区那一刻，是设备收到的第一个结果。",
+          "sure": "高",
+          "code": "display->SetChatMessage(\"user\", message.c_str());",
+          "loc_ok": true,
+          "where": "before",
+          "once": "once",
+          "func": "Application::OnIncomingJson（lambda 注册在 InitializeProtocol 里）",
+          "struct_ok": true,
+          "chk": [],
+          "note": "这块板会把对话字幕藏起来（示例显示逻辑），所以用户看不到这一下，它只作为后台计时点。"
+        },
+        {
+          "p": "P8",
+          "n": "回复开始",
+          "f": "application.cc",
+          "path": "main/application.cc",
+          "l": 627,
+          "line": "talk",
+          "why": "服务器宣告回复开始、设备切到说话状态的那一刻，之后才允许收音频包。",
+          "sure": "高",
+          "code": "SetDeviceState(kDeviceStateSpeaking);",
+          "loc_ok": true,
+          "where": "before",
+          "once": "once",
+          "func": "Application::OnIncomingJson",
+          "struct_ok": true,
+          "chk": [
+            {
+              "level": "tip",
+              "text": "「生成回复、下发回复开始」这一段从「收到识别结果」到「回复开始」：两头写在同一个函数 InitializeProtocol 里，但「收到识别结果」在第 665 行交给 Schedule 的 lambda 里，「回复开始」在第 625 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+            }
+          ]
+        },
+        {
+          "p": "P9",
+          "n": "首段出声",
+          "f": "audio_service.cc",
+          "path": "main/audio/audio_service.cc",
+          "l": 351,
+          "line": "talk",
+          "why": "第一段回复音频第一次送进扬声器，用户第一下听到声音就从这里开始。",
+          "sure": "高",
+          "code": "codec_->OutputData(task.pcm);",
+          "loc_ok": true,
+          "where": "before",
+          "once": "first",
+          "func": "AudioService::AudioOutputTask",
+          "struct_ok": true,
+          "chk": [],
+          "felt": "first",
+          "kind": "声音"
+        },
+        {
+          "p": "P10",
+          "n": "末段出声",
+          "f": "audio_service.cc",
+          "path": "main/audio/audio_service.cc",
+          "l": 351,
+          "line": "talk",
+          "why": "同一句最后一次执行，最后一段回复音频送进扬声器，声音放完的时刻。",
+          "sure": "高",
+          "code": "codec_->OutputData(task.pcm);",
+          "loc_ok": true,
+          "where": "before",
+          "once": "last",
+          "func": "AudioService::AudioOutputTask",
+          "struct_ok": true,
+          "chk": [],
+          "felt": "last",
+          "kind": "声音"
+        },
+        {
+          "p": "P11",
+          "n": "播放全部放完",
+          "f": "audio_service.cc",
+          "path": "main/audio/audio_service.cc",
+          "l": 374,
+          "line": "talk",
+          "why": "判定解码队列、播放队列都空、没有在途解码和输出之后才走这一支，这里才是真正放空的时刻。",
+          "sure": "中",
+          "code": "callbacks_.on_playback_drained();",
+          "loc_ok": true,
+          "where": "before",
+          "once": "every",
+          "func": "AudioService::AudioOutputTask",
+          "struct_ok": true,
+          "chk": [],
+          "note": "代码里没有本轮一定会走到放空的硬约束：若服务器在放空之前就发来回复结束，切到聆听时清空队列也可能发出放空通知，极端情况下这一点可能落到下一轮开头。",
+          "whole": true
+        },
+        {
+          "p": "P12",
+          "n": "回到聆听",
+          "f": "application.cc",
+          "path": "main/application.cc",
+          "l": 635,
+          "line": "talk",
+          "why": "服务器发来回复结束、设备切回自动聆听，这一轮到此结束。",
+          "sure": "高",
+          "code": "SetDeviceState(kDeviceStateListening);",
+          "loc_ok": true,
+          "where": "before",
+          "once": "once",
+          "func": "Application::OnIncomingJson（lambda 注册在 InitializeProtocol 里）",
+          "struct_ok": true,
+          "chk": [],
+          "note": "它与上一点播放全部放完的先后代码里没约定，网络抖动时可能先到；若先到，设备要到放空后才真正重新开麦（application.cc:1037-1041）。",
+          "felt": "last",
+          "kind": "声音"
+        },
+        {
+          "p": "P13",
+          "n": "换表情",
+          "f": "application.cc",
+          "path": "main/application.cc",
+          "l": 674,
+          "line": "face",
+          "why": "顺带发现的画面线：服务器发来情绪消息时把表情换成对应双眼，取本轮第一次，看它相对出声的先后。",
+          "sure": "中",
+          "code": "display->SetEmotion(emotion_str.c_str());",
+          "loc_ok": true,
+          "where": "before",
+          "once": "first",
+          "func": "Application::OnIncomingJson",
+          "struct_ok": true,
+          "chk": [
+            {
+              "level": "tip",
+              "text": "「收到情绪消息」这一段从「回复开始」到「换表情」：两头写在同一个函数 InitializeProtocol 里，但「回复开始」在第 625 行交给 Schedule 的 lambda 里，「换表情」在第 673 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+            }
+          ],
+          "note": "不在这次的事件链里；服务器不一定发情绪消息，所以不是每轮都执行；表情真正画到屏上还在显示任务里稍后一拍完成。",
+          "opt": true,
+          "felt": "first",
+          "kind": "画面"
+        }
+      ],
+      "segs": [
+        {
+          "a": "P1",
+          "b": "P2",
+          "t": "静音判定上报",
+          "who": "固件"
+        },
+        {
+          "a": "P2",
+          "b": "P5",
+          "t": "静音状态回调到上传首包",
+          "who": "固件"
+        },
+        {
+          "a": "P5",
+          "b": "P6",
+          "t": "上行音频发送",
+          "who": "固件、网络"
+        },
+        {
+          "a": "P6",
+          "b": "P7",
+          "t": "语音识别",
+          "who": "网络、服务器",
+          "out": true
+        },
+        {
+          "a": "P7",
+          "b": "P8",
+          "t": "生成回复、下发回复开始",
+          "who": "服务器、网络",
+          "out": true
+        },
+        {
+          "a": "P8",
+          "b": "P9",
+          "t": "首包音频传输与解码",
+          "who": "网络、服务器、固件"
+        },
+        {
+          "a": "P9",
+          "b": "P10",
+          "t": "回复音频连续播放",
+          "who": "固件、硬件"
+        },
+        {
+          "a": "P9",
+          "b": "P12",
+          "t": "等回复结束消息",
+          "who": "网络、服务器"
+        },
+        {
+          "a": "P9",
+          "b": "P11",
+          "t": "队列排空判定",
+          "who": "固件"
+        }
+      ],
+      "fsegs": [
+        {
+          "a": "P8",
+          "b": "P13",
+          "t": "收到情绪消息",
+          "who": "网络、服务器",
+          "out": true
+        }
+      ],
+      "ln": {
+        "start": "起点",
+        "talk": "问答复播这条",
+        "face": "表情这条"
+      },
+      "main": [
+        "P1",
+        "P2",
+        "P5",
+        "P6",
+        "P7",
+        "P8",
+        "P9",
+        "P10",
+        "P11",
+        "P12"
+      ],
+      "branch": {
+        "from": "P8",
+        "nodes": [
+          "P13"
+        ]
+      },
+      "dash": [
+        3,
+        4
+      ],
+      "server": "服务器：语音识别、生成回复",
+      "mapWhat": "全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果",
+      "category": "语音对话",
+      "mapSel": "P11",
+      "measure": "说话结束 → 回到聆听",
+      "mainTitle": "问答复播这条：说话结束 → 回到聆听",
+      "act": "喊唤醒词，等它进入聆听后说一句话，然后等它把回复播完。",
+      "summary": "这条线共 12 个主计时点：从麦克风判定人说完话，到音频编码上传，再到服务器识别与生成，接着收到识别结果和回复开始，然后扬声器逐段出声，播放队列放空，最后服务器发来回复结束、设备回到聆听。设备上能测到的是采集编码、上行发送、下行收包解码、扬声器输出这几段；语音识别和大模型生成全在服务器上，设备这边只能看到它们的总耗时。板上字幕被隐藏，所以用户对回复的第一下感觉来自扬声器声音，最后一下也是声音放完。另外顺带发现一条表情线。",
+      "doubts": [
+        {
+          "text": "回复结束消息与播放队列放空没有先后约束：网络抖动时结束消息可能先到，设备要等声音放完才真正重新开麦，这段等待会算在下一轮起点之前。",
+          "sure": "中"
+        },
+        {
+          "text": "上行音频是边说边发的，起点说话结束之前已经有音频在传，服务器那边可能已经开始识别，所以识别这一段在起点附近被低估。",
+          "sure": "中"
+        },
+        {
+          "text": "设备在说话状态会把收到的音频包直接丢弃（application.cc:555），如果回复开始消息比音频包晚到，开头几个包会丢，表现为起步稍慢或吞字。",
+          "sure": "中"
+        },
+        {
+          "text": "第 3 步记在整块正好一帧那一支上，若音频引擎走分块分支，这一段的起点会往后偏一帧。",
+          "sure": "低"
+        },
+        {
+          "text": "上行发送包数多于主循环一轮能取走的数量时，上传末包会跨多轮主循环，上传区间会显得比实际长。",
+          "sure": "低"
+        }
+      ],
+      "warn": null,
+      "startNote": "起点之前只有板载语音检测；但音频是随说随传，服务器可能在起点附近就已开始识别",
+      "startLate": false,
+      "sideAsk": {
+        "found": "服务器在回复过程中发来情绪消息时，设备会切换双眼表情，这段不在本次问答复播线的链路里",
+        "main": "说话结束 → 回到聆听",
+        "side": "说话结束 → 换上表情",
+        "why": "用户对回复的第一下画面感觉来自表情切换，想知道它在出声之前还是之后发生。",
+        "k": 1,
+        "q": "换上表情",
+        "addEx": "",
+        "addGuess": null,
+        "h": "码表读代码发现：服务器在回复过程中发来情绪消息时，设备会切换双眼表情，这段不在本次问答复播线的链路里。用户对回复的第一下画面感觉来自表情切换，想知道它在出声之前还是之后发生。要不要把\"换上表情\"也一起测？",
+        "no": "不用，只测回到聆听",
+        "d1": "表情这条一起测（多 1 个计时点）",
+        "note": "一起测：多插 1 个计时点，报告里多一条线；不影响问答复播这条的结果。"
+      },
+      "sideTitle": "表情这条：说话结束 → 换上表情",
+      "sideLbl": "表情这条 →"
+    },
+    "reused": true
+  },
+  "/api/state": {
+    "flow": {
+      "kind": "first",
+      "steps": [
+        {
+          "key": "pick",
+          "name": "选固件",
+          "status": "done"
+        },
+        {
+          "key": "identify",
+          "name": "找关键步骤",
+          "status": "doing"
+        },
+        {
+          "key": "probes",
+          "name": "插计时点和烧录",
+          "status": "todo"
+        },
+        {
+          "key": "measure",
+          "name": "多轮实测",
+          "status": "todo"
+        },
+        {
+          "key": "report",
+          "name": "报告",
+          "status": "todo"
+        }
+      ],
+      "viewing": "identify",
+      "notice": null,
+      "error": null,
+      "current": "identify",
+      "finished": false
+    },
+    "demo": "voice",
+    "settings": {
+      "llm_provider": "deepseek",
+      "has_key": {
+        "claude-api": false,
+        "deepseek": true
+      },
+      "idf_path": "",
+      "serial_port": "",
+      "data_dir": "/data",
+      "reuse_last": true
+    },
+    "viewing": "identify",
+    "current": "identify",
+    "steps": [
+      {
+        "key": "pick",
+        "name": "选固件",
+        "status": "done"
+      },
+      {
+        "key": "identify",
+        "name": "找关键步骤",
+        "status": "doing"
+      },
+      {
+        "key": "probes",
+        "name": "插计时点和烧录",
+        "status": "todo"
+      },
+      {
+        "key": "measure",
+        "name": "多轮实测",
+        "status": "todo"
+      },
+      {
+        "key": "report",
+        "name": "报告",
+        "status": "todo"
+      }
+    ],
+    "notice": null,
+    "error": null
+  }
+}

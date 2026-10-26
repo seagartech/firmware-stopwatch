@@ -455,7 +455,7 @@ const examples=`<div class="pills"><span class="note">比如：</span>${['从按
 // 精简流程（决策 158）：一律测全程；点「开始测量」后自动执行，只在要人工操作或校验没过时停下
 // 结构由码表定（起点、第一下和最后一下感觉到的结果，见找步骤的要求），这里只说测哪一段，不靠措辞去纠正某个固件（10-18 用户：通用代码不迁就某一个固件）
 const WHOLE='全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果';
-let AUTO=false,autoHold='',autoBusy='',autoT0=0;
+let AUTO=false,autoHold='',autoHoldKind='',autoBusy='',autoT0=0;  // autoHoldKind：ident（找完要核对）/ fix（校验没过回来改）/ env（缺编译工具）
 const TRY_SECS=180;  // 和后台 TRY_SECONDS 一致：试一次最多等多久
 const AUTO_ROUNDS=10;  // 轮数固定，不让人选（10-21 用户定：10 轮和 20 轮中位数差 0.04 秒以内，多一个选项多一处要想）
 function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),REAL&&REAL.root].includes(p.path));
@@ -469,14 +469,19 @@ function estBox(){const again=(DEMO?PROJ:HIST).some(p=>[hSrc,expandHome(hSrc),RE
 // 自动往下走：每次画完页面看一眼该不该进下一步（同一步只触发一次）
 function autoTick(){if(!AUTO||pop||autoHold)return;
  const go=(key,fn)=>{if(autoBusy===key)return;autoBusy=key;setTimeout(fn,0)};
- if(page==='home'&&hStage===3&&stepsRead===2){
-  const P=REAL&&IDENT&&IDENT.page,bad=P?(P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(P.steps||[]).some(x=>x.struct_ok===false)?'有计时点插下去会落进条件分支或循环里（只在条件成立时才记到），码表结构检查没通过，请核对':(IDENT.provider==='deepseek'?'这次用的是 DeepSeek，准确率较低，请核对关键步骤':'')):'';
-  return go('steps',()=>{hStage=1;mode='boss';if(bad){autoHold=bad;page='steps';render();window.scrollTo(0,0);return}  // 停下请人核对：仍在测量页里核对（10-26：以前关掉自动执行，后面全走老界面）
-   page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)})}
- if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){autoHold='编译工具还没准备好：装好或在设置里选好后，点「继续」';envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
+ if(page==='home'&&hStage===3&&stepsRead===2)return go('steps',()=>{hStage=1;mode='boss';stepsGo()});
+ // 停在核对页但其实没有要人核对的（比如刷新前存着"这次用的是 DeepSeek"那种按模型名停下的）：码表自己核对，没问题就接着插点
+ if(page==='steps'&&stepsRead===2&&flowMax<2&&!Object.keys(edits).length&&!dropped.size&&!added.length)return go('steps',()=>{if(page==='steps'&&!autoHold)stepsGo()});
+ if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){autoHold='编译工具还没准备好：装好或在设置里选好后，点「继续」';autoHoldKind='env';envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
  if(page==='flash'&&fl.st===2)return go('collect',()=>{justFlashed=true;page='collect';colStart();render();window.scrollTo(0,0)});
  if(page==='collect'&&col.st===2)return go('report',()=>setTimeout(()=>{if(!AUTO||page!=='collect'||col.st!==2)return;AUTO=false;page='report';mode='boss';render();window.scrollTo(0,0)},1500));
 }
+// 找完关键步骤要不要停下请人看：只看码表自己核对出的实际问题（起终点没找到、位置不对、落进条件分支）。
+// 用的是哪个大模型不算理由（决策 181；10-26 又遇到：DeepSeek 找完就停、显示老的整页核对，用户看到的就是"老版本"）
+function identHold(){const P=REAL&&IDENT&&IDENT.page;if(!P)return '';
+ return P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(P.steps||[]).some(x=>x.struct_ok===false)?'有计时点插下去会落进条件分支或循环里（只在条件成立时才记到），码表结构检查没通过，请核对':''}
+function stepsGo(){const bad=identHold();if(bad){autoHold=bad;autoHoldKind='ident';page='steps';render();window.scrollTo(0,0);return}
+ page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)}
 function autoStart(){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-boardq');b&&b.focus();return}
  if(REAL&&!envKey()){pop='env';render();return}
  hSay=WHOLE;AUTO=true;autoHold='';autoBusy='';autoT0=Date.now();flowReset();flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render()}
@@ -499,7 +504,7 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  const tl=L.map((x,i)=>{const c=i<at?'done':i===at?(col.st===4&&i===4?'err':'doing'):'wait';
   return `<li class="${c}"><span class="tdot"></span><div>${x[0]}<span class="who ${x[1]}">${x[1]==='hum'?'人工操作':'自动执行'}</span>${c==='done'?done(i):''}</div><span class="note">${c==='done'?'✓':'约 '+(x[2]>=60?Math.round(x[2]/60)+' 分钟':x[2]+' 秒')}</span></li>`}).join('');
  let now;const holdBox=autoHold?`<div class="why" style="border-left-color:var(--warn)"><b>自动执行在这里停下：</b>${htmlEsc(autoHold)}</div>`:'';
- if(page==='steps'&&stepsRead===2)now=stepsPage();  // 核对关键步骤（DeepSeek 要人核对、校验没过回来改位置）：步骤清单就在测量页里，确认后接着自动走
+ if(page==='steps'&&stepsRead===2)now=runReview(holdBox);  // 码表核对出问题、或校验没过回来改位置：只列要看的步骤和确认按钮，确认后接着自动走
  else if(page==='home'&&stepsRead===3)now=`<section class="panel">${modalHTML().replace(' id="dlg-t"','')}</section>`;  // 没找完：重试在这里
  else if(page==='flash'&&fl.st===5&&fl.err!=='try')now=flErr();  // 编译、烧录、插点出错：错误和重试按钮放在测量页里
  else if(page==='flash'&&fl.st===0)now=`<div class="bigask"><span class="lab">接着做</span><b>插入计时点、编译、烧录</b><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-goins="1">插入计时点</button></div></div>`;
@@ -517,6 +522,12 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  return `<div class="stack"><div class="acts" style="justify-content:space-between;align-items:flex-start;margin:0"><div><h1 style="font-size:22px;margin:0">测量：全程</h1><p class="note" style="margin:2px 0 0">已用时 <span class="num" id="runused">${mmss(used)}</span>　剩余约 <span class="num" id="runleft">${Math.max(1,Math.round(left/60))} 分钟</span></p></div><button class="btn" data-autostop="1">停止测量</button></div>
  ${now}<section class="panel"><h2>执行进度</h2><ul class="runtl">${tl}</ul></section>
  <p class="note">计时点变更明细、关键步骤位置在报告「技术细节」中查看</p></div>`}
+// 测量页里的核对（10-26）：不再搬老的整页"找关键步骤"（读取状态、关键流程地图、模型准确率提醒），只放停下的原因、码表检查结果、步骤清单和确认
+function runReview(holdBox){if(stepsRead===2)prepKick();const n=live().length,ch=dropped.size||Object.keys(edits).length||added.length;
+ const warn=REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad)">${htmlEsc(IDENT.page.warn)}</div>`:'';
+ const go=flowMax>=2&&!ch?`<span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">不改，接着测</button>`
+  :`<span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch?'；你的删除、修改、添加都会记下来':''}。${prepNote()}</span><button class="btn pri" data-goins="1">确认，插入计时点</button>`;
+ return `${holdBox||'<div class="why" style="border-left-color:var(--warn)"><b>核对关键步骤</b></div>'}${warn}${chkBox()}${stepsA()}<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${go}</div></section>`}
 function autoStop(){AUTO=false;autoHold='';clearInterval(runT);runT=null;flow=null;flowReset();
  if(page==='collect')post('/api/collect/stop',{}).catch(()=>{});
  if(page==='flash'){clearInterval(fswT);fswT=null;post('/api/fsw/stop',{}).catch(()=>{});fl.st=0}
@@ -605,7 +616,7 @@ function settingsPage(){
   <section class="panel ${page==='settings'&&envMark&&!keyOK()?'miss':''}" id="set-llm"><h2>${first?(done[0]?'✓ ':'① '):''}大模型（找关键步骤、写报告建议时用）</h2>
    <div class="radio">${opt('claude','Claude','识别准确率最高（验证期 9 个对 8 个）。需要你自己的 Claude API 密钥，按用量付费。',' <span class="chip c-ok">推荐</span>')}
    ${opt('cc','本机已登录的 Claude Code','不用填密钥，用你自己 Claude 会员的额度。属于可选用法，以官方条款为准。')}
-   ${opt('deepseek','DeepSeek','需要你自己的 DeepSeek API 密钥，按用量付费。验证期准确率较低（9 个对 4 个），识别结果请逐条核对。')}</div>
+   ${opt('deepseek','DeepSeek','需要你自己的 DeepSeek API 密钥，按用量付费。验证期准确率较低（9 个对 4 个）。码表自己核对每个计时点的位置，有问题才停下请你看。')}</div>
    ${setLLM==='cc'?(!CCST?`<p class="note" style="margin:10px 0 0">正在本机找 Claude Code……</p>`:ccOK()?`<p class="note" style="margin:10px 0 0">${first?'正在本机找 Claude Code……找到了，已登录。':'已找到本机的 Claude Code，已登录。'}</p>`:`<p class="note" style="color:var(--bad);margin:10px 0 0">✕ ${CCST.found?'找到了 Claude Code，但还没登录：在终端里运行 claude，按提示登录一次，再点「重新检查」。':'这台电脑上没找到 Claude Code。装好并登录后点「重新检查」，或者改用填密钥的方式。'} <button class="pill" data-cc="1">重新检查</button></p>`):`<div class="field" style="margin-top:12px"><label for="set-key">${setLLM==='claude'?'Claude':'DeepSeek'} API 密钥</label><div class="inrow"><input type="text" id="set-key" value="${keyDraft?keyDraft.replace(/"/g,'&quot;'):hasKey(setLLM)?'••••••••••••••••':''}" placeholder="粘贴你的密钥" autocomplete="off"><button class="btn" data-test="1">测试密钥</button></div>${keyErr?`<p class="note" style="color:var(--bad);margin:6px 0 0">✕ ${keyErr}</p>`:''}
    ${keyTested?'':`<details class="manual" style="margin-top:10px" ${hasKey(setLLM)?'':'open'}><summary>密钥是什么、去哪拿</summary>
    <p style="margin:6px 0;font-size:14px">密钥是大模型公司给你的一串字符，码表用它替你调用大模型读代码，按用量从你的账户扣钱。一次找关键步骤约几毛钱到一两块钱（估算）。</p>
@@ -1550,7 +1561,7 @@ function canViewNear(p){const L=flow==='retest'?['retest','steps','flash','colle
 window.addEventListener('popstate',()=>{if(booting)return;let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}if(!PAGES.some(p=>p.id===h)||h===page)return;
  navPop=true;pop=null;if(hStage>=2)hStage=1;page=canView(h)?h:canViewNear(h);render();window.scrollTo(0,0)});
 function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(STEPS||[]),...added].find(r=>r.p===p);if(x)ed[p]=[x.f,x.l]}
- return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:'',auto:AUTO,autoHold,autoT0}}
+ return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:'',auto:AUTO,autoHold,autoHoldKind,autoT0}}
 let uiLast='',uiT=null;
 const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
 function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;try{sessionStorage.setItem('fsw-ui',s)}catch(e){}  // 这个标签页自己也存一份：别的标签页开了新的一轮，这里刷新也不丢
@@ -1560,7 +1571,7 @@ window.addEventListener('pagehide',()=>{if(!uiT)return;clearTimeout(uiT);uiT=nul
 function srvSnap(S,old){const o=old&&old.v===1?old:{};
  return {v:1,scene:SCENES[o.scene]?o.scene:scene,page:S.page,mode:'boss',flow:'first',flowMax:S.stage,hStage:1,hSrc:S.hSrc,hSay:S.what,pName:S.pName,hBoardQ:S.hBoardQ,
   REAL:S.REAL,bgSrc:S.bg?S.hSrc:'',alsoFace:true,dropped:[],added:[],ed:{},mapSel:o.mapSel,diffOk:S.stage>=2&&S.fsw!=='inserted',flashVar:'b',colVar:'b',adv:null,
-  rtCase:o.rtCase,remeasure:false,last:'',auto:true,autoHold:'',autoT0:S.at?S.at*1000:0}}
+  rtCase:o.rtCase,remeasure:false,last:'',auto:true,autoHold:'',autoHoldKind:'',autoT0:S.at?S.at*1000:0}}
 async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return r.ok?await r.json():null}catch(e){return null}};
  const U=await get('/api/ui?key='+encodeURIComponent(DEMO)),J=(U&&U.jobs)||{};let u=U&&U.ui;
  let own=false;if(!FRESH){try{const m=JSON.parse(sessionStorage.getItem('fsw-ui')||'null');if(m&&m.v===1){u=m;own=true}}catch(e){}}
@@ -1578,7 +1589,9 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
  REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;remeasure=!!u.remeasure;
  // 测量页接着显示、接着自动走（10-26）：存过的照存的；老的存档没有这一项时，第一次测（flow first）就是测量页流程
- AUTO=flow==='first'&&(u.auto===undefined?true:!!u.auto);autoHold=AUTO?String(u.autoHold||''):'';autoT0=u.autoT0||Date.now();autoBusy='';
+ AUTO=flow==='first'&&(u.auto===undefined?true:!!u.auto);autoHold=AUTO?String(u.autoHold||''):'';autoHoldKind=autoHold?String(u.autoHoldKind||''):'';autoT0=u.autoT0||Date.now();autoBusy='';
+ // 找完关键步骤那种停下（含老存档里按模型名停下的"这次用的是 DeepSeek……"）不照搬：接上后按码表自己的核对重新算，没问题就接着走（10-26）
+ if(autoHoldKind==='ident'||(!autoHoldKind&&/^这次用的是 DeepSeek/.test(autoHold))){autoHold='';autoHoldKind=''}
  const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;
   for(const [p,v] of Object.entries(u.ed||{})){const x=[...STEPS,...added].find(r=>r.p===p);if(x&&v){x.f=v[0];x.l=v[1];edits[p]=true}}};
  const quiet=j=>{const b=beep;beep=false;try{colApply(j)}finally{beep=b}};  // 接上已测的轮：不再一轮轮"叮"
@@ -1626,7 +1639,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-datadir]')){api('/api/source/pick',{kind:'dir'}).then(p=>{if(p.path){dataDraft=p.path;render()}});return}
   if(e.target.closest('[data-autostart]')){autoStart();return}
   if(e.target.closest('[data-autostop]')){autoStop();return}
-  if(e.target.closest('[data-autofix]')){const SS=(COLJ&&COLJ.suspect)||[];api('/api/collect/choice',{choice:'fix'}).catch(()=>{});  // 选了什么记进这次的结果（报告里写）
+  if(e.target.closest('[data-autofix]')){autoHoldKind='fix';const SS=(COLJ&&COLJ.suspect)||[];api('/api/collect/choice',{choice:'fix'}).catch(()=>{});  // 选了什么记进这次的结果（报告里写）
    autoHold=SS.some(x=>x.kind)?`测量停下来了：${SS.map(x=>x.why).join('；')}`:'第 1 轮自动校验没通过：'+SS.map(x=>`「${x.name}」${fms(Math.abs(x.seconds))} 秒`).join('、')+'。请检查这一段起止两个计时点的位置，改好后重新插入。';page='steps';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-mclose]')){hStage=1;render();return}
   if(e.target.closest('[data-mfind]')){const pn=document.getElementById('h-pname');if(pn&&pn.value.trim())pName=pn.value.trim().replace(/[<>&"]/g,'');autoStart();window.scrollTo(0,0);return}  // 老的"开始找关键步骤"也走测量页（10-26）
