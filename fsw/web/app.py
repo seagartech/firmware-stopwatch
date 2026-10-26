@@ -283,6 +283,7 @@ class RestoreBody(BaseModel):
 
 
 TRY_END_WAIT = 20  # 试一次收全后最多再等多久结束标记（回复还在放）：等到了，这一轮连同结束时补打的点一起交给多轮实测
+SKIP_ROUNDS = 2  # 试一次里连着这么多轮（走完了、后面的点都到了）都缺同一个点：不再等满时间，直接说是哪一个、在哪一行
 TRY_SECONDS = 180  # 试一次最多等多久（决策 107）：烧完就开始听，设备重启、连网、人做一次要测的事都在这里面；不用人判断"准备好了"
 REOPEN_SECS = 8   # 试一次：打开调试口后这么久没有任何输出就重开（设备烧完重启，调试口会断开再回来）
 
@@ -1012,6 +1013,25 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             full = lambda got: got >= want - start_ids
             shown = lambda got: got | (rounds["seen"] & start_ids)
             job["missing"] = []
+            job["skip"], job["skip_note"] = [], None
+            where = {int(ins.point_id(x, a.steps)[1:]): f"{x.get('path') or x.get('f') or ''}:{x.get('l')}" for x in a.steps}
+
+            def skipped(cur):
+                """这一轮带起点、走到了结束那一步（没有结束那一步的，读到了清零），流程里排在收到的最后那个点前面、却没收到的点：
+                后面的都到了，就它没到，说明它插的那一句设备这样用时不经过（比如只在某种设置下才走的那一支）。
+                可能在清零之后才打出来的点（tail）不算，它们在清零前后都可能到。"""
+                if start_ids and not cur & start_ids or (end_id is not None and end_id not in cur):
+                    return set()
+                last = max((order.index(k) for k in cur - start_ids if k in order), default=-1)
+                return {k for k in want - start_ids - tail_ids - cur if k in order and order.index(k) < last}
+
+            def skip_note(ks):
+                ks = sorted(ks, key=order.index)
+                names_ = "」「".join(names.get(f"P{k}") or f"P{k}" for k in ks)
+                at = "、".join(f"「{names.get(f'P{k}') or f'P{k}'}」在 {where.get(k)}" for k in ks)
+                return (f"「{names_}」这一轮没走到：它后面的点都收到了、这一轮也走完了，说明这个点插的那一句设备这样用时不经过"
+                        f"（比如只在某种设置、某种模式下才走的那一支）。{at}。"
+                        "回到「找关键步骤」把它删掉，或者换成每轮都会走的那一句，再插一次")
 
             def counts(st, start_us):
                 """这一行算不算这一轮收到的：起点之后的才算（10-25 真机：唤醒提示音在起点之前走了回复那几个点，试一次照样判通过，
@@ -1036,6 +1056,13 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     return
                 if line.strip().startswith("FSW,RESET"):
                     cur = rounds["cur"]
+                    sk = skipped(cur) if cur and not full(cur) else set()
+                    if sk:  # 走完了一轮、后面的都到了，就这几个没到：页面上马上说；连着两轮都这样就不用等满时间了
+                        prev_sk = rounds.get("skip") or set()
+                        rounds["skip"] = sk
+                        rounds["skip_n"] = rounds.get("skip_n", 0) + 1 if sk & prev_sk else 1
+                        job["skip"] = [{"name": names.get(f"P{k}") or f"P{k}", "at": where.get(k)} for k in sorted(sk, key=order.index)]
+                        job["skip_note"] = skip_note(sk)
                     rounds["reset"] = {"us": p[1] if p else None, "had": bool(cur & start_ids) or (not start_ids and bool(cur))}
                     # 这一轮有起点、走过起点、还没到结束那一步、没收全就被清零：先记着，清零后真来了这一轮后面的点才算"半路被清零"
                     rounds["maybe_cut"] = {"after": rounds.get("last_id"), "had": set(cur), "later": set()} \
@@ -1119,7 +1146,7 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 def stop_or_reopen():  # 决策 127：打开调试口 8 秒还一行输出都没有，多半打开的是设备重启前那个（它断开又回来了）：关掉重开
                     if not job.get("dev_seen") and time.time() - opened > REOPEN_SECS:
                         reopen["hit"] = True
-                    return superseded() or enough() or reopen["hit"]
+                    return superseded() or enough() or reopen["hit"] or (rounds.get("skip_n", 0) >= SKIP_ROUNDS and not full(rounds["best"]))
                 try:
                     got_lines = device.read(ports[0], max(1, t_end - time.time()), on_line, stop=stop_or_reopen)
                     if not reopen["hit"] or time.time() >= t_end:
@@ -1157,6 +1184,14 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     why = f"码表只把清零后 {meas.LATE_US // 1_000_000} 秒内打出来的算回上一轮；再晚就分不清是这一轮的尾巴，还是下一轮开始前的动静。"
                 return _fail(job, "try", msg, why=why, error=f"（收到 {len(got)} / {len(want)} 个）",
                              missing=[names.get(f"P{x}") or f"P{x}" for x in sorted(want - got)], offer_restore=job["try_fails"] >= 2)
+            sk = rounds.get("skip") if not full(got) else None
+            if sk and (sk & (want - got) or rounds.get("skip_n", 0) >= SKIP_ROUNDS):
+                job["try_fails"] = job.get("try_fails", 0) + 1
+                early = rounds.get("skip_n", 0) >= SKIP_ROUNDS
+                return _fail(job, "try", skip_note(sk) + "。" + (f"连着 {rounds['skip_n']} 轮都是这样，码表没再等满 {TRY_SECONDS // 60} 分钟。" if early else ""),
+                             why="同一轮里排在它后面的点都收到了，它却一次没来：不是没做完，是设备不走它插的那一句。再试一次也一样。",
+                             error=f"（收到 {len(got)} / {len(want)} 个）", missing=[names.get(f"P{k}") or f"P{k}" for k in sorted(want - got)],
+                             offer_restore=job["try_fails"] >= 2, skip=job.get("skip"))
             cut = rounds.get("cut")
             if cut and not full(got):
                 job["try_fails"] = job.get("try_fails", 0) + 1
