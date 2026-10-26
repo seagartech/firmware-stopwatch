@@ -568,6 +568,99 @@ def _hinted(steps, hint):
     return None
 
 
+_SIGNAL = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b")  # 事件位、标志这类全大写带下划线的名字（MAIN_EVENT_X、EVT_DONE）
+_CALLEE = re.compile(r"(?<![\w])([A-Za-z_]\w*)\s*\(")
+
+
+def _stmt_text(src, line):
+    first = structure_stmt_start(src, line)
+    last = line
+    while last < len(src.clines) and re.search(r"(?:,|\(|&&|\|\||[^=!<>]=)$", src.clines[last - 1].rstrip()):
+        last += 1
+    return " ".join(src.clines[k - 1].strip() for k in range(first, last + 1))
+
+
+def structure_stmt_start(src, line):
+    from fsw import structure
+    return structure.stmt_start(src, line)
+
+
+def _registered_signals(proj, names):
+    """这几个回调名字被赋成的 lambda（name = [..](..){ ... }）里出现的事件位、标志（全大写带下划线的名字）。只看文本结构，不认名字。"""
+    out = set()
+    for rel in proj.sources():
+        f = proj.file(rel)
+        if f is None:
+            continue
+        for n in names:
+            for m in re.finditer(rf"(?<![\w]){re.escape(n)}\s*=\s*\[", f.code):
+                k = f.code.find("{", m.end())
+                b = next((b for b in f.blocks if b["open"] == k), None) if k >= 0 else None
+                if b is not None:
+                    out |= set(_SIGNAL.findall(f.code[b["open"]:b["close"]]))
+    return out
+
+
+def repeat_driven(root, steps):
+    """一轮只记一次（once）的点，插的那一句其实是跟着一个"一轮会走好几次"的点（每次都记、记最后一次、记第一次）触发的：
+    那个点那一句调用的回调，被赋成的 lambda 里置了某个事件位 / 标志，这个点就在判断这个事件位的那一支里；
+    或者这个点就在那一句直接调用的函数里。那个点走几次，它就跟着走几次（10-26 8783：每次播放放空都会置"放空"事件，
+    主循环里"上报播放结束"跟着走一次，回复分几句播时一轮里会走好几次）。
+    返回 {点编号: {"by": 触发它的点编号, "why": 说明}}。只看代码结构，不认文件名、函数名；读不懂就当没有。"""
+    from fsw import structure
+    out = {}
+    try:
+        proj = structure.Project(Path(root).resolve())
+    except Exception:
+        return out
+    main = _main_steps(steps)
+    multi = [x for x in main if x.get("once") in ("every", "last", "first")]
+    for d in multi:
+        try:
+            dsrc = proj.file(str(d.get("path") or d.get("f") or ""))
+            if dsrc is None:
+                continue
+            stmt = _stmt_text(dsrc, int(d.get("l")))
+        except (TypeError, ValueError, IndexError):
+            continue
+        callees = [n for n in _CALLEE.findall(stmt) if n not in structure.KEYWORDS and not n.startswith("FSW_")]
+        if not callees:
+            continue
+        sigs = _registered_signals(proj, callees)
+        for e in main:
+            if e is d or e.get("once") != "once" or e.get("line") == "start" or point_id(e, steps) in out:
+                continue
+            rel = str(e.get("path") or e.get("f") or "")
+            try:
+                esrc = proj.file(rel)
+                if esrc is None:
+                    continue
+                pos = esrc.pos(int(e.get("l")), e.get("where") or "before")
+            except (TypeError, ValueError, IndexError):
+                continue
+            heads = [esrc.blocks[i]["head"] for i in esrc.chain(pos)]
+            hit = next((g for g in sigs for h in heads if re.search(rf"\b{re.escape(g)}\b", h)), None)
+            func = structure.func_at(esrc, int(e.get("l")))[0]
+            direct = func and (func.split("::")[-1] in callees)
+            if hit or direct:
+                why = (f"「{e.get('n')}」在判断 {hit} 的那一支里，{hit} 是「{d.get('n')}」那一句（{stmt[:50]}）每走一次就置一次的"
+                       if hit else f"「{e.get('n')}」在「{d.get('n')}」那一句直接调用的 {func} 里")
+                out[point_id(e, steps)] = {"by": point_id(d, steps), "why": why + f"：「{d.get('n')}」一轮会走好几次，它也跟着走好几次"}
+    return out
+
+
+def effective_steps(root, steps):
+    """插计时点、定一轮结束时用的步骤：跟着"一轮会走好几次"的点触发的那几个（见 repeat_driven）当成"每次都记"，
+    不拿它当一轮结束、不在它那里清零；它是人感觉到的结束（felt=last）时，码表取这一轮最后那次。返回 (步骤, {点编号: 说明})。"""
+    if root is None:
+        return steps, {}
+    driven = repeat_driven(root, steps)
+    if not driven:
+        return steps, {}
+    return [dict(x, once="every", driven_by=driven[point_id(x, steps)]["by"]) if point_id(x, steps) in driven else x
+            for x in steps], driven
+
+
 def round_end(steps, hint=None):
     """一轮的结束那一步：要测的这条线上（顺带的那条不算），表里（按流程先后）最后一个"一轮只经过一次"、不是可选、不是起点的计时点；
     一轮只经过一次的全是可选的，就用其中最后那个（不然没处清零，"记最后一次"的点一直报不出来）。
@@ -970,6 +1063,63 @@ def _use_tool_reset(data, root, steps, flow=None, warn=None):
     return mine, auto
 
 
+ONCE_MARK = re.compile(r"FSW_(?:MARK_ONCE|MARK_ONCE_ARMED)\(\s*(\d+)\s*,\s*(.*)\)\s*;|FSW_MARK_ONCE_AFTER\(\s*(\d+)\s*,\s*\d+\s*,\s*(.*)\)\s*;")
+
+
+def _mark_every(data, driven):
+    """跟着"一轮会走好几次"的点触发的点（见 repeat_driven）：AI 写的"只记第一次"换成"每次都记"（FSW_MARK），
+    码表取这一轮最后那次（它是人感觉到的结束时）。返回换掉的 [{step, from, to, why}]。"""
+    if not driven:
+        return []
+    ids = {int(k[1:]) for k in driven}
+    fixed = []
+    for x in data.get("inserts") or []:
+        ls = x.get("lines") if isinstance(x, dict) else None
+        if not isinstance(ls, list):
+            continue
+        for i, l in enumerate(ls):
+            if not isinstance(l, str):
+                continue
+            m = ONCE_MARK.search(l)
+            if not m:
+                continue
+            n = int(m.group(1) or m.group(3))
+            if n not in ids:
+                continue
+            new = l[:m.start()] + f"FSW_MARK({n}, {m.group(2) or m.group(4)});" + l[m.end():]
+            ls[i] = new
+            fixed.append({"step": f"P{n}", "from": l.strip(), "to": new.strip(), "why": driven[f"P{n}"]["why"]})
+    return fixed
+
+
+NOTE_CALL = re.compile(r"FSW_([A-Z_]+)\(\s*(\d+)?")
+
+
+def _notes_match(notes, out, auto):
+    """AI 写的说明要和最后真正插进去的对得上（10-26 8783：说明里写"在 P8 处 FSW_FLUSH_LAST(7) 打印"，
+    码表放了清零后这句已经去掉，说明还留着）。说明里提到的计时点语句（宏 + 编号），最后插的里面没有的：这句说明去掉；
+    码表自己放了清零时，AI 讲它把清零放在哪的那几句也去掉（码表另写一句放在哪）。去掉了几句写一句。"""
+    have = set()
+    for x in out:
+        for l in x.get("lines") or []:
+            if isinstance(l, str):
+                for m in NOTE_CALL.finditer(l):
+                    have.add((m.group(1), m.group(2)))
+    keep, gone = [], 0
+    for n in notes:
+        calls = [(m.group(1), m.group(2)) for m in NOTE_CALL.finditer(n)]
+        if auto and any(c == "ROUND_RESET" for c, _ in calls):
+            gone += 1
+            continue
+        if any((c, k) not in have and not (k is None and any(h == c for h, _ in have)) for c, k in calls):
+            gone += 1
+            continue
+        keep.append(n)
+    if gone:
+        keep.append(f"AI 的说明里有 {gone} 句提到的语句最后没插（码表改过插法），已去掉，免得和实际插的对不上")
+    return keep
+
+
 def _keep_without_reset(out, auto, ids):
     """只记最后一次（FSW_KEEP_LAST）的点要在清零时、或单独写的 FSW_FLUSH_LAST 处才打出来：
     清单里两样都没有的，这个点插了也一次都报不出来（10-26 真测：上行末包一直等不到）。返回这些点的名字。"""
@@ -994,7 +1144,9 @@ def parse_plan(text, root, steps, needs=None, flow=None):
     if not header.endswith("fw_stopwatch.h") or (root / header).resolve().parent != (root / header).parent.resolve() \
             or root not in (root / header).resolve().parents:
         header = default_header(root)
+    steps, driven = effective_steps(root, steps)
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
+    every_fix = _mark_every(data, driven)
     out, problems, bad, moved, srcs, ifdef = [], [], [], [], {}, []
     warn = []  # 每轮结束那一步和识别结果对不上、好几处 case 说不准：照旧插，说清楚
     replaced, auto = _use_tool_reset(data, root, steps, flow, warn)
@@ -1092,7 +1244,13 @@ def parse_plan(text, root, steps, needs=None, flow=None):
     if auto and not replaced:
         fixes.append({"kind": "reset_by_tool", "step": "reset", "file": "", "after_line": None, "to": auto["after_line"],
                       "to_file": auto["file"], "lines": [], "why": f"AI 没写每轮清零，码表放在{auto['where']}"})
+    fixes += [{"kind": "every_by_tool", "step": f["step"], "file": "", "after_line": None, "lines": [f["from"]], "to_lines": [f["to"]],
+               "why": f["why"] + "；码表改成每次都记，取这一轮最后那次，不在它那里清零"} for f in every_fix]
     notes = [str(n) for n in data.get("notes") or [] if n]
+    notes = _notes_match(notes, out, auto)
+    notes += [f"「{ids[f['step']]['n']}」跟着「{ids[driven[f['step']]['by']]['n'] if driven[f['step']]['by'] in ids else driven[f['step']]['by']}」"
+              f"走，一轮会走好几次：码表把它改成每次都记（{f['to']}），取这一轮最后那次；一轮结束和清零不放在它那里"
+              for f in every_fix if f["step"] in ids]
     notes += [f"每轮清零由码表放在{auto['where']}（{auto['file']} 第 {auto['after_line']} 行后面），AI 写的清零没用"] if auto else \
         ["码表没找到能确定放每轮清零的地方，用的是 AI 给的位置（已经核对过不在一直转的地方）；试一次时要是每轮在半路被清零，码表会说"] \
         if any(RESET_CALL.search(l) for x in out for l in x["lines"] if isinstance(l, str)) else []

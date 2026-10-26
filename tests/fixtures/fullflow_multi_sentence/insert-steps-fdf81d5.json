@@ -1,0 +1,136 @@
+[
+ {
+  "p": "P1",
+  "n": "判定说话结束",
+  "path": "main/audio/engines/afe_audio_engine.cc",
+  "l": 482,
+  "line": "start",
+  "why": "这一句把“还在说话”的标志清掉，是设备认定人这句话说完的第一刻；插入点在这一支里、回调抛出之前，正好在翻转发生的那一刻。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P2",
+  "n": "通知音频服务静音",
+  "path": "main/audio/engines/afe_audio_engine.cc",
+  "l": 483,
+  "line": "talk",
+  "why": "结束翻转通过回调抛给音频服务，音频服务只置一个事件，主循环里对应分支只调指示灯；放在这一步能看出“感知结束 → 状态机被通知”之间有没有卡顿。",
+  "where": "before",
+  "once": "once",
+  "follow": true
+ },
+ {
+  "p": "P5",
+  "n": "音频包入发送队列",
+  "path": "main/application.cc",
+  "l": 242,
+  "line": "talk",
+  "why": "Opus 编码完成、把包压进发送队列的第一包，是“设备确实做完了编码”；发送队列为空时它触发了主循环的发送事件，所以它一定比真正的发送早一点点。",
+  "where": "before",
+  "once": "first",
+  "follow": true
+ },
+ {
+  "p": "P7",
+  "n": "上传末包",
+  "path": "main/application.cc",
+  "l": 242,
+  "line": "talk",
+  "why": "同一句最后一次执行就是上传末包：发送队列在这一阶段被逐包取空，之后本轮不再有外发数据。用首包到末包的差额可量出整段上传耗时。",
+  "where": "before",
+  "once": "last",
+  "follow": true
+ },
+ {
+  "p": "P8",
+  "n": "收到识别结果",
+  "path": "main/application.cc",
+  "l": 667,
+  "line": "talk",
+  "why": "服务器把这句话识别成文字后发回，设备把它写进对话显示；放在写文字这一句之前，代表设备首次拿到服务器对这句话的识别结果，首个结果就是这里。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P9",
+  "n": "回复开始",
+  "path": "main/application.cc",
+  "l": 627,
+  "line": "talk",
+  "why": "收到服务器“回复开始”消息后，设备切到说话状态（同时关掉语音处理、复位解码器），这是播放阶段的入口，也是服务器侧生成完成的信号。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P10",
+  "n": "回复音频入解码队列",
+  "path": "main/application.cc",
+  "l": 556,
+  "line": "talk",
+  "why": "第一包回复音频到达并被放进解码队列，代表回复数据开始进设备；取第一次，用来看从“服务器说开始”到“数据真到手”这段空档。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P11",
+  "n": "开始出声",
+  "path": "main/audio/audio_service.cc",
+  "l": 351,
+  "line": "talk",
+  "why": "第一段 PCM 被写进编解码器输出，这是用户第一次真正听到回复；放在写数据这一句之前，和听到的时刻几乎重合。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P12",
+  "n": "末段出声",
+  "path": "main/audio/audio_service.cc",
+  "l": 351,
+  "line": "talk",
+  "why": "同一句最后一次执行，是最后一段 PCM 写进编解码器，之后就没有声音再进去了。",
+  "where": "before",
+  "once": "last"
+ },
+ {
+  "p": "P13",
+  "n": "回复结束消息",
+  "path": "main/application.cc",
+  "l": 635,
+  "line": "talk",
+  "why": "服务器宣布回复结束，设备从说话状态回到聆听状态；对用户来说这是“它说完了、又开始听了”的那一刻。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P14",
+  "n": "队列播放放空",
+  "path": "main/audio/audio_service.cc",
+  "l": 374,
+  "line": "talk",
+  "why": "最后一包输出完后，锁内已确认解码队列、播放队列都空、也没有在途工作，才在这一支里通知“全部放完”；放点放在这一支内部、回调前置处，正好在判定成立之后。",
+  "where": "before",
+  "once": "every"
+ },
+ {
+  "p": "P15",
+  "n": "上报播放结束",
+  "path": "main/application.cc",
+  "l": 217,
+  "line": "talk",
+  "why": "主循环拿到“播放放空”事件、复查播放确实空闲后，才通知播放管理器结束；放在这一支里这一句之前，是整条线在设备侧的最后一刻。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P16",
+  "n": "请求切换表情",
+  "path": "main/application.cc",
+  "l": 674,
+  "line": "face",
+  "why": "服务器发来的 llm 消息里带表情时，设备把表情交给屏幕去切；这是表情这条线的“收到”。",
+  "where": "before",
+  "once": "once",
+  "opt": true
+ }
+]

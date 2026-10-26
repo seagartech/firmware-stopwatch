@@ -313,10 +313,13 @@ def _measure_end(page, steps, main, extra):
         return {"p": p, "n": n, "line": f"全程：{meas}" if endn else f"全程：到{n}", "any": [p]}
     named = [p for p in cands + ([rend] if rend else []) if endn and (sp.get(p) or {}).get("n")
              and ((sp.get(p) or {}).get("n") == endn or endn in sp[p]["n"] or sp[p]["n"] in endn)]
-    if not rend or rend in cands or (named and named[0] == rend):
+    if not rend or (rend in cands and len(cands) == 1) or (named and named[0] == rend):
         # 一轮结束那一步本身就是人感觉到的最后一下（比如回到聆听），或码表没定一轮结束：线不动，只按 measure 起名
+        # 一轮结束那一步也是"感觉到的最后一下"之一、但还有别的（比如结束消息和播放放空、上报放空）：照样合成一段取最晚的
+        # （8783：清零挪到结束消息那一步后，全程原来量到结束消息、不是 measure 说的播放结束）
         return main, extra, info(rend or (named[0] if named else main[-1][1]))
-    if any(b == rend for _, b, _ in main):
+    rend_felt = rend in cands
+    if not rend_felt and any(b == rend for _, b, _ in main):
         cands.append(rend)  # 协议上的结束和人感觉到的结束谁先谁后说不准：取晚的那个
     m = (named[0] if named else None) or next((p for p in cands if (sp.get(p) or {}).get("whole")), None) \
         or next(p for p in cands if p != rend)
@@ -327,7 +330,8 @@ def _measure_end(page, steps, main, extra):
     br = max((a for a, _, _ in sinks), key=lambda p: idx.get(p, -1))
     if any(a != br for a, _, _ in sinks) or any(a in cands for a, _, _ in main):
         return main, extra, None  # 终点之间还串着别的段：不合，原样
-    base = next((g for a, b, g in sinks if b == rend), None) or next((g for a, b, g in sinks if b == m), None) or sinks[-1][2]
+    first = (m, rend) if rend_felt else (rend, m)  # 一轮结束本身也是感觉到的最后一下：段名按量到的那一步叫，不叫"到结束消息"
+    base = next((g for a, b, g in sinks if b == first[0]), None) or next((g for a, b, g in sinks if b == first[1]), None) or sinks[-1][2]
     who = []
     for _, _, g in sinks:
         for w in (g.get("who") or "").replace(" + ", "、").split("、"):

@@ -1098,6 +1098,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             end_id = int(ins.point_id(end_s, a.steps)[1:]) if end_s else None
             # 可能在每轮清零之后才打出来的点（见 ins.tail_points）：清零后、下一个起点之前打出来的，看晚了多久
             tail_ids = {int(ins.point_id(x, a.steps)[1:]) for x in ins.tail_points(a.steps, flow)} & want
+            # 插的时候码表定的结束那一步和清零后可能才到的点（fsw-plan.json）优先：跟着一轮走好几次的点触发的那步（见
+            # ins.repeat_driven）码表已改成每次都记、不在它那里清零，这里按同一份算，不再按 AI 标的"一轮一次"另算一遍
+            try:
+                saved = json.loads((Path(a.project_dir) / "fsw-plan.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                saved = {}
+            if (saved.get("end") or {}).get("step"):
+                end_id = int(saved["end"]["step"][1:])
+            if saved.get("tail"):
+                tail_ids = {int(t["step"][1:]) for t in saved["tail"] if str(t.get("step", "")).startswith("P")} & want
             full = lambda got: got >= want - start_ids
             shown = lambda got: got | (rounds["seen"] & start_ids)
             job["missing"] = []

@@ -1,0 +1,176 @@
+```json
+{
+  "header": "main/fw_stopwatch.h",
+  "inserts": [
+    {
+      "step": "include",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 14,
+      "lines": [
+        "// 计时点：固件码表计时点头文件（main 在 include 路径上）",
+        "#include \"fw_stopwatch.h\""
+      ]
+    },
+    {
+      "step": "P1",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 481,
+      "lines": [
+        "            // 计时点 P1：判定说话结束",
+        "            FSW_MARK_ONCE(1, 0);"
+      ]
+    },
+    {
+      "step": "P2",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 482,
+      "lines": [
+        "            // 计时点 P2：通知音频服务静音（须在 P1 之后才记）",
+        "            FSW_MARK_ONCE_AFTER(2, 1, 0);"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 23,
+      "lines": [
+        "// 计时点：固件码表计时点头文件（main 在 include 路径上）",
+        "#include \"fw_stopwatch.h\""
+      ]
+    },
+    {
+      "step": "P11",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 350,
+      "lines": [
+        "        // 计时点 P11：开始出声",
+        "        FSW_MARK_ONCE(11, 0);"
+      ]
+    },
+    {
+      "step": "P12",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 351,
+      "lines": [
+        "        // 计时点 P12：末段出声（记最后一次，跟 P14 一起打印）",
+        "        FSW_KEEP_LAST(12);"
+      ]
+    },
+    {
+      "step": "P14",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 372,
+      "lines": [
+        "        // 计时点 P14：队列播放放空",
+        "        FSW_MARK(14, 0);"
+      ],
+      "extra": [
+        "        // 计时点：补打印 P12（上一次末段出声的时刻）",
+        "        FSW_FLUSH_LAST(12);"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/application.cc",
+      "after_line": 13,
+      "lines": [
+        "// 计时点：固件码表计时点头文件（main 在 include 路径上）",
+        "#include \"fw_stopwatch.h\""
+      ]
+    },
+    {
+      "step": "reset",
+      "file": "main/application.cc",
+      "after_line": 1000,
+      "lines": [
+        "    // 计时点：新一轮开始（进入聆听状态），清零“只记第一次”的标记",
+        "    FSW_ROUND_RESET();"
+      ]
+    },
+    {
+      "step": "P15",
+      "file": "main/application.cc",
+      "after_line": 216,
+      "lines": [
+        "                // 计时点 P15：上报播放结束",
+        "                FSW_MARK_ONCE(15, 0);"
+      ]
+    },
+    {
+      "step": "P5",
+      "file": "main/application.cc",
+      "after_line": 241,
+      "lines": [
+        "                // 计时点 P5：音频包入发送队列（先取发送队列首包的旧记录，仅保留本轮起点之后记到的）",
+        "                FSW_MARK_ONCE(5, 0);"
+      ]
+    },
+    {
+      "step": "P7",
+      "file": "main/application.cc",
+      "after_line": 242,
+      "lines": [
+        "                // 计时点 P7：上传末包（记最后一次，跟 P8 一起打印）",
+        "                FSW_KEEP_LAST(7);"
+      ]
+    },
+    {
+      "step": "P10",
+      "file": "main/application.cc",
+      "after_line": 555,
+      "lines": [
+        "            // 计时点 P10：回复音频入解码队列",
+        "            FSW_MARK_ONCE(10, 0);"
+      ]
+    },
+    {
+      "step": "P9",
+      "file": "main/application.cc",
+      "after_line": 626,
+      "lines": [
+        "                    // 计时点 P9：回复开始",
+        "                    FSW_MARK_ONCE(9, 0);"
+      ]
+    },
+    {
+      "step": "P13",
+      "file": "main/application.cc",
+      "after_line": 634,
+      "lines": [
+        "                            // 计时点 P13：回复结束消息",
+        "                            FSW_MARK_ONCE(13, 0);"
+      ]
+    },
+    {
+      "step": "P8",
+      "file": "main/application.cc",
+      "after_line": 666,
+      "lines": [
+        "                    // 计时点 P8：收到识别结果（顺手打印 P7 记录的末包）",
+        "                    FSW_MARK_ONCE(8, 0);",
+        "                    // 计时点：打印 P7（上传末包）的最后一次记录",
+        "                    FSW_FLUSH_LAST(7);"
+      ]
+    },
+    {
+      "step": "P16",
+      "file": "main/application.cc",
+      "after_line": 673,
+      "lines": [
+        "                    // 计时点 P16：请求切换表情",
+        "                    FSW_MARK_ONCE(16, 0);"
+      ]
+    }
+  ],
+  "notes": [
+    "P2 用 FSW_MARK_ONCE_AFTER(2, 1, 0) 而没用 FSW_MARK_ONCE：P2 所在分支一整轮都成立，若只按“收起点”重置，上一轮遗留的起点会在新轮开始后打出子帧就把 P2 提前记掉，P2 就不再紧跟 P1；改成“P1 记到之后才记”就总是紧跟 P1 的那一次。",
+    "P1 在 AFE 处理线程里，10ms 一帧；每轮只记第一次，不会刷屏，但它是逐帧判断，若一轮里 VAD 反复翻转，只有第一次生效（按要求）。",
+    "P5/P7 的插入处是发送队列出队循环内（逐包），语句用 FSW_MARK_ONCE/FSW_KEEP_LAST，不会逐包刷行。P7 是“内存里记最后一次”，在 P8（迟早会走到）处 FSW_FLUSH_LAST(7) 打印；若这一轮服务器没回识别结果，P7 的最后一次不会打印。",
+    "P12 同样是“记最后一次”，在 P14（队列放空）处 FSW_FLUSH_LAST(12) 打印；P14 每次放空都记，正常情况下每轮最多几次，风险不大，但 ResetDecoder()/Stop() 走同一回调路径也会记到 P14，可能出现本轮起点之前的放空记录（码表按本轮起点过滤，不计入）。",
+    "FSW_ROUND_RESET() 放在 HandleStateChangedEvent 的 kDeviceStateListening 分支内部（进入聆听状态时执行，一轮只经过一次），因此凡是在设备尚未进入聆听状态之前的计时点（比如首轮开口时的 P1/P2）都依赖码表自身的起点判定，不会被打点。",
+    "P11/P12/P14 在音频输出任务里；P17 在眼睛绘制任务里（每帧 30 帧/秒左右），P17 用 FSW_MARK_ONCE 且一轮只在真换表情的那次经过，开销可忽略。",
+    "P15 的插入位置在 if (audio_service_.IsPlaybackIdle()) 分支内、notify_player_.OnPlaybackDrained() 之前，与其同一块。",
+    "头文件插入用 #include \"fw_stopwatch.h\"：ESP-IDF 组件 main 目录在 include 搜索路径上，与现有 #include \"application.h\" 等写法一致；各文件分别加在已有 #include 群之后。"
+  ]
+}
+```
