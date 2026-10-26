@@ -1,8 +1,8 @@
 """多轮实测：每轮清零之后才补打出来的"记最后一次"（设备上可能晚到的点，见 fw_stopwatch.h 的 FSW_TAIL_MASK）。
 - 清零后 1 秒内补打的（FSW,LATE,…，时间在清零之后）：是上一轮这个点更晚的那一次——已收齐的上一轮按它更新，
   差这个终点、在等尾巴的上一轮把它补上；不记进下一轮（它比下一轮的起点早）。
-- 晚过 1 秒的：不算上一轮，也不记进下一轮（试一次会点名它晚了多久）。
-- 设备打的 FSW,TAIL 行只是告诉码表"晚了"，多轮实测不认。
+- 10-26 起一轮按起点分：清零后、下一轮起点之前到的（晚过 1 秒的、设备打的 FSW,TAIL 也算）都是上一轮的，取最后那次；
+  不记进下一轮。
 用 8772 那次识别存下的页面（小智：P9 首段出声之后三段并排：末段出声 P10、回到聆听 P12、播放放空 P11）。"""
 
 import json
@@ -57,9 +57,9 @@ def test_tail_within_one_second_updates_the_previous_round():
     assert len(late) == 2 and seg(late[0], "P9-P10") == 1.2 and seg(late[1], "P9-P10") == 0.85  # 下一轮不受影响
 
 
-def test_tail_later_than_one_second_is_ignored_and_does_not_leak_into_the_next_round():
+def test_tail_later_than_one_second_still_belongs_to_its_round_and_does_not_leak_into_the_next_round():
     r = run(two_rounds(["FSW,LATE,P10,4200000,6", "FSW,TAIL,P10,4300000,0"]))
-    assert len(r) == 2 and seg(r[0], "P9-P10") == 0.85 and seg(r[1], "P9-P10") == 0.85
+    assert len(r) == 2 and seg(r[0], "P9-P10") == 2.6 and seg(r[1], "P9-P10") == 0.85
 
 
 def test_round_waiting_for_its_last_output_gets_it_from_the_tail():

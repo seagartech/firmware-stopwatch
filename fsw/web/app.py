@@ -1509,7 +1509,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                     job["suspect"] = bad
                     job["_stop"] = True
             job["progress"], job["last"], job["have"] = list(coll.progress()), coll.last, coll.have()
-            if ok_count() >= job["target"] and not coll.prev:  # 最后一轮还在等晚到的最后一声：等完（见 flush）再停
+            if ok_count() >= job["target"] and (not coll.prev or coll.tail_quiet()):
+                # 最后一轮还在等晚到的最后一声：等完（见 flush）再停；按起点分轮时（10-26）最后一轮清零后的尾巴安静 1.5 秒就停，
+                # 停下时（finish）到这里为止的尾巴都算它的
                 job["_stop"] = True
 
         stop = lambda: job["_stop"]

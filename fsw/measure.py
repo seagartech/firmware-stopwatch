@@ -38,6 +38,7 @@ class Spec:
     soft: set = field(default_factory=set)  # 只在"看内容长短、不判快慢"那条线上用的点：一轮缺了它，其余的线照样算，不整轮补测
     marks: set = field(default_factory=set)  # 插成"记最后一次"的点（含中间点）：可能越过下一步，不拿来查下一步的先后
     follow: set = field(default_factory=set)  # 跟着起点记的点（起点和第一个结果之间）：只认码表取的那次起点之后的，取起点时不拿它们当"后面的一步"
+    any: dict = field(default_factory=dict)  # (从, 到) → 这一段的终点取这几个点里每轮最晚的那个（人感觉到的结束和协议上的结束谁先谁后说不准）
 
     def __post_init__(self):
         if self.need is None:
@@ -47,6 +48,8 @@ class Spec:
                     pts.update((a, b))
             for a, b in self.segments.values():
                 pts.update((a, b))
+            for c in self.any.values():
+                pts.update(c)
             self.need = sorted(pts, key=lambda p: int(p[1:]))
 
     @classmethod
@@ -61,6 +64,7 @@ class Spec:
         for g in s["segments"].values():
             names.setdefault(g["to"], g["name"] + "（终点）")
         spec = cls(start=s["start"]["point"], segments=segs, lines=lines, problems=s.get("problems") or [], names=names,
+                   any={(g["from"], g["to"]): list(g["to_any"]) for g in s["segments"].values() if g.get("to_any")},
                    last=set(s.get("last_points") or []) & {l["segs"][-1][1] for l in lines if l["segs"]})  # 只认线的终点（起点等别的点"记最后一次"是插点做法，不影响收尾）
         # 有"第一下感觉到的结果"那条线时，最后一条线（到全部做完，比如回答放完）看内容长短、报告不判快慢（同 judge）：
         # 只在这条线上用的点缺了，不算没收全（真测第 38 次：回答完整放了，固件那一轮没打出"声音放完"，整轮作废让人重说）
@@ -121,15 +125,24 @@ def _path(segs):
 def compute(cur, spec):
     t = {p: us / 1_000_000 for p, (us, _) in cur.items()}
     vals = {p: v for p, (_, v) in cur.items()}
-    segs = {k: (round(t[b] - t[a], 6) if a in t and b in t else None) for k, (a, b) in spec.segments.items()}
+    anyend = getattr(spec, "any", None) or {}
+
+    def at(a, b):  # 终点的时刻：有几个候选的取每轮最晚的那个
+        c = [t[x] for x in anyend.get((a, b), [b]) if x in t]
+        return max(c) if c else None
+
+    def span(a, b):
+        e = at(a, b)
+        return (e - t[a]) if a in t and e is not None else None
+    segs = {k: (round(v, 6) if (v := span(a, b)) is not None else None) for k, (a, b) in spec.segments.items()}
     ends = {}
     for l in spec.lines:
         g = _path(l["segs"])
-        parts = [(t[b] - t[a]) if a in t and b in t else None for a, b in g]
+        parts = [span(a, b) for a, b in g]
         ends[l["name"]] = round(sum(parts), 6) if parts and None not in parts else None
-        if ends[l["name"]] is None and g and g[0][0] in t and g[-1][1] in t and all(g[i][1] == g[i + 1][0] for i in range(len(g) - 1)):
+        if ends[l["name"]] is None and g and g[0][0] in t and at(*g[-1]) is not None and all(g[i][1] == g[i + 1][0] for i in range(len(g) - 1)):
             # 中间缺一个点（比如打断回答后那一轮"收到开始说话"不是这一轮的）：一条线首尾相接，用时就是首尾两点之差，照样算
-            ends[l["name"]] = round(t[g[-1][1]] - t[g[0][0]], 6)
+            ends[l["name"]] = round(at(*g[-1]) - t[g[0][0]], 6)
     probs = [p["key"] for p in spec.problems if _rule(p.get("rule") or {}, t, vals, segs, ends)]
     return {"segs": segs, "ends": [ends[l["name"]] for l in spec.lines], "probs": probs}
 
@@ -229,6 +242,8 @@ class Collector:
 
     def _prev_close(self):
         """等尾巴等到头了：收齐过的已经交出去了（见 feed 里的结束标记），不用再交；差点的判没收全。返回要交出的结果（列表）。"""
+        if self.prev.get("anchor"):  # 一直没等到下一轮的起点（最后一轮、或下一轮没起点）：到这里为止的尾巴都算它的
+            return self._anchor_commit(self._next_start())  # 下一轮已经报了起点（没收全就停了）：只算起点之前的
         if self.prev.get("sent"):
             self.prev = None
             return []
@@ -272,9 +287,17 @@ class Collector:
             self.late.append({"p": name, "name": self.spec.names.get(name, name), "us": us, "how": how})
 
     def feed(self, line):
+        out = self._feed(line)
+        emit, self._emit = getattr(self, "_emit", []), []
+        return emit + out
+
+    def _feed(self, line):
         p = parse_line(line)
         if not p and (tm := TAIL.search(line or "")):
-            self._flag_late(tm.group(1), int(tm.group(2)), "tail")
+            if self.prev and self.prev.get("anchor"):  # 上一轮还开着：晚到的这一次照样是它的（到下一轮起点为止都算），不点名
+                self._tent(tm.group(1), int(tm.group(2)), 0)
+            else:
+                self._flag_late(tm.group(1), int(tm.group(2)), "tail")
             return []
         if not p:
             m = LATE.search(line or "")
@@ -282,10 +305,12 @@ class Collector:
             # 这一轮后面的点大半都到了才算（10-19 真测：回答被打断、设备回到聆听时才补打出"你说完"，整句当成没记到起点）；
             # 没走完的起点（后面没有点）补打出来照旧不算
             pv = self.prev
+            if m and pv and pv.get("anchor"):  # 上一轮还开着（等下一轮的起点）：补打的这次先记给上一轮，等起点定了按时间分
+                self._tent(m.group(1), int(m.group(2)), int(m.group(3)))
             # 上一轮清零之后 LATE_US 内补打的"记最后一次"（设备上可能晚到的点，见 fw_stopwatch.h 的 FSW_TAIL_MASK）：
             # 是上一轮这个点更晚的那一次，交给上一轮（见 _prev_late：已收齐的更新最后那次，差这个终点的补上）；
             # 上一轮不要就不要，不记进这一轮（它比这一轮的起点早）。晚过 LATE_US 的照旧不算（试一次会点名）
-            tail = bool(m and pv and m.group(1) in self.spec.marks and m.group(1) not in self.spec.last
+            tail = bool(m and pv and not pv.get("anchor") and m.group(1) in self.spec.marks and m.group(1) not in self.spec.last
                         and pv["until"] - LATE_US <= int(m.group(2)) <= pv["until"])
             if tail:
                 late, got = self._prev_late(m.group(1), int(m.group(2)), int(m.group(3)), tail=True)
@@ -312,30 +337,32 @@ class Collector:
         self.last = line.strip()
         name, us, val = p
         out = []
-        if self.prev and name != "RESET":
+        anchor = bool(self.prev and self.prev.get("anchor"))
+        if anchor and name != "RESET":
+            self._tent(name, us, val)  # 起点定下来之前到的点：先记给上一轮（尾巴：最后一声、真正放完、回到聆听），也照常记进这一轮
+        elif self.prev and name != "RESET":
             late, got = self._prev_late(name, us, val)
             out += got
             if late:
                 return out
-        if name != "RESET" and self._leftover(name, us):  # 上一轮的尾巴（上一轮已判过）：不记进这一轮
+        if name != "RESET" and not anchor and self._leftover(name, us):  # 上一轮的尾巴（上一轮已判过）：不记进这一轮
             return out
         if (name != "RESET" and name in self.spec.marks and name != self.spec.start and name not in self.spec.follow
                 and self.reset_us is not None and us > self.reset_us + LATE_US and self.spec.start not in self.cur
-                and self.last_cur and name in self.last_cur and not self.done):
+                and self.last_cur and name in self.last_cur and not self.done and not anchor):
             # 记最后一次的点，清零 1 秒以后、这一轮起点之前才到：是上一轮更晚的一下（比如最后一声放完晚了），已经不算回上一轮了
             self._flag_late(name, us, "after_window")
         if name == "RESET":
-            if self.prev:  # 等尾巴时又一轮结束了：上一轮收尾（差点的算没收全）
+            if self.prev:  # 等尾巴时又一轮结束了：上一轮收尾（差点的算没收全；等起点的，到这里为止的尾巴都算它的）
                 out += self._prev_close()
-            if self.ready and not self.done and self.spec.last:
-                # 收齐了，但"取最后一次"的终点（回答全部放完）可能在结束标记之后几毫秒才报出来（真测第 27 次）：
-                # 这一轮先交出去（页面上格子马上变绿，不用等），再等 LATE_US，晚到的最后一声只更新这一轮的数（见 _prev_update）
+            if self.ready and not self.done:
+                # 收齐了：这一轮先交出去（页面上格子马上变绿，不用等）。一轮的边界按起点算，不按清零（10-26 真测）：
+                # 清零（回到等待）之后还会到这一轮的点——最后几段声音、真正放完、回到聆听——一直算这一轮的，
+                # 直到下一轮的起点定下来（起点之后第一个结果到了，起点取它之前的最后一次）；晚到的只更新这一轮的数（见 _anchor_commit）
                 r = self._close()
                 out.append(r)
-                self.prev = {"cur": self.cur, "occ": self.occ, "reset_us": self.reset_us, "miss": set(), "until": us + LATE_US,
-                             "at": time.monotonic(), "ready": True, "sent": r}
-            elif self.ready and not self.done:  # 上一轮已经收全：下一轮开始了，收尾
-                out.append(self._close())
+                self.prev = {"cur": self.cur, "occ": self.occ, "reset_us": self.reset_us, "miss": set(), "until": float("inf"),
+                             "at": time.monotonic(), "ready": True, "sent": r, "anchor": True, "tent": []}
             # 没有起点的一轮不算一轮（比如对话类喊唤醒词那一下：设备进聆听就清零，但没有"你说完"），不报没收全
             elif self.first and self.cur and not self.done:
                 # 开始读（或接着测重新打开调试口）时这一轮已经开始了：缺了的点可能是断开那一下丢的，算"开头没收到"，不算没收全（决策 112）
@@ -372,12 +399,103 @@ class Collector:
             return out
         if name == self.spec.start and self.ready and self._missed_reset(us):
             return out + self._split(us, val)
+        s = self._new_anchor(name, us)
+        if s is not None:  # 这一轮收全后又一次结果、前面有新的起点：结束标记没读到，按起点分开（起点之前的尾巴还是这一轮的）
+            out += self._split_at(s)
         self.cur.setdefault(name, (us, val))
         self.occ.setdefault(name, []).append((us, val))  # 同一个点一轮里记了几次（"每次都记"的点）：收尾时挑起点之后的第一次
+        if anchor and self._confirms(name, us):  # 这一轮的起点定下来了：起点之前到的尾巴交给上一轮
+            out += self._anchor_commit(max(o[0] for o in self.occ[self.spec.start] if o[0] <= us))
         if not self.ready and self._complete():
             self.ready, self.ready_at = True, time.monotonic()  # 收全了：进度马上显示，收尾等下一轮开始或 flush
         elif self.ready and name in self.spec.last:
             self.ready_at = time.monotonic()  # 取最后一次的点又报了一次：这一轮还没完，从这次起重新等
+        return out
+
+    def _tent(self, name, us, val):
+        self.prev["at"] = time.monotonic()
+        if name != self.spec.start and name not in self.spec.follow and (name, us, val) not in self.prev["tent"][-8:]:
+            self.prev["tent"].append((name, us, val))
+            if self._next_start() is None:  # 这一轮还没报起点：一定在下一轮起点之前，马上算回上一轮（格子、数马上更新），上一轮接着开着
+                self._emit = getattr(self, "_emit", []) + self._anchor_apply(self.prev, [self.prev["tent"].pop()])
+
+    def tail_quiet(self, sec=LATE_US / 1e6 + 0.5):
+        """上一轮还开着、在收清零之后的尾巴：已经 sec 秒没有新的点了（测够了轮数时用：最后一轮不再等下一轮的起点）。"""
+        return bool(self.prev and self.prev.get("anchor") and (time.monotonic() - self.prev["at"] >= sec or self._next_start() is not None))
+
+    def _next_start(self):
+        """上一轮还开着时，这一轮已经报过的第一次起点（之后到的点多半是这一轮的了）。"""
+        occ = self.occ.get(self.spec.start) if self.prev and self.prev.get("anchor") else None
+        return min(o[0] for o in occ) if occ else None
+
+    def _confirm_pts(self):
+        """定下一轮起点的点：第一下感觉到的结果那条线上（没有就第一条线上）不是起点、不跟着起点记、不是"记最后一次"的点。"""
+        line = next((l["segs"] for l in self.spec.lines if l.get("first") and l["segs"]), None) or \
+            next((l["segs"] for l in self.spec.lines if l["segs"]), [])
+        pts = {b for _, b in line} - self.spec.follow - self.spec.marks - self.spec.last - {self.spec.start}
+        return pts or set(self.spec.need) - self.spec.follow - self.spec.marks - self.spec.last - {self.spec.start}
+
+    def _confirms(self, name, us):
+        return (name in self._confirm_pts() and self.spec.start in self.occ
+                and any(o[0] <= us for o in self.occ[self.spec.start]))
+
+    def _anchor_commit(self, anchor_us):
+        """上一轮的尾巴：清零之后、这一轮起点（anchor_us；None = 到数据结束）之前到的点，算回上一轮。
+        "记最后一次"的点（最后一段声音、全部放完）取最后那次；上一轮没有的点（比如回到聆听）补上；上一轮已有的只记一次的点不动
+        （清零后又报的"第一段声音"是上一轮剩下的声音，不是新的一轮）。返回更新（同一轮，不算新的一轮）。"""
+        pv, self.prev = self.prev, None
+        if not pv:
+            return []
+        return self._anchor_apply(pv, [t for t in pv.get("tent") or [] if anchor_us is None or t[1] < anchor_us])
+
+    def _anchor_apply(self, pv, tent):
+        """把这几个尾巴点算回上一轮 pv，有变化就交一个更新（pv 仍开着时也可以调）。"""
+        t0 = pv["cur"][self.spec.start][0] if self.spec.start in pv["cur"] else None
+        known = set(self.spec.need) | {p for g in self.spec.segments.values() for p in g}
+        add = []
+        for name, us, val in tent:
+            if (t0 is not None and us <= t0) or name not in known:
+                continue
+            if name in self.spec.last or name in self.spec.marks:
+                pv["occ"].setdefault(name, []).append((us, val))
+                add.append(name)
+            elif name not in pv["cur"] or (t0 is not None and pv["cur"][name][0] < t0):
+                pv["cur"][name] = (us, val)
+                pv["occ"].setdefault(name, []).append((us, val))
+                add.append(name)
+        if not add or not (pv.get("sent") or {}).get("ok"):
+            return []
+        keep, self.prev = self.prev, pv
+        try:
+            return self._prev_update(extra=set(add))
+        finally:
+            self.prev = keep
+
+    def _new_anchor(self, name, us):
+        """收全了的一轮里，定起点的点（第一下的结果）又来了一次，而且这一轮自己的那次之后有新的起点：返回新的起点（它之前的最后一次）。"""
+        if not self.ready or self.done or name not in self.cur or name not in self._confirm_pts():
+            return None
+        mine = self.cur[name][0]
+        s = [o[0] for o in self.occ.get(self.spec.start, []) if mine < o[0] <= us]
+        if not s:
+            return None
+        # 起点和这个结果之间的那几步（跟着起点的、上传……）在新起点之后也都又走了一遍，才是新的一轮；
+        # 只是起点、结果各多报一次（中间没有别的步）不算（同一轮重复的只认第一次）
+        line = next((l["segs"] for l in self.spec.lines if l.get("first") and l["segs"]), None) or \
+            next((l["segs"] for l in self.spec.lines if l["segs"]), [])
+        mid = {b for _, b in line} - {self.spec.start, name} - self.spec.marks - self.spec.last  # "记最后一次"的常在结果之后才补打，不等它
+        a = max(s)
+        if not mid or not all(any(a < o[0] <= us for o in self.occ.get(x, [])) for x in mid):
+            return None
+        return a
+
+    def _split_at(self, cut):
+        """按起点 cut 分成两轮：cut 之前的（含上一轮清零前后的尾巴）交出这一轮，cut 起（含起点）当作下一轮。"""
+        new = {k: [o for o in v if o[0] >= cut] for k, v in self.occ.items()}
+        self.occ = {k: [o for o in v if o[0] < cut] for k, v in self.occ.items() if any(o[0] < cut for o in v)}
+        self.cur = {k: (v if v[0] < cut else min(self.occ[k])) for k, v in self.cur.items() if k in self.occ}
+        out = [self._close()]
+        self._begin(new)
         return out
 
     def _missed_reset(self, us):
@@ -450,7 +568,7 @@ class Collector:
             seen = seen | {a}
             if a not in self.spec.marks:
                 if a not in self.cur:
-                    if strict:
+                    if strict and a in self.spec.need:  # 可选的前一步（只在某种情况才走）这一轮没走：往前找
                         return None
                 elif got := self._after(a, seen):
                     return got[0][0]
@@ -541,7 +659,7 @@ class Collector:
     def flush(self, settle=0.0):
         """收全了、已经等了 settle 秒（设备可能不再开始下一轮，比如最后一轮）：收尾，交出这一轮。"""
         out = []
-        if self.prev and not self.prev.get("carry") and time.monotonic() - self.prev["at"] > LATE_US / 1e6 + 0.5:  # 等尾巴等过了时（设备之后没再输出）
+        if self.prev and not self.prev.get("carry") and not self.prev.get("anchor") and time.monotonic() - self.prev["at"] > LATE_US / 1e6 + 0.5:  # 等尾巴等过了时（设备之后没再输出）
             out += self._prev_close()
         if self.spec.last:
             settle = max(settle, LAST_QUIET)
@@ -581,6 +699,7 @@ class Collector:
                 self.cur[x] = after[-1] if x in self.spec.last or x in self.spec.marks else after[0]
             else:
                 stale.append(x)
+        self._drop_before_start()
         gap = self._gaps(stale)
         stale = [x for x in stale if x not in gap]
         if not stale:
@@ -588,6 +707,18 @@ class Collector:
         self.att += 1
         return {"ok": False, "att": self.att, "stale": True,
                 "missing": [self.spec.names.get(x, x) + "（记到的是这一轮开始之前的）" for x in stale]}
+
+    def _drop_before_start(self):
+        """不是一轮必须收齐的点（可选的、顺带那条线的）：只认起点之后的那次；只有起点之前的（上一轮剩下的，比如上一轮的回到聆听）
+        不算这一轮的，用到它的段这一轮空着（10-26 真测：上一轮的"回到聆听"记进下一轮，这条线成了 -1.86 秒）。"""
+        if self.spec.start not in self.cur:
+            return
+        for x in [x for x in self.cur if x != self.spec.start and x not in self.spec.need]:
+            after = self._after(x)
+            if after:
+                self.cur[x] = after[-1] if x in self.spec.last or x in self.spec.marks else after[0]
+            else:
+                self.cur.pop(x)
 
     def _gaps(self, stale):
         """中间的点（不是起点、不是哪条线的终点）这一轮没有真正的那一次：只是这个点用到的两段这一轮空着，整轮照样算，线的用时按首尾算。
@@ -638,7 +769,7 @@ class Collector:
         times = [round(x / 1e6, 3) for x in t] if None not in t else None
         return {**compute(self.cur, self.spec), "t": times}
 
-    def _prev_update(self):
+    def _prev_update(self, extra=()):
         """已经交出去的上一轮，最后一声晚到了：按它重算这一轮的数，交一个"更新"（同一轮，不算新的一轮、不改轮数）。"""
         sent = self.prev["sent"]
         if not sent.get("ok"):
@@ -650,6 +781,7 @@ class Collector:
                 after = self._after(x)
                 if after:
                     self.cur[x] = after[-1]
+            self._drop_before_start()
             new = {**sent, **self._numbers(), "update": True}
             gap = [g for g in sent.get("gap") or [] if not any(self.spec.names.get(x, x) == g and x in self.cur for x in self.spec.last)]
             if gap != (sent.get("gap") or []):  # 空着的最后一声晚到了：那条线这一轮不再空着
@@ -667,6 +799,7 @@ class Collector:
 
 
 ROUNDS_FILE = "rounds.json"
+ROUND_RULE = 2  # 分轮规则的版本：2 = 按起点分轮、清零后的尾巴算回上一轮、全程量到人感觉到的结束（10-26）。存的是老规则的就按原始日志重算
 
 
 def save_rounds(run_dir, rounds):
@@ -676,7 +809,7 @@ def save_rounds(run_dir, rounds):
     import json
     from pathlib import Path
     keep = [{"n": r.get("n"), "segs": r.get("segs") or {}, "ends": r.get("ends") or []} for r in rounds if r.get("ok")]
-    (Path(run_dir) / ROUNDS_FILE).write_text(json.dumps({"rounds": keep}, ensure_ascii=False), encoding="utf-8")
+    (Path(run_dir) / ROUNDS_FILE).write_text(json.dumps({"rounds": keep, "rule": ROUND_RULE}, ensure_ascii=False), encoding="utf-8")
 
 
 def run_rounds(run_dir, spec):
@@ -684,13 +817,22 @@ def run_rounds(run_dir, spec):
     import json
     from pathlib import Path
     p = Path(run_dir) / ROUNDS_FILE
+    saved = None
     if p.exists():
         try:
-            return [{**r, "ok": True} for r in json.loads(p.read_text(encoding="utf-8"))["rounds"]]
-        except (ValueError, KeyError, TypeError):
-            pass  # 文件坏了：退回重算
+            d = json.loads(p.read_text(encoding="utf-8"))
+            saved = [{**r, "ok": True} for r in d["rounds"]]
+            if d.get("rule") == ROUND_RULE:
+                return saved
+        except (ValueError, KeyError, TypeError, AttributeError):
+            saved = None  # 文件坏了：退回重算
     lines = (Path(run_dir) / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()
-    return [r for r in collect(lines, spec) if r["ok"]]
+    got = [r for r in collect(lines, spec) if r["ok"]]
+    # 老规则存的：按现在的规则重算（10-26：老规则把清零后的尾巴算进下一轮，出了负数）；重算少了轮（认不出试一次带过来的那一轮）
+    # 而老的那份和现在的线对得上，才还用老的
+    if saved and len(got) < len(saved) and all(len(r.get("ends") or []) == len(spec.lines) for r in saved):
+        return saved
+    return got
 
 
 def collect(lines, spec):
