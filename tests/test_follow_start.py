@@ -92,7 +92,7 @@ def test_old_log_front_segments_are_thin_not_fake_medians():
     assert {c["k"] for c in j["checks"] if c["kind"] == "thin"} == set(FRONT)
     assert j.get("best_fix", {}).get("k") not in FRONT and j.get("biggest") not in FRONT
     # 总的那条线按一轮真正结束（回到聆听）叫
-    assert [l["name"] for l in sc["lines"]][-1] == "到回到聆听"
+    assert [l["name"] for l in sc["lines"]][-1] == "全程：说话结束 → 回到聆听"  # 全程这条按要测的那件事起名（10-26）
 
 
 # ---- 按真测日志的时间，模拟加上"跟着起点记"之后设备会打出什么 ----

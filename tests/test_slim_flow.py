@@ -375,7 +375,8 @@ def test_felt_roles_split_lines_for_any_device(tmp_path):
     page = idf.to_page(r, "全程")
     assert page["category"] == "智能门锁" and "- 智能门锁：" in idf.build_prompt("全程")  # 类别从体验标准库来，写进找步骤的要求
     sc = stds.with_default_experience(stds.real_scenario(page, None))
-    assert [l["name"] for l in sc["lines"]] == ["到锁开始动", "到门开到位"] and sc["lines"][0]["first"]
+    # 全程这条按要测的那件事（measure）起名（10-26）
+    assert [l["name"] for l in sc["lines"]] == ["到锁开始动", "全程：读到卡 → 门开到位"] and sc["lines"][0]["first"]
     assert [(e["line"], e["fair"]) for e in sc["experiences"]] == [("到锁开始动", 0.8)]
 
 

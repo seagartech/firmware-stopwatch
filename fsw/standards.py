@@ -206,6 +206,7 @@ def real_scenario(page, standard, values=None):
         side = prefix + side
     segments = {}
     extra = [(g["a"], g["b"], g) for g in page.get("xsegs") or []]  # 不在哪条线上的段（你自己加的步骤）：只记用时
+    main, extra, mend = _measure_end(page, steps, main, extra)
     for a, b, g in main + side + extra:
         k = f"{a}-{b}"
         rng, slow, basis = None, None, "measured"
@@ -215,7 +216,7 @@ def real_scenario(page, standard, values=None):
                 rng, slow, basis = _sum_range(standard, ch)
         segments[k] = {"name": g.get("t") or k, "what": g.get("t") or "", "owner": g.get("who", ""),
                        "side": "outside" if g.get("out") else "device", "from": a, "to": b,
-                       "range": rng, "slow": slow, "basis": basis}
+                       "range": rng, "slow": slow, "basis": basis, **({"to_any": g["any"]} if g.get("any") else {})}
 
     def std_line(a, b):
         if not standard or a not in mp or b not in mp:
@@ -231,6 +232,8 @@ def real_scenario(page, standard, values=None):
     # 原来按段的先后取最后一段，总的那条线叫"到播放全部放完"，量的不是一轮的结尾（10-26 真测）
     # 插计时点时码表定的一轮结束那一步（放清零的那一步，roundEnd）优先：报告的总时长和清零按同一步算
     tail_end = page.get("roundEnd") or (page.get("main") or [None])[-1]
+    if mend:  # 量的终点是人感觉到的那一下（回复放完）：全程这条量到它，roundEnd 只管清零
+        tail_end = mend["p"]
     if tail_end and main and main[-1][1] != tail_end and any(b == tail_end for _, b, _ in main[1:]):
         k = max(i for i, (_, b, _) in enumerate(main) if b == tail_end)
         main = main[:k] + main[k + 1:] + [main[k]]
@@ -246,9 +249,13 @@ def real_scenario(page, standard, values=None):
     pn = {x["p"]: x["n"] for x in steps}
     felt = {x["p"]: x.get("felt") for x in steps}
     cut = next((i for i, (_, b, _) in enumerate(main[:-1]) if felt.get(b) == "first"), None)
+    if mend and cut is None and lines:
+        lines[-1].update(name=mend["line"], end=mend["n"], measure=True)
     if cut is not None:
         end = pn[main[cut][1]]
         lines[-1].update(name=f"到{pn[main[-1][1]]}", end=pn[main[-1][1]])  # 两条都按终点叫，免得"开口这条"其实量到全部放完
+        if mend:
+            lines[-1].update(name=mend["line"], end=mend["n"], measure=True)
         lines.insert(len(lines) - 1, {"name": f"到{end}", "end": end, "first": True, "range": None, "slow": None, "std": None,
                                       "segments": [f"{a}-{b}" for a, b, _ in main[:cut + 1]]})
     exps = []  # 体验标准每条线一条：标准里那条线对上了真线，就挂到真线上
@@ -283,6 +290,55 @@ def real_scenario(page, standard, values=None):
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l"),
                                 **({"at": a} if (a := point_at(x)) else {})} for x in steps},
             "matched": mp}
+
+
+def _measure_end(page, steps, main, extra):
+    """量的终点（结果页的 measure，比如"说话结束 → 回复放完"）是人感觉到的最后一下（felt=last：最后一段声音、播放放空），
+    而码表定的一轮结束（roundEnd，放清零的那一步，比如服务器说"说完了"切回聆听）只是协议上的结束、和它谁先谁后说不准时：
+    要测的这条线量到"这几个里每轮最晚的那个"（一段 to_any），名字按 measure 叫"全程：……"；
+    从同一个点分出去、各量到其中一个的几段（尾部放完、整段播放）合成这一段，不再并排列两行差不多的；
+    从起点直接到这个终点的记录段（回复播放放空）就是这条线，不再另列。没有 felt=last 的点、或终点就是 roundEnd：原样。"""
+    sp = {x["p"]: x for x in steps}
+    order = list(page.get("main") or [])
+    cands = [p for p in order if (sp.get(p) or {}).get("felt") == "last"]
+    cands += [b for _, b, _ in extra if (sp.get(b) or {}).get("felt") == "last" and b not in cands]
+    rend = page.get("roundEnd")
+    if not cands or not main:
+        return main, extra, None
+    meas = (page.get("measure") or "").strip()
+    endn = meas.split("→")[-1].strip() if "→" in meas else ""
+
+    def info(p):
+        n = endn or (sp.get(p) or {}).get("n", p)
+        return {"p": p, "n": n, "line": f"全程：{meas}" if endn else f"全程：到{n}", "any": [p]}
+    named = [p for p in cands + ([rend] if rend else []) if endn and (sp.get(p) or {}).get("n")
+             and ((sp.get(p) or {}).get("n") == endn or endn in sp[p]["n"] or sp[p]["n"] in endn)]
+    if not rend or rend in cands or (named and named[0] == rend):
+        # 一轮结束那一步本身就是人感觉到的最后一下（比如回到聆听），或码表没定一轮结束：线不动，只按 measure 起名
+        return main, extra, info(rend or (named[0] if named else main[-1][1]))
+    if any(b == rend for _, b, _ in main):
+        cands.append(rend)  # 协议上的结束和人感觉到的结束谁先谁后说不准：取晚的那个
+    m = (named[0] if named else None) or next((p for p in cands if (sp.get(p) or {}).get("whole")), None) \
+        or next(p for p in cands if p != rend)
+    sinks = [(a, b, g) for a, b, g in main if b in cands]
+    if not sinks:
+        return main, extra, None
+    idx = {p: i for i, p in enumerate(order)}
+    br = max((a for a, _, _ in sinks), key=lambda p: idx.get(p, -1))
+    if any(a != br for a, _, _ in sinks) or any(a in cands for a, _, _ in main):
+        return main, extra, None  # 终点之间还串着别的段：不合，原样
+    base = next((g for a, b, g in sinks if b == rend), None) or next((g for a, b, g in sinks if b == m), None) or sinks[-1][2]
+    who = []
+    for _, _, g in sinks:
+        for w in (g.get("who") or "").replace(" + ", "、").split("、"):
+            if w and w not in who:
+                who.append(w)
+    seg = {**base, "a": br, "b": m, "who": " + ".join(who) or base.get("who", ""), "any": cands}
+    at = min(i for i, (a, b, g) in enumerate(main) if b in cands)
+    main = [x for x in main[:at] if x[1] not in cands] + [(br, m, seg)] + [x for x in main[at:] if x[1] not in cands]
+    start = main[0][0]
+    extra = [x for x in extra if not (x[0] == start and x[1] == m)]
+    return main, extra, {**info(m), "any": cands}
 
 
 def _merge(parts):

@@ -26,6 +26,7 @@ SPIKE_RATIO, SPIKE_GAP = 2.5, 0.3   # 偶发特别慢：最慢一次超过一般
 OFTEN = 0.1       # 每 10 次 1 次以上算"经常"
 ENOUGH = 0.8      # 一段（一条线）有数的轮次不到这次轮数的八成：数据不足，不给中位数当结论、不拿来点名慢在哪
 THIN = "数据不足"
+BAD = "数据有问题"  # 有负数（终点比起点先记到、或记到的点比这一轮起点还早）：数不可信，不进结论、主数、图、优化建议，只在数据检查里列出（10-26）
 
 
 def enough(count, n):
@@ -159,6 +160,12 @@ def merge_overruns(scenario, rounds):
     return scenario, rounds, notes
 
 
+def _bad_why(neg, n, med):
+    rs = "、".join(str(x) for x in neg[:6]) + ("……" if len(neg) > 6 else "")
+    return (f"{n} 轮里 {len(neg)} 轮是负数（第 {rs} 轮），中位数 {med:.3f} 秒"
+            f"——终点比起点先记到，或者记到的点比这一轮的起点还早")
+
+
 def judge(scenario, rounds, prev=None):
     """scenario：fsw-scenario/1（段、线、体验标准、问题规则）；rounds：多轮实测收齐的每一轮；
     prev：上次的中位数（{"segs", "lines", "noise", "noise_lines"}，见网页后台的"和上次比"），第一次测没有。"""
@@ -179,6 +186,15 @@ def judge(scenario, rounds, prev=None):
                 thin.add(k)
                 checks.append({"kind": "thin", "k": k, "name": g["name"], "count": 0, "of": n,
                                "why": f"「{g['name']}」{n} 轮里一轮都没有数：{thin_why(0, n)}"})
+            continue
+        neg = [r["n"] for r in rounds if r["segs"].get(k) is not None and r["segs"][k] < 0]
+        if neg:
+            st = stats(vals)
+            out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
+                                    "outside": g.get("side") == "outside", "verdict": BAD, "vs": None, "spiky": False,
+                                    "spiky_rounds": [], "count": len(vals), "of": n, "bad": True, "bad_rounds": neg})
+            checks.append({"kind": "bad", "k": k, "name": g["name"], "rounds": neg, "count": len(neg), "of": n,
+                           "why": f"「{g['name']}」数据有问题：{_bad_why(neg, n, st['med'])}，这一段的数不可信，没算进结论"})
             continue
         st = stats(vals)
         if not enough(len(vals), n):
@@ -219,6 +235,15 @@ def judge(scenario, rounds, prev=None):
         if not ends:
             continue
         st = stats(ends)
+        neg = [r["n"] for r in rounds if r["ends"][i] is not None and r["ends"][i] < 0]
+        if neg:
+            out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "count": len(ends), "of": n,
+                                 "verdict": BAD, "bad": True, "bad_rounds": neg, "exp": None, "vs": None, "exp_std": None,
+                                 "combo": None, "segments": l["segments"], "round_cause": [],
+                                 **({"measure": True} if l.get("measure") else {})})
+            checks.append({"kind": "bad_line", "line": l["name"], "rounds": neg, "count": len(neg), "of": n,
+                           "why": f"「{l['name']}」这条线数据有问题：{_bad_why(neg, n, st['med'])}，没算进结论"})
+            continue
         if not enough(len(ends), n):
             checks.append({"kind": "thin_line", "line": l["name"], "count": len(ends), "of": n,
                            "why": f"「{l['name']}」这条线数据不足（{len(ends)}/{n} 轮）：{thin_why(len(ends), n, '条线')}"})
@@ -237,24 +262,29 @@ def judge(scenario, rounds, prev=None):
                              "verdict": ANSWER if by_answer else vs["change"] if vs else RECORDED, "exp": e, "vs": vs,
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category", "start_gap")} if es else None,
                              "combo": ANSWER_TXT if by_answer and e is None else combo(e, vs, _big(l, seg_st, segs_def, st), es, st["med"]),
-                             "segments": l["segments"], "round_cause": round_cause(l["segments"])})
+                             "segments": l["segments"], "round_cause": round_cause(l["segments"]),
+                             **({"measure": True} if l.get("measure") else {})})
 
     # 第一次反应：每轮几条线里最早到的那一下
-    if out["lines"]:
-        first = min(out["lines"], key=lambda x: x["med"])
-        firsts = [min(x for x in r["ends"] if x is not None) for r in rounds if any(x is not None for x in r["ends"])]
+    good = [x for x in out["lines"] if not x.get("bad")]  # 数据有问题的线不进第一次反应、先后比较、主线
+    gi = [i for i, l in enumerate(lines_def) if any(x["name"] == l["name"] for x in good)]
+    if good:
+        first = min(good, key=lambda x: x["med"])
+        firsts = [min(r["ends"][i] for i in gi if r["ends"][i] is not None) for r in rounds if any(r["ends"][i] is not None for i in gi)]
         out["first"] = {"line": first["name"], **stats(firsts)}
-    if len(out["lines"]) >= 2:
+    if len(good) >= 2:
         # 先给的反应比"第一个能感觉到的结果"早多少：有"到第一声"那条就和它比，不和"全部放完"比
-        j = next((i for i, l in enumerate(lines_def) if l.get("first") and i > 0), len(lines_def) - 1)
-        a, b = out["lines"][0], next((x for x in out["lines"] if x["name"] == lines_def[j]["name"]), out["lines"][-1])
-        diffs = [r["ends"][j] - r["ends"][0] for r in rounds if None not in (r["ends"][0], r["ends"][j])]
-        out["lead"] = {"first": a["name"], "second": b["name"], **stats(diffs)}
+        j = next((i for i in gi if lines_def[i].get("first") and i > gi[0]), gi[-1])
+        i0 = gi[0]
+        a, b = good[0], next(x for x in good if x["name"] == lines_def[j]["name"])
+        diffs = [r["ends"][j] - r["ends"][i0] for r in rounds if None not in (r["ends"][i0], r["ends"][j])]
+        if diffs and med(diffs) > 0:  # 真的先给了反应（比如先换表情再出声）才算；顺带那条比结果还晚，不是"先给的反应"
+            out["lead"] = {"first": a["name"], "second": b["name"], **stats(diffs)}
 
     # 要测的那条线（最后一条）里最大头的一段
     # 和报告、写建议同一条主线：看回答长短的线不算（10-20 修）
     out["checks"] = checks
-    keep = [x for x in out["lines"] if x["verdict"] != ANSWER] or out["lines"]
+    keep = [x for x in good if x["verdict"] != ANSWER] or good
     main = keep[-1] if keep else None
     if main:
         mine = [k for k in main["segments"] if k in seg_st]
@@ -262,16 +292,16 @@ def judge(scenario, rounds, prev=None):
     # 最值得优化的一段（10-19 用户定，固定点名）：第一下感觉到结果的那条线上，设备自己（代码上能改）的段里中位数最大的；
     # 设备外的（服务器、网络）、看回答长短的、推算的不算。只写占这条线多少，不分等级
     want = next((l for l in lines_def if l.get("first")), lines_def[-1] if lines_def else {})  # 体验标准挂的那条线
-    tgt = next((x for x in out["lines"] if x["name"] == want.get("name")), main)
+    tgt = next((x for x in good if x["name"] == want.get("name")), main)
     if tgt:
         byk = {g["k"]: g for g in out["segments"]}
-        cand = [k for k in tgt["segments"] if k in byk and not byk[k]["outside"] and byk[k]["verdict"] not in (ANSWER, "推算", THIN)]
+        cand = [k for k in tgt["segments"] if k in byk and not byk[k]["outside"] and byk[k]["verdict"] not in (ANSWER, "推算", THIN, BAD)]
         if cand:
             k = max(cand, key=lambda k: byk[k]["med"])
             out["best_fix"] = {"k": k, "name": byk[k]["name"], "med": byk[k]["med"], "line": tgt["name"],
                                "share": round(byk[k]["med"] / tgt["med"] * 100, 1) if tgt["med"] else None,
                                # 设备上能改的段合计占多少：最大那段占得少时，看得出是整条线本来就主要花在设备外
-                               "device_share": round(sum(max(0, byk[x]["med"]) for x in cand) / tgt["med"] * 100, 1) if tgt["med"] else None}
+                               "device_share": min(100.0, round(sum(max(0, byk[x]["med"]) for x in cand) / tgt["med"] * 100, 1)) if tgt["med"] else None}
 
     labels = []
     line_by = {l["name"]: l for l in out["lines"]}
@@ -279,7 +309,7 @@ def judge(scenario, rounds, prev=None):
         return f"达标率 {l['pass_rate'] * 100:.0f}%，{l['count']} 次里 {l['count'] - l['pass_n']} 次超过标准 {l['exp_std']['fair']} 秒"
 
     sevs = {}
-    for l in out["lines"]:  # 每条线都列：没问题的收在"另有 N 条达标"里，条数才对得上
+    for l in good:  # 每条线都列：没问题的收在"另有 N 条达标"里，条数才对得上（数据有问题的线只在数据检查里）
         vs = l["vs"]
         fair = (l.get("exp_std") or {}).get("fair")
         sev = 0   # 同一级里谁更重：超标越多越靠前
