@@ -4,9 +4,13 @@
 这里用无界面的 Chrome 真跑 app.js（后台接口用假的），看页面上画的是哪一种。
 10-26 11:00 又遇到："又跳到老版本界面了"：用 DeepSeek 找完就按模型名停下，测量页里塞的是老的整页"找关键步骤"
 （关键流程地图、读取状态、"9 个只找对 4 个"）。决策 181：模型选择本身不要人核对，只有码表核对出实际问题才停，
-停下也只在测量页里列要看的步骤。fixtures/run_page_deepseek_hold_1026.json 是那一刻的接口原样。"""
+停下也只在测量页里列要看的步骤。fixtures/run_page_deepseek_hold_1026.json 是那一刻的接口原样。
+10-26 13:07 用户在 Safari 上又说"老版本"：其实是核对停下的那一页还是老的步骤卡片（需要你核对、添加步骤……），停下的原因
+还写错了（"落进条件分支"，真正是先后说不准）。现在：中间的点有问题码表自动去掉、接着走；只有起点、终点有问题才停，
+停下那页和测量页一个样子（原因、计时点清单、「确认，插入计时点」「重新分析」）。WebKit（Safari 的内核）装了就也跑一遍。"""
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -38,7 +42,12 @@ FIX = json.loads((ROOT / "tests/fixtures/run_page_deepseek_hold_1026.json").read
 OLD_HOLD = "这次用的是 DeepSeek，准确率较低，请核对关键步骤"
 
 
-def page(tmp_path, demo, *, session=None, ui=None, after="", app_js=None, api_extra=None):
+PW = Path(os.environ.get("FSW_PLAYWRIGHT_DIR", "/tmp/pw"))
+WEBKIT = bool(shutil.which("node")) and (PW / "node_modules/playwright").is_dir() and (PW / "browsers").is_dir()
+ENGINES = ["chrome"] + (["webkit"] if WEBKIT else [])
+
+
+def page(tmp_path, demo, *, session=None, ui=None, after="", app_js=None, api_extra=None, engine="chrome"):
     """在 Chrome 里打开码表网页（接口全是假的），开机完成后跑 after，再把页面上画了什么交回来。"""
     body = (ROOT / "fsw/web/static/index.html").read_text(encoding="utf-8")
     body = body[body.index("<body>") + 6:body.index('<script src="/static/app.js">')]
@@ -66,12 +75,25 @@ navigator.sendBeacon=()=>true;
  document.getElementById('__res').textContent=JSON.stringify({{page,flow,AUTO,autoHold,
   run:/测量：全程/.test(m.innerHTML),oldbar:!!document.querySelector('#flowbar ol.flow'),
   steps:!!m.querySelector('[data-goins],[data-go="flash"]'),hold:/自动执行在这里停下/.test(m.innerHTML),
-  old:!!m.querySelector('.mapbox')||/关键流程地图|只找对 4 个|请每条都仔细核对|准确率较低/.test(m.innerText),
+  old:!!m.querySelector('.mapbox,.srow2,.hiwrap')||/关键流程地图|只找对 4 个|请每条都仔细核对|准确率较低|需要你核对|添加步骤|可信度高的/.test(m.innerText),
+  drop:[...dropped],reanalyze:!!m.querySelector('[data-reanalyze]'),
   text:m.innerText.slice(0,400)}});
 }})();
 </script></body></html>"""
     f = tmp_path / "h.html"
     f.write_text(html, encoding="utf-8")
+    if engine == "webkit":
+        js_run = tmp_path / "wk.js"
+        js_run.write_text("const {webkit}=require('playwright');(async()=>{const b=await webkit.launch();const p=await b.newPage();"
+                          f"await p.goto({json.dumps(f.as_uri())});await p.waitForFunction(()=>document.getElementById('__res').textContent,null,{{timeout:30000}});"
+                          "console.log('<pre id=\"__res\">'+await p.evaluate(()=>document.getElementById('__res').innerHTML)+'</pre>');await b.close()})()",
+                          encoding="utf-8")
+        out = subprocess.run(["node", str(js_run)], capture_output=True, text=True, timeout=120, cwd=PW,
+                             env={**os.environ, "NODE_PATH": str(PW / "node_modules"), "PLAYWRIGHT_BROWSERS_PATH": str(PW / "browsers")}).stdout
+        m = re.search(r'<pre id="__res">(.*?)</pre>', out, re.S)
+        assert m and m.group(1), out[-2000:]
+        import html as H
+        return json.loads(H.unescape(m.group(1)))
     out = subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
                           f"--user-data-dir={tmp_path / 'chrome'}", "--allow-file-access-from-files",
                           "--virtual-time-budget=15000", "--dump-dom", f.as_uri()],
@@ -113,14 +135,15 @@ def _fix_api():
 
 
 @needs_chrome
+@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("how", ["refresh", "new_tab"])
-def test_exact_1026_state_shows_the_new_run_page(tmp_path, demo, how):
+def test_exact_1026_state_shows_the_new_run_page(tmp_path, demo, how, engine):
     # 10-26 11:00 那一刻：page steps、flowMax 1、hStage 1、auto、autoHold=DeepSeek；后台流程停在"找关键步骤 doing"
     ui = FIX["/api/ui"]["ui"]
     assert ui["autoHold"] == OLD_HOLD and ui["page"] == "steps" and ui["flowMax"] == 1 and ui["hStage"] == 1
     assert FIX["/api/state"]["flow"]["current"] == "identify"
     session = {"fsw-open": "1", "fsw-ui": json.dumps(ui, ensure_ascii=False)} if how == "refresh" else None
-    r = page(tmp_path, demo, session=session, api_extra=_fix_api())
+    r = page(tmp_path, demo, session=session, api_extra=_fix_api(), engine=engine)
     assert not r["oldbar"] and not r["old"] and not r["hold"], r
     if how == "new_tab":                         # 新开标签页、后台没在跑任务：从首页开始（老规矩），首页也是新版
         assert r["page"] == "home", r
@@ -142,28 +165,66 @@ def test_deepseek_alone_never_pauses(tmp_path, demo):
     assert r["page"] == "flash" and r["run"] and not r["hold"] and not r["old"] and r["AUTO"] is True, r
 
 
+def _bad(**chg):
+    b = json.loads(json.dumps(FIX["/api/identify"]))
+    for k, kv in chg.items():
+        b["page"]["steps"][int(k[1:])].update(kv)
+    return b
+
+
 @needs_chrome
-def test_real_check_failure_pauses_inside_the_new_run_page(tmp_path, demo):
-    # 码表核对出实际问题（落进条件分支）才停；停下也只在测量页里列步骤，不搬老的整页
-    bad = json.loads(json.dumps(FIX["/api/identify"]))
-    bad["page"]["steps"][2]["struct_ok"] = False
-    r = page(tmp_path, demo, after=_found(bad), api_extra=_fix_api())
-    assert r["page"] == "steps" and r["hold"] and "条件分支" in r["autoHold"], r
-    assert r["run"] and r["steps"] and not r["oldbar"] and not r["old"] and r["AUTO"] is True, r
-    # 核对完点确认：接着自动走，还是测量页
+@pytest.mark.parametrize("engine", ENGINES)
+def test_middle_point_problems_are_dropped_automatically(tmp_path, demo, engine):
+    # 中间的点没过检查（落进分支 / 位置不对）或 AI 自己说在这块板子上什么都不做：码表自动去掉，不停
+    bad = _bad(s2={"struct_ok": False, "chk": [{"level": "fail", "text": "插在只在条件成立时才走的分支里"}]},
+               s4={"loc_ok": False}, s5={"note": "这块板子没有指示灯，这一步实际是空操作"})
+    r = page(tmp_path, demo, after=_found(bad), api_extra=_fix_api(), engine=engine)
+    ps = [bad["page"]["steps"][k]["p"] for k in (2, 4, 5)]
+    assert r["page"] == "flash" and r["run"] and not r["hold"] and r["AUTO"] is True and not r["old"], r
+    assert sorted(r["drop"]) == sorted(ps), r
+    assert "码表自动去掉 3 个用不上的" in r["text"], r
+
+
+@needs_chrome
+@pytest.mark.parametrize("engine", ENGINES)
+def test_start_point_problem_pauses_on_a_new_style_page(tmp_path, demo, engine):
+    # 起点有问题：没它量不了，才停；停下那页是新样子，原因按真正没过的那一条说
+    bad = _bad(s0={"loc_ok": False})
+    r = page(tmp_path, demo, after=_found(bad), api_extra=_fix_api(), engine=engine)
+    assert r["page"] == "steps" and r["hold"] and "起点" in r["autoHold"] and "行号" in r["autoHold"], r
+    assert "条件分支" not in r["autoHold"], r
+    assert r["run"] and r["steps"] and r["reanalyze"] and not r["oldbar"] and not r["old"] and r["AUTO"] is True, r
     r = page(tmp_path, demo, after=_found(bad) + "document.querySelector('[data-goins]').click();await w(200);",
-             api_extra=_fix_api())
+             api_extra=_fix_api(), engine=engine)
     assert r["page"] == "flash" and r["run"] and not r["hold"] and r["AUTO"] is True and not r["oldbar"], r
 
 
 @needs_chrome
-def test_refresh_during_a_real_check_pause_keeps_it(tmp_path, demo):
-    bad = json.loads(json.dumps(FIX["/api/identify"]))
-    bad["page"]["steps"][0]["loc_ok"] = False
+def test_order_reason_is_not_called_a_branch(tmp_path, demo):
+    # 终点先后说不准：原因照实说先后，不说"落进条件分支"
+    pg = FIX["/api/identify"]["page"]
+    end = next(k for k, x in enumerate(pg["steps"]) if x["n"] == pg["measure"].split("→")[-1].strip())
+    bad = _bad(**{f"s{end}": {"struct_ok": False, "chk": [{"level": "fail", "text": "和上一步谁先谁后说不准，这一段可能是负的"}]}})
+    r = page(tmp_path, demo, after=_found(bad), api_extra=_fix_api())
+    assert r["hold"] and "终点" in r["autoHold"] and "说不准" in r["autoHold"] and "条件分支" not in r["autoHold"], r
+
+
+@needs_chrome
+def test_reanalyze_asks_for_a_fresh_read(tmp_path, demo):
+    after = _found(_bad(s0={"loc_ok": False})) + """let __b=null;const __f=window.fetch;window.fetch=(u,o)=>{if(String(u).includes('/api/identify/start'))__b=o.body;return __f(u,o)};
+     document.querySelector('[data-reanalyze]').click();await w(300);autoHold=__b&&JSON.parse(__b).reuse===false?'FRESH':'REUSE:'+__b;"""
+    r = page(tmp_path, demo, after=after, api_extra=_fix_api())
+    assert r["autoHold"] == "FRESH", r
+
+
+@needs_chrome
+@pytest.mark.parametrize("engine", ENGINES)
+def test_refresh_during_a_real_check_pause_keeps_it(tmp_path, demo, engine):
+    bad = _bad(s0={"loc_ok": False})
     ui = {**FIX["/api/ui"]["ui"], "autoHold": "有计时点的位置码表核对没通过（文件或行号不对），请核对", "autoHoldKind": "ident"}
     r = page(tmp_path, demo, session={"fsw-open": "1", "fsw-ui": json.dumps(ui, ensure_ascii=False)},
-             api_extra={**_fix_api(), "/api/identify": bad})
-    assert r["page"] == "steps" and r["hold"] and "位置" in r["autoHold"], r
+             api_extra={**_fix_api(), "/api/identify": bad}, engine=engine)
+    assert r["page"] == "steps" and r["hold"] and "起点" in r["autoHold"] and "行号" in r["autoHold"], r
     assert r["run"] and r["steps"] and not r["oldbar"] and not r["old"], r
 
 
@@ -196,3 +257,16 @@ def test_no_way_back_into_the_old_page_by_page_flow():
     assert "autoStart()" in mf
     snap_keys = re.search(r"return \{v:1,scene,page,(.*?)\}\}", JS).group(1)
     assert "auto:AUTO" in snap_keys and "autoHold" in snap_keys and "autoHoldKind" in snap_keys                  # 刷新接得上
+
+
+def test_from_first_occurrence_is_not_an_uncertain_order():
+    # 10-26 真机：后一步写明和上一步（输出）先后不确定，但段是从上一步的"第一次"（首段输出）量起的：一定在前，不该判失败、停下
+    from fsw import structure
+    chain = [{"n": 1, "role": ""}, {"n": 2, "role": "输出"}, {"n": 3, "role": "", "after": "和上一步谁先谁后不确定"}]
+    steps = [{"id": "P1", "name": "起点", "chain_step": 1, "once": "once"},
+             {"id": "P2", "name": "首段输出", "chain_step": 2, "once": "first"},
+             {"id": "P3", "name": "末段输出", "chain_step": 2, "once": "last"},
+             {"id": "P4", "name": "回复结束", "chain_step": 3, "once": "once"}]
+    by_n = {c["n"]: c for c in chain}
+    assert structure.check_uncertain(steps, [{"from": "P2", "to": "P4"}], by_n) == []
+    assert structure.check_uncertain(steps, [{"from": "P3", "to": "P4"}], by_n)       # 从最后一次量起：照旧算说不准

@@ -977,7 +977,10 @@ def check_uncertain(steps, segments, by_n):
         # 两步都标了最后结果（比如结束消息和放空，说不准谁先）。放空和它引起的收尾这种有因果先后的，只有一头标最后结果，不算
         both_last = ("最后结果" in str(ca.get("role") or "") and "最后结果" in str(cb.get("role") or "")
                      and str(a.get("once") or "").lower() != "first")  # 从第一次出发的不算（第一段一定在前）
-        unsure = _uncertain(cb.get("after")) and isinstance(na, int) and isinstance(nb, int) and na == nb - 1
+        # 后一步写明和上一步先后不确定：说的是上一步做完（最后一次）和它谁先；从上一步的"第一次"量起一定在前，不算
+        # （10-26 真机：最后结果、全部放完一律从首段输出量起，检查却把"首段输出 → 回复结束"判成先后说不准，停下请人核对）
+        unsure = (_uncertain(cb.get("after")) and isinstance(na, int) and isinstance(nb, int) and na == nb - 1
+                  and str(a.get("once") or "").lower() != "first")
         if not both_last and not unsure:
             continue
         why = "两步都标了最后结果" if both_last else f"流程里写着第 {nb} 步和上一步谁先谁后不确定"

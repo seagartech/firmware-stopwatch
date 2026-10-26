@@ -471,20 +471,31 @@ function autoTick(){if(!AUTO||pop||autoHold)return;
  const go=(key,fn)=>{if(autoBusy===key)return;autoBusy=key;setTimeout(fn,0)};
  if(page==='home'&&hStage===3&&stepsRead===2)return go('steps',()=>{hStage=1;mode='boss';stepsGo()});
  // 停在核对页但其实没有要人核对的（比如刷新前存着"这次用的是 DeepSeek"那种按模型名停下的）：码表自己核对，没问题就接着插点
- if(page==='steps'&&stepsRead===2&&flowMax<2&&!Object.keys(edits).length&&!dropped.size&&!added.length)return go('steps',()=>{if(page==='steps'&&!autoHold)stepsGo()});
+ if(page==='steps'&&stepsRead===2&&flowMax<2&&!Object.keys(edits).length&&[...dropped].every(p=>autoDrop.some(x=>x.p===p))&&!added.length)return go('steps',()=>{if(page==='steps'&&!autoHold)stepsGo()});
  if(page==='flash'&&fl.st===3&&!diffOk)return go('build',()=>{if(!envComp()){autoHold='编译工具还没准备好：装好或在设置里选好后，点「继续」';autoHoldKind='env';envBack='flash';pop='env';render();return}diffOk=true;if(realFlash())fswPost('/api/fsw/run',{from:'build'});else flRun(2,4);render()});
  if(page==='flash'&&fl.st===2)return go('collect',()=>{justFlashed=true;page='collect';colStart();render();window.scrollTo(0,0)});
  if(page==='collect'&&col.st===2)return go('report',()=>setTimeout(()=>{if(!AUTO||page!=='collect'||col.st!==2)return;AUTO=false;page='report';mode='boss';render();window.scrollTo(0,0)},1500));
 }
 // 找完关键步骤要不要停下请人看：只看码表自己核对出的实际问题（起终点没找到、位置不对、落进条件分支）。
 // 用的是哪个大模型不算理由（决策 181；10-26 又遇到：DeepSeek 找完就停、显示老的整页核对，用户看到的就是"老版本"）
+// 码表核对出问题的点（10-26 用户：看不懂代码，停下来让人核对不行）：起点、终点有问题才停（没它量不了这条线）；
+// 中间的点自动去掉、照常往下走（少一个点只是少分一段，结论不会错）。AI 自己说明在这块板子上什么都不做的点也去掉。
+// 每个点的原因按它自己没通过的那一条说，不再一律说"落进条件分支或循环里"
+const NOOP=/空操作|空实现|什么都不做|不做任何事|量不出任何/;
+function identBad(){const P=REAL&&IDENT&&IDENT.page;if(!P)return [];const st=P.steps||[],endN=String(P.measure||'').split('→').pop().trim();
+ return st.filter(x=>!dropped.has(x.p)&&!edits[x.p]).map(x=>{const key=x.line==='start'||x.line==='end'||x===st[0]||(!!endN&&x.n===endN),f=(x.chk||[]).find(c=>c.level==='fail');
+  const why=x.loc_ok===false?'位置码表核对没通过（这个文件里找不到这一行，或行号对不上）':x.struct_ok===false?(f?f.text:'码表结构检查没通过'):!key&&NOOP.test(String(x.note||''))?'AI 自己说明这一步在这块板子上什么都不做，量出来没有意义':'';
+  return why?{p:x.p,n:x.n,why,key}:null}).filter(Boolean)}
 function identHold(){const P=REAL&&IDENT&&IDENT.page;if(!P)return '';
- return P.warn?'起点或终点没在代码里找到，请核对后手动补上':(P.steps||[]).some(x=>x.loc_ok===false)?'有计时点的位置码表核对没通过（文件或行号不对），请核对':(P.steps||[]).some(x=>x.struct_ok===false)?'有计时点插下去会落进条件分支或循环里（只在条件成立时才记到），码表结构检查没通过，请核对':''}
-function stepsGo(){const bad=identHold();if(bad){autoHold=bad;autoHoldKind='ident';page='steps';render();window.scrollTo(0,0);return}
+ if(P.warn)return '这次要测的起点或终点没在代码里找到，码表没法自己补上';
+ const k=identBad().find(x=>x.key);return k?`「${k.n}」是这次要测的${k.n===String(P.measure||'').split('→').pop().trim()?'终点':'起点'}，${k.why.replace(/[。，]?请核对.*$/,'')}。没有它这条线量不了，码表没法自己绕开`:''}
+let autoDrop=[];  // 码表自动去掉的点 [{p,n,why}]：测量页"找关键步骤"那一行写明
+function stepsGo(){const off=identBad().filter(x=>!x.key);off.forEach(x=>dropped.add(x.p));autoDrop=autoDrop.filter(x=>dropped.has(x.p)).concat(off.map(({p,n,why})=>({p,n,why})));
+ const bad=identHold();if(bad){autoHold=bad;autoHoldKind='ident';page='steps';render();window.scrollTo(0,0);return}
  page='flash';flashVar='b';flStop();flNoDev=false;if(realFlash()){fswInsert()}else{fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1)}render();window.scrollTo(0,0)}
 function autoStart(){if(REAL&&!REAL.chip){hBoardNeed=true;render();const b=document.getElementById('h-boardq');b&&b.focus();return}
  if(REAL&&!envKey()){pop='env';render();return}
- hSay=WHOLE;AUTO=true;autoHold='';autoBusy='';autoT0=Date.now();flowReset();flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render()}
+ hSay=WHOLE;AUTO=true;autoHold='';autoDrop=[];autoBusy='';autoT0=Date.now();flowReset();flow='first';clearInterval(readT);readT=null;stepsRead=0;alsoFace=true;dropped=new Set();edits={};added=[];flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';onDev='orig';hStage=3;readStart();render()}
 // 测量页（决策 158，原型 ②）：点了「开始测量」就在这一页走到底；要人操作时大字提示，出问题才回到原来的页面让人处理
 // 10-26 用户：所有界面都显示新版本。一次测量（flow 'first'）从找关键步骤到多轮实测，每一页都画成测量页：
 // 不再看网页内存里的"自动执行"开关（停下请人核对、刷新网页、点「查看并修改计时点位置」都会丢掉它，丢了就退回老的一页一页界面）；
@@ -499,12 +510,12 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  const L=[['找关键步骤','auto',150],['插入计时点','auto',90],['编译、烧录','auto',60],['试测：校验计时点','hum',60],[`多轮实测：${AUTO_ROUNDS} 轮`,'hum',AUTO_ROUNDS*15],['生成分析报告','auto',90]];
  if(at!==runPrev){runPrev=at;runS0=Date.now()}
  runLeft=()=>L.slice(at+1).reduce((a,x)=>a+x[2],0)+Math.max(30,L[at][2]-(Date.now()-runS0)/1000);const left=runLeft();
- const P=REAL&&IDENT&&IDENT.page,n=P?(P.steps||[]).length:0;
- const done=i=>i===0&&P?`<div class="note">${htmlEsc(P.measure||'')}；${n} 个关键步骤，位置已逐个核对</div>`:i===3?`<div class="note">计时点收到，顺序校验通过</div>`:'';
- const tl=L.map((x,i)=>{const c=i<at?'done':i===at?(col.st===4&&i===4?'err':'doing'):'wait';
+ const P=REAL&&IDENT&&IDENT.page,n=P?(P.steps||[]).length:0,AD=autoDrop.filter(x=>dropped.has(x.p));
+ const done=i=>i===0&&P?`<div class="note">${htmlEsc(P.measure||'')}；${n-AD.length} 个关键步骤，位置已逐个核对${AD.length?`；码表自动去掉 ${AD.length} 个用不上的：${AD.map(x=>`<span title="${htmlEsc(x.why)}">${htmlEsc(x.n)}</span>`).join('、')}`:''}</div>`:i===3?`<div class="note">计时点收到，顺序校验通过</div>`:'';
+ const tl=L.map((x,i)=>{const c=i<at?'done':i===at?((col.st===4&&i===4)||(i===0&&page==='steps'&&autoHold)?'err':'doing'):'wait';
   return `<li class="${c}"><span class="tdot"></span><div>${x[0]}<span class="who ${x[1]}">${x[1]==='hum'?'人工操作':'自动执行'}</span>${c==='done'?done(i):''}</div><span class="note">${c==='done'?'✓':'约 '+(x[2]>=60?Math.round(x[2]/60)+' 分钟':x[2]+' 秒')}</span></li>`}).join('');
  let now;const holdBox=autoHold?`<div class="why" style="border-left-color:var(--warn)"><b>自动执行在这里停下：</b>${htmlEsc(autoHold)}</div>`:'';
- if(page==='steps'&&stepsRead===2)now=runReview(holdBox);  // 码表核对出问题、或校验没过回来改位置：只列要看的步骤和确认按钮，确认后接着自动走
+ if(page==='steps'&&stepsRead===2)now=runReview();  // 码表核对出问题、或校验没过回来改位置：只列要看的步骤和确认按钮，确认后接着自动走
  else if(page==='home'&&stepsRead===3)now=`<section class="panel">${modalHTML().replace(' id="dlg-t"','')}</section>`;  // 没找完：重试在这里
  else if(page==='flash'&&fl.st===5&&fl.err!=='try')now=flErr();  // 编译、烧录、插点出错：错误和重试按钮放在测量页里
  else if(page==='flash'&&fl.st===0)now=`<div class="bigask"><span class="lab">接着做</span><b>插入计时点、编译、烧录</b><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-goins="1">插入计时点</button></div></div>`;
@@ -523,11 +534,16 @@ function runPage(){runTick();const at=runAt(),used=autoT0?(Date.now()-autoT0)/10
  ${now}<section class="panel"><h2>执行进度</h2><ul class="runtl">${tl}</ul></section>
  <p class="note">计时点变更明细、关键步骤位置在报告「技术细节」中查看</p></div>`}
 // 测量页里的核对（10-26）：不再搬老的整页"找关键步骤"（读取状态、关键流程地图、模型准确率提醒），只放停下的原因、码表检查结果、步骤清单和确认
-function runReview(holdBox){if(stepsRead===2)prepKick();const n=live().length,ch=dropped.size||Object.keys(edits).length||added.length;
- const warn=REAL&&IDENT&&IDENT.page&&IDENT.page.warn?`<div class="why" style="border-left-color:var(--bad)">${htmlEsc(IDENT.page.warn)}</div>`:'';
- const go=flowMax>=2&&!ch?`<span class="note">步骤没改过，上次插好的计时点还在。改了步骤才需要重新插。</span><button class="btn pri" data-go="flash" data-keepflow="1">不改，接着测</button>`
-  :`<span class="note">确认后，码表马上把 ${n} 个计时点插进它复制的那份代码${ch?'；你的删除、修改、添加都会记下来':''}。${prepNote()}</span><button class="btn pri" data-goins="1">确认，插入计时点</button>`;
- return `${holdBox||'<div class="why" style="border-left-color:var(--warn)"><b>核对关键步骤</b></div>'}${warn}${chkBox()}${stepsA()}<section class="panel"><div class="acts" style="justify-content:space-between;align-items:center;margin:0">${go}</div></section>`}
+function runReview(){if(stepsRead===2)prepKick();const rows=live(),all=allRows(),bad=new Map(identBad().map(x=>[x.p,x]));
+ const one=(x,i)=>{const b=bad.get(x.p),off=dropped.has(x.p);
+  return `<li class="${off?'wait':b?'err':'done'}"><span class="tdot"></span><div>${off?`<s>${htmlEsc(x.n)}</s>`:htmlEsc(x.n)}${edits[x.p]?' <span class="chip c-gray">你改过位置</span>':''}
+   <div class="note"><span class="code">${htmlEsc(x.f||'')}</span> ${lnTxt(x.l)}${b&&!off?`<br><span style="color:var(--bad)">${htmlEsc(b.why)}</span>`:''}${off?' · 不插计时点':''}</div>${editP===x.p?editBox(x):''}</div>
+   <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${off?`<button class="pill" data-undel="${x.p}">恢复</button>`:`<button class="pill" data-editp="${x.p}">修改位置</button><button class="pill" data-del="${x.p}">删除</button>`}</span></li>`};
+ const why=autoHold||'步骤改过，确认后重新插计时点';
+ return `<div class="bigask"><span class="lab">自动执行在这里停下 · 需要你决定</span><b>${htmlEsc(why)}</b>
+  <span class="note">可以在下面改这个点的位置后点「确认，插入计时点」；或者点「重新分析」，让 ${usedLLM()} 重新读一遍代码。${prepNote()}</span>
+  <div class="acts" style="margin:8px 0 0"><button class="btn pri" data-goins="1">确认，插入计时点</button><button class="btn" data-reanalyze="1">重新分析</button></div></div>
+ <section class="panel"><h2>计时点（${rows.length} 个）</h2><ul class="runtl">${all.map(one).join('')}</ul></section>`}
 function autoStop(){AUTO=false;autoHold='';clearInterval(runT);runT=null;flow=null;flowReset();
  if(page==='collect')post('/api/collect/stop',{}).catch(()=>{});
  if(page==='flash'){clearInterval(fswT);fswT=null;post('/api/fsw/stop',{}).catch(()=>{});fl.st=0}
@@ -853,8 +869,9 @@ function identApply(j){IDENT=j;readSec=j.state==='running'&&j.started?Math.max(0
  if(j.state==='failed'){clearInterval(readT);readT=null;stepsRead=3;render();return}
  if(runView()){render();return}
  const b=document.getElementById('readbox');if(b)morphHTML(b,readBox())}
+let freshNext=false;  // 「重新分析」：这一次不沿用上次找的结果，让大模型重新读
 async function identStart(retry){clearInterval(readT);stepsRead=1;readSec=0;readFound=0;IDENT=null;if(bgSrc!==hSrc)bgStart();
- const r=await fetch(retry?'/api/identify/retry':'/api/identify/start',{method:'POST',headers:{'Content-Type':'application/json'},body:retry?'{}':JSON.stringify({work:REAL.work,what:hSay,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint,chip:CHIP(),reuse:reuseLast})});
+ const r=await fetch(retry?'/api/identify/retry':'/api/identify/start',{method:'POST',headers:{'Content-Type':'application/json'},body:retry?'{}':JSON.stringify({work:REAL.work,what:hSay,project_dir:REAL.project_dir,fingerprint:REAL.fingerprint,chip:CHIP(),reuse:reuseLast&&!freshNext})});freshNext=false;
  const j=await r.json();if(!r.ok){IDENT={state:'failed',kind:'start',message:j.detail,found:[]};stepsRead=3;render();return}
  identApply(j);if(stepsRead===1)readT=setInterval(async()=>{try{identApply(await (await fetch('/api/identify')).json())}catch(e){}},1000)}
 function readStart(){if(REAL&&REAL.work)return identStart();clearInterval(readT);stepsRead=1;readSec=0;readFound=0;if(bgSrc!==hSrc)bgStart();
@@ -1561,7 +1578,7 @@ function canViewNear(p){const L=flow==='retest'?['retest','steps','flash','colle
 window.addEventListener('popstate',()=>{if(booting)return;let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}if(!PAGES.some(p=>p.id===h)||h===page)return;
  navPop=true;pop=null;if(hStage>=2)hStage=1;page=canView(h)?h:canViewNear(h);render();window.scrollTo(0,0)});
 function uiSnap(){const ed={};for(const p of Object.keys(edits)){const x=[...(STEPS||[]),...added].find(r=>r.p===p);if(x)ed[p]=[x.f,x.l]}
- return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:'',auto:AUTO,autoHold,autoHoldKind,autoT0}}
+ return {v:1,scene,page,mode,flow,flowMax,hStage:hStage>=4?1:hStage,hSrc,hSay,pName,hBoardQ,REAL,bgSrc,alsoFace,dropped:[...dropped],added,ed,mapSel,diffOk,flashVar,colVar,adv:ADV&&ADV.started||null,rtCase,remeasure,last:page==='home'?LASTP:'',auto:AUTO,autoHold,autoHoldKind,autoT0,autoDrop}}
 let uiLast='',uiT=null;
 const uiSend=s=>fetch('/api/ui?key='+encodeURIComponent(DEMO),{method:'POST',headers:{'Content-Type':'application/json'},body:s}).catch(()=>{});
 function uiSave(){let s;try{s=JSON.stringify(uiSnap())}catch(e){return}if(s===uiLast)return;uiLast=s;try{sessionStorage.setItem('fsw-ui',s)}catch(e){}  // 这个标签页自己也存一份：别的标签页开了新的一轮，这里刷新也不丢
@@ -1589,7 +1606,7 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  scene=u.scene;applyScene();mode=u.mode||'boss';flow=u.flow||null;flowMax=u.flowMax||0;hStage=u.hStage||0;hSrc=u.hSrc||'';hSay=u.hSay||'';pName=u.pName||pName;hBoardQ=u.hBoardQ||'';
  REAL=u.REAL||null;if(REAL&&!REAL.ai)REAL.ai=[];hScan=REAL?2:0;bgSrc=u.bgSrc||'';mapSel=u.mapSel||mapSel;flashVar=u.flashVar||flashVar;colVar=u.colVar||colVar;rtCase=u.rtCase||rtCase;remeasure=!!u.remeasure;
  // 测量页接着显示、接着自动走（10-26）：存过的照存的；老的存档没有这一项时，第一次测（flow first）就是测量页流程
- AUTO=flow==='first'&&(u.auto===undefined?true:!!u.auto);autoHold=AUTO?String(u.autoHold||''):'';autoHoldKind=autoHold?String(u.autoHoldKind||''):'';autoT0=u.autoT0||Date.now();autoBusy='';
+ AUTO=flow==='first'&&(u.auto===undefined?true:!!u.auto);autoHold=AUTO?String(u.autoHold||''):'';autoHoldKind=autoHold?String(u.autoHoldKind||''):'';autoT0=u.autoT0||Date.now();autoBusy='';autoDrop=Array.isArray(u.autoDrop)?u.autoDrop:[];
  // 找完关键步骤那种停下（含老存档里按模型名停下的"这次用的是 DeepSeek……"）不照搬：接上后按码表自己的核对重新算，没问题就接着走（10-26）
  if(autoHoldKind==='ident'||(!autoHoldKind&&/^这次用的是 DeepSeek/.test(autoHold))){autoHold='';autoHoldKind=''}
  const keep=()=>{dropped=new Set(u.dropped||[]);added=u.added||[];alsoFace=u.alsoFace===undefined?true:u.alsoFace;
@@ -1646,6 +1663,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-cdskip]')){clearInterval(cdT);cdT=null;cd=0;hStage=4;render();return}
   if(e.target.closest('[data-mnext]')){clearInterval(cdT);cdT=null;cd=0;hStage=1;page='steps';mode='boss';render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-goins]')&&flow==='first'){autoHold='';autoBusy='';AUTO=true}  // 核对完确认插入：自动执行接着往下走
+  if(e.target.closest('[data-reanalyze]')){freshNext=true;autoStart();window.scrollTo(0,0);return}
   if(e.target.closest('[data-autoresume]')){AUTO=true;autoHold='';autoBusy='';render();return}
   if(e.target.closest('[data-goins]')&&realFlash()){page='flash';flashVar='b';flStop();flNoDev=false;fswInsert();render();window.scrollTo(0,0);return}
   if(e.target.closest('[data-goins]')){page='flash';flashVar='b';flStop();fl={st:0,step:0,pct:0,log:''};diffOk=false;flNoDev=FAIL==='nodev';diffOpen=new Set();flRun(0,1);render();window.scrollTo(0,0);return}
