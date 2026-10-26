@@ -1,0 +1,2070 @@
+{
+  "ok": true,
+  "category": "语音对话",
+  "summary": "这一轮从设备检测到人说完话起，到扬声器把回复的最后一段声音放完、设备切回聆听为止，链上一共 19 个计时点（起点 1 个、上行音频 3 个、下行与播放 8 个、收尾 2 个，另有显示类旁支）。中间有大段在设备外：语音识别、大模型生成回复、语音合成都由服务器完成，设备只负责上行音频和播放。要注意两点：一是 m5stack/core-s3 上字幕被主动隐藏，识别文字和回复文字用户都看不见，用户只能听到声音；二是官方板级代码没有定义 LED，'眼睛'屏幕才是用户能看到的唯一反馈，回复开始时眼睛从聆听态切到说话态，但没有明显的'第一下'视觉事件。",
+  "start_found": true,
+  "end_found": true,
+  "missing": "",
+  "start": {
+    "name": "说话结束",
+    "note": "这一句人刚说完，设备靠 VAD 判定静音，比真正最后一个字晚约几十毫秒；这段是设备内处理，不含上传和服务器",
+    "late": "false"
+  },
+  "main": {
+    "name": "语音问答这条",
+    "end": "声音放完"
+  },
+  "side": {
+    "name": "眼睛表情这条",
+    "end": "切到说话态",
+    "found": "设备状态切到说话时，眼睛渲染循环在下一帧才把眼睛从聆听态换成说话态（约一帧周期后），而对比文字和字幕的变化先发生。",
+    "why": "用户能看到的反馈只有眼睛屏幕，状态切换后眼睛晚多少才变，是用户对'反应快慢'的直接感受。"
+  },
+  "steps": [
+    {
+      "id": "P1",
+      "name": "说话结束",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "line": 482,
+      "func": "HandleVoiceResult",
+      "where": "before",
+      "once": "once",
+      "line_of": "start",
+      "sure": "高",
+      "why": "AFE 把内部状态从'在说话'改成'没说话'，就是设备认为人这一句说完了的那一刻。",
+      "doubt": "语音帧经 AFE 有几十毫秒的管道延迟，起点比人真正的最后一个字略晚。",
+      "code": "is_speaking_ = false;",
+      "loc_ok": true,
+      "always": true,
+      "felt": "last",
+      "kind": "声音",
+      "chain_step": 1,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P6",
+      "name": "上行首包发出",
+      "file": "main/application.cc",
+      "line": 242,
+      "func": "Application::Run",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "高",
+      "why": "主循环第一次把上行音频交给协议层，这是设备侧'开始往服务器送声音'的时刻，之后就是网络和服务器的活。",
+      "doubt": "发送写在 if 条件里，点只能放 if 这一行之前，落在判断之前而不是发送成功后。",
+      "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+      "loc_ok": true,
+      "always": true,
+      "felt": "",
+      "kind": "",
+      "chain_step": 8,
+      "follow": "start",
+      "chk": [
+        {
+          "level": "tip",
+          "kind": "anchor",
+          "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+        }
+      ],
+      "struct_ok": true
+    },
+    {
+      "id": "P7",
+      "name": "上行末包发出",
+      "file": "main/application.cc",
+      "line": 242,
+      "func": "Application::Run",
+      "where": "before",
+      "once": "last",
+      "line_of": "main",
+      "sure": "中",
+      "why": "同一行取最后一次，表示这一轮最后一批麦克风音频交出去，之后设备只等服务器回话。",
+      "doubt": "Run 里的发送循环是按事件位触发、一次可能发多包；'最后一包'依赖这一轮最后一次发送事件，若发送失败会丢弃剩余包，取到的可能不是真正的末包。",
+      "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+      "loc_ok": true,
+      "always": true,
+      "felt": "",
+      "kind": "",
+      "chain_step": 8,
+      "follow": "start",
+      "chk": [
+        {
+          "level": "tip",
+          "kind": "anchor",
+          "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+        }
+      ],
+      "struct_ok": true
+    },
+    {
+      "id": "P8",
+      "name": "封帧写入网络",
+      "file": "main/protocols/websocket_protocol.cc",
+      "line": 50,
+      "func": "WebsocketProtocol::SendAudio",
+      "where": "before",
+      "once": "last",
+      "line_of": "side",
+      "sure": "中",
+      "why": "真正的网络发送语句，取最后一次，量到'声音确实离开设备'；和上行末包之差就是协议封装的开销。",
+      "doubt": "只有 websocket 版本等于 3 才走这一行；版本非 2/3 时会走 52 行那句。设备是否用 websocket 取决于 OTA 下发的配置，若是 MQTT 协议则整条发送路径不同，此时这一步不成立。",
+      "code": "return websocket_->Send(serialized.data(), serialized.size(), true);",
+      "loc_ok": true,
+      "always": false,
+      "felt": "",
+      "kind": "",
+      "chain_step": 9,
+      "follow": "start",
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P9",
+      "name": "首个结果到达",
+      "file": "main/protocols/websocket_protocol.cc",
+      "line": 128,
+      "func": "WebsocketProtocol::OpenAudioChannel 里 websocket_->OnData 的 binary 分支",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "高",
+      "why": "服务器回来的第一包 TTS 音频被解出来交给应用层，这是设备第一次看见'回复'。",
+      "doubt": "同样只在版本 3 的二进制分支里；而且此时设备可能还没切到说话状态，是否被采用要看下一步。",
+      "code": "on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{",
+      "loc_ok": true,
+      "always": true,
+      "felt": "",
+      "kind": "",
+      "chain_step": 10,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P10",
+      "name": "首包进解码队",
+      "file": "main/application.cc",
+      "line": 556,
+      "func": "Application::InitializeProtocol 的 OnIncomingAudio 回调",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "高",
+      "why": "只有在说话状态下音频才会被收下解码；这里取第一包真正被采用的音频，避免把被丢弃的包算进时延。",
+      "doubt": "条件是 GetDeviceState()==kDeviceStateSpeaking，正常流程里 tts/start 先到才成立；若音频早于 tts/start 到达会被整包丢掉，这一步就不会发生。",
+      "code": "audio_service_.PushPacketToDecodeQueue(std::move(packet));",
+      "loc_ok": true,
+      "always": false,
+      "felt": "",
+      "kind": "",
+      "chain_step": 11,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P11",
+      "name": "识别文字到屏",
+      "file": "main/application.cc",
+      "line": 667,
+      "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（stt 分支的 Schedule lambda）",
+      "where": "before",
+      "once": "once",
+      "line_of": "main",
+      "sure": "中",
+      "why": "服务器返回识别结果后设备第一次处理它，是'服务器听懂了吗'这一段的结束点。",
+      "doubt": "这一步与音频包走的是不同队列的调度任务，实际先后只能按消息语义判断。而且本机 DemoDisplay 把字幕藏掉了（示例显示逻辑），用户看不到这段文字，这个点只用于计时，不是用户能感觉到的结果。",
+      "code": "display->SetChatMessage(\"user\", message.c_str());",
+      "loc_ok": true,
+      "always": false,
+      "felt": "",
+      "kind": "",
+      "chain_step": 12,
+      "chk": [
+        {
+          "level": "tip",
+          "kind": "timing",
+          "text": "「识别文字下行处理」这一段从「首包进解码队」到「识别文字到屏」：两头写在同一个函数 InitializeProtocol 里，但「首包进解码队」在第 554 行交给 OnIncomingAudio 的 lambda 里，「识别文字到屏」在第 665 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+        }
+      ],
+      "struct_ok": true
+    },
+    {
+      "id": "P12",
+      "name": "切到说话状态",
+      "file": "main/application.cc",
+      "line": 627,
+      "func": "InitializeProtocol 的 OnIncomingJson（tts/start 分支）",
+      "where": "before",
+      "once": "once",
+      "line_of": "main",
+      "sure": "中",
+      "why": "收到 tts/start 后设备才允许收音频、开扬声器；这一步是'回复开始'的标志，也是解码能开工的前提。",
+      "doubt": "本轮 tts/start 是否是服务器必发消息未从代码确认；若服务器不发，这一段会缺失。",
+      "code": "SetDeviceState(kDeviceStateSpeaking);",
+      "loc_ok": true,
+      "always": false,
+      "felt": "",
+      "kind": "",
+      "chain_step": 13,
+      "chk": [
+        {
+          "level": "tip",
+          "kind": "timing",
+          "text": "「服务器出回复并通知开始」这一段从「识别文字到屏」到「切到说话状态」：两头写在同一个函数 InitializeProtocol 里，但「识别文字到屏」在第 665 行交给 Schedule 的 lambda 里，「切到说话状态」在第 625 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+        }
+      ],
+      "struct_ok": true
+    },
+    {
+      "id": "P13",
+      "name": "回复文字到屏",
+      "file": "main/application.cc",
+      "line": 651,
+      "func": "InitializeProtocol 的 OnIncomingJson（tts/sentence_start 分支）",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "中",
+      "why": "第一句回复文字下发的时刻，用来量从识别完成到开始回话的服务器耗时。",
+      "doubt": "本机字幕被隐藏（示例显示逻辑），用户看不到；与音频包的先后代码里没有强制顺序。",
+      "code": "display->SetChatMessage(\"assistant\", message.c_str());",
+      "loc_ok": true,
+      "always": false,
+      "felt": "",
+      "kind": "",
+      "chain_step": 14,
+      "chk": [
+        {
+          "level": "tip",
+          "kind": "timing",
+          "text": "「首句回复文字下发」这一段从「切到说话状态」到「回复文字到屏」：两头写在同一个函数 InitializeProtocol 里，但「切到说话状态」在第 625 行交给 Schedule 的 lambda 里，「回复文字到屏」在第 649 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+        }
+      ],
+      "struct_ok": true
+    },
+    {
+      "id": "P14",
+      "name": "音频解码",
+      "file": "main/audio/audio_service.cc",
+      "line": 426,
+      "func": "AudioService::OpusCodecTask",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "高",
+      "why": "收到第一段回复音频后开始解码，量设备侧解码的开销。",
+      "doubt": "解码失败会走 444 行报错分支，正常情况才是这条。",
+      "code": "auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);",
+      "loc_ok": true,
+      "always": true,
+      "felt": "",
+      "kind": "",
+      "chain_step": 15,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P15",
+      "name": "PCM进播放队",
+      "file": "main/audio/audio_service.cc",
+      "line": 453,
+      "func": "AudioService::OpusCodecTask",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "高",
+      "why": "解码好的第一段声音进播放队列等输出任务取走；到这里为止都还没有声音出来。",
+      "doubt": "解码失败或播放代次变化时不入队，正常一轮都满足。",
+      "code": "audio_playback_queue_.push_back(std::move(task));",
+      "loc_ok": true,
+      "always": true,
+      "felt": "",
+      "kind": "",
+      "chain_step": 16,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P16",
+      "name": "开始出声",
+      "file": "main/audio/audio_service.cc",
+      "line": 351,
+      "func": "AudioService::AudioOutputTask",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "高",
+      "why": "第一段 PCM 从这里写进扬声器，这是用户第一次听到回复的时刻。",
+      "doubt": "第一次输出前可能要先开功放（341-345），那段初始化耗时被算进这一段。",
+      "code": "codec_->OutputData(task.pcm);",
+      "loc_ok": true,
+      "always": true,
+      "felt": "first",
+      "kind": "声音",
+      "chain_step": 17,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P17",
+      "name": "最后一声",
+      "file": "main/audio/audio_service.cc",
+      "line": 351,
+      "func": "AudioService::AudioOutputTask",
+      "where": "before",
+      "once": "last",
+      "line_of": "main",
+      "sure": "中",
+      "why": "最后一段 PCM 交给扬声器，回复的声音在硬件缓冲里还会再响一小会儿。",
+      "doubt": "这一句每段都执行，'最后一段'是由码表按先后取最后一次；写入返回不代表最后一声的声压已经结束。",
+      "code": "codec_->OutputData(task.pcm);",
+      "loc_ok": true,
+      "always": true,
+      "felt": "last",
+      "kind": "声音",
+      "chain_step": 17,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P18",
+      "name": "判定已放空",
+      "file": "main/audio/audio_service.cc",
+      "line": 369,
+      "func": "AudioService::AudioOutputTask",
+      "where": "before",
+      "once": "first",
+      "line_of": "main",
+      "sure": "中",
+      "why": "输出任务发现解码队列、播放队列都空且没有在途任务，是'全部放完'这一步的判断支。",
+      "doubt": "解码任务那边的 457 行也会做同一判断，谁先判出来取决于线程调度；这里取输出任务这一处。若上一轮 tts/stop 提前触发了状态切换并清空队列，会从 812 行那条路径通知，这个点就可能不出现。",
+      "code": "notify_drained = MarkPlaybackDrainedLocked();",
+      "loc_ok": true,
+      "always": false,
+      "felt": "",
+      "kind": "",
+      "chain_step": 18,
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P19",
+      "name": "声音放完",
+      "file": "main/audio/audio_service.cc",
+      "line": 374,
+      "func": "AudioService::AudioOutputTask",
+      "where": "before",
+      "once": "every",
+      "line_of": "main",
+      "sure": "中",
+      "why": "确认整轮回复都播完之后才发出放空通知，用户听到的声音到这里结束。",
+      "doubt": "只在上一步判断成立时才走到；它与 tts/stop 切换聆听谁先发生不确定。",
+      "code": "callbacks_.on_playback_drained();",
+      "loc_ok": true,
+      "always": false,
+      "felt": "last",
+      "kind": "声音",
+      "chain_step": 19,
+      "every_why": "done",
+      "chk": [],
+      "struct_ok": true
+    },
+    {
+      "id": "P20",
+      "name": "回到聆听",
+      "file": "main/application.cc",
+      "line": 635,
+      "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/stop 分支的 Schedule lambda）",
+      "where": "before",
+      "once": "once",
+      "line_of": "main",
+      "sure": "中",
+      "why": "服务器发 tts/stop 后设备把状态切回聆听，是这一轮的收尾点，下一轮从这里开始。",
+      "doubt": "本机 listening_mode_ 是 kListeningModeAutoStop，走 else 这一支；切换后语音处理要等播放队列真放空才重新打开（application.cc:1037-1041），所以'切到聆听'不等于立刻能听下一句。",
+      "code": "SetDeviceState(kDeviceStateListening);",
+      "loc_ok": true,
+      "always": false,
+      "felt": "",
+      "kind": "",
+      "chain_step": 20,
+      "chk": [],
+      "struct_ok": true
+    }
+  ],
+  "segments": [
+    {
+      "from": "P1",
+      "to": "P6",
+      "name": "说话结束到上行首包发出",
+      "who": "固件",
+      "outside": false
+    },
+    {
+      "from": "P6",
+      "to": "P7",
+      "name": "上行音频逐包发送",
+      "who": "固件、网络",
+      "outside": false
+    },
+    {
+      "from": "P6",
+      "to": "P9",
+      "name": "语音识别与回复生成",
+      "who": "网络、服务器",
+      "outside": true
+    },
+    {
+      "from": "P9",
+      "to": "P10",
+      "name": "音频包交应用层并排队",
+      "who": "固件",
+      "outside": false
+    },
+    {
+      "from": "P10",
+      "to": "P11",
+      "name": "识别文字下行处理",
+      "who": "固件、网络",
+      "outside": false
+    },
+    {
+      "from": "P11",
+      "to": "P12",
+      "name": "服务器出回复并通知开始",
+      "who": "服务器",
+      "outside": true
+    },
+    {
+      "from": "P12",
+      "to": "P13",
+      "name": "首句回复文字下发",
+      "who": "服务器、网络",
+      "outside": true
+    },
+    {
+      "from": "P13",
+      "to": "P14",
+      "name": "解码线程取包",
+      "who": "固件",
+      "outside": false
+    },
+    {
+      "from": "P14",
+      "to": "P15",
+      "name": "Opus 解码与重采样",
+      "who": "固件",
+      "outside": false
+    },
+    {
+      "from": "P15",
+      "to": "P16",
+      "name": "等输出任务并开功放",
+      "who": "固件、硬件",
+      "outside": false
+    },
+    {
+      "from": "P16",
+      "to": "P17",
+      "name": "整段回复持续播放",
+      "who": "固件、硬件",
+      "outside": false
+    },
+    {
+      "from": "P16",
+      "to": "P18",
+      "name": "写完后确认队列状态",
+      "who": "固件、硬件",
+      "outside": false
+    },
+    {
+      "from": "P16",
+      "to": "P19",
+      "name": "放空判断到通知",
+      "who": "固件",
+      "outside": false
+    },
+    {
+      "from": "P16",
+      "to": "P20",
+      "name": "服务器停止消息到设备收尾",
+      "who": "网络、服务器、固件",
+      "outside": true
+    }
+  ],
+  "side_from": "P12",
+  "side_segments": [
+    {
+      "from": "P12",
+      "to": "P21",
+      "name": "状态切换后眼睛换到说话态",
+      "who": "固件、硬件",
+      "outside": false
+    },
+    {
+      "from": "P7",
+      "to": "P8",
+      "name": "协议封装与写入网络",
+      "who": "固件、网络",
+      "outside": false,
+      "added": true
+    }
+  ],
+  "act": "先唤醒它、说一句话等它回答完，等下一轮它自己回到聆听、眼睛变回聆听态，再对着它说一句话，然后等它把回复说完。",
+  "outside_note": "服务器：语音识别、生成回复、合成语音",
+  "doubts": [
+    {
+      "text": "本机把字幕整段隐藏，识别文字和回复文字用户都看不见，只有声音能感觉到；如果按'看到文字'来验收会一直失败。",
+      "sure": "高"
+    },
+    {
+      "text": "官方板级代码没有定义 LED（Board::GetLed 返回 NoLed），界面上也没有'第一下'的强提示，用户感觉到的第一个结果只有开始出声。",
+      "sure": "高"
+    },
+    {
+      "text": "tts/stop 切回聆听和本地播放队列放空通知谁先发生不确定，网络慢时 tts/stop 可能先到并把队列清空，导致'放空'那两点落到别的路径上。",
+      "sure": "中"
+    },
+    {
+      "text": "音频包与 JSON 消息走不同线程、不同队列，识别文字与首包音频、句子文字的相对先后只能按语义推断，没有强制顺序。",
+      "sure": "中"
+    },
+    {
+      "text": "发送路径依赖协议选用：只有 websocket 且版本为 3 才走文档里那两句；若实际用 MQTT，上行是 UDP 加密包，发送相关的计时点位置要另找。",
+      "sure": "中"
+    },
+    {
+      "text": "自动聆听下设备切回聆听后要等播放队列真放空才重新打开语音处理，若放空通知和 tts/stop 顺序不巧，下一轮开始聆听会晚一拍，表现为对话有停顿。",
+      "sure": "中"
+    },
+    {
+      "text": "上行音频在发送队列满或编码队列满时会丢最老的帧（audio_service.cc:497-499、589-592），网络拥塞时开头几个字可能没送到服务器。",
+      "sure": "中"
+    },
+    {
+      "text": "第一次出声前要先开功放（audio_service.cc:341-345），冷启动那一下会比后续句子明显慢。",
+      "sure": "低"
+    }
+  ],
+  "chain": [
+    {
+      "n": 1,
+      "what": "AFE 处理后拿到这一帧的 VAD 结果，发现已从说话翻成静音，把内部状态置回未说话",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "line": 482,
+      "code": "is_speaking_ = false;",
+      "func": "HandleVoiceResult",
+      "role": [],
+      "branch": "result->vad_state == VAD_SILENCE && is_speaking_（else if 这一支）",
+      "repeat": "once",
+      "after": ""
+    },
+    {
+      "n": 2,
+      "what": "紧跟着把“已停止说话”的 VAD 回调发出去（AudioService 会置 voice_detected_ 并转给应用层）",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "line": 483,
+      "code": "vad_state_change_callback_(false);",
+      "func": "HandleVoiceResult",
+      "role": [],
+      "branch": "result->vad_state == VAD_SILENCE && is_speaking_，且 vad_state_change_callback_ 已注册",
+      "repeat": "once",
+      "after": "同一支里紧接上一行（afe_audio_engine.cc:481-483），上一行刚把 is_speaking_ 清掉，这一行才通知外部"
+    },
+    {
+      "n": 3,
+      "what": "音频引擎把这一帧 10ms 麦克风数据交给 AFE 输入缓冲，攒够 AFE 需要的块后喂进去让 VAD 判定产出结果",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "line": 268,
+      "code": "afe_iface_->feed(afe_data_, input_buffer_.data());",
+      "func": "AfeAudioEngine::Feed",
+      "role": [],
+      "branch": "afe_data_ != nullptr 且 kAfeActive 置位、input_buffer_ 长度 >= get_feed_chunksize",
+      "repeat": "repeat",
+      "after": "第 1、2 步的 VAD 结果正是 feed 进去的音频经 ProcessingTask 里 fetch_with_delay 取回来的，所以产生该判定结果的这一句排在检测之前；同理本步在第 5 步的 AFE 输出之前"
+    },
+    {
+      "n": 4,
+      "what": "AFE 把处理后的语音按帧推给编码队列（10ms 一块 16000Hz 单声道）",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "line": 494,
+      "code": "output_callback_(std::move(output_buffer_));",
+      "func": "HandleVoiceResult",
+      "role": [],
+      "branch": "output_callback_ 存在且 output_buffer_.size() 正好等于 frame_samples_（第一支）",
+      "repeat": "repeat",
+      "after": "afe_audio_engine.cc:490-502：VAD 判断在 477-485 先做，之后才把这一帧结果拼进 output_buffer_ 并在 492 的 while 里凑够 frame_samples_ 才回调"
+    },
+    {
+      "n": 5,
+      "what": "OnOutput 回调把这一块 PCM 塞进待编码队列（附上时间戳）",
+      "file": "main/audio/audio_service.cc",
+      "line": 88,
+      "code": "PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));",
+      "func": "AudioService::Initialize 里的 audio_engine_->OnOutput 回调",
+      "role": [],
+      "branch": "AfeAudioEngine 每产出一帧输出就调用（kAudioTaskTypeEncodeToSendQueue）",
+      "repeat": "repeat",
+      "after": "afe_audio_engine.cc:494 的回调就是 AudioService::Initialize 里注册的这个 lambda（audio_service.cc:87-89）"
+    },
+    {
+      "n": 6,
+      "what": "PCM 进入编码队列，OpusCodecTask 随后取走编码成 Opus 包",
+      "file": "main/audio/audio_service.cc",
+      "line": 593,
+      "code": "audio_encode_queue_.push_back(std::move(task));",
+      "func": "AudioService::PushTaskToEncodeQueue",
+      "role": [],
+      "branch": "总是走（队列满时先丢最老的一帧，audio_service.cc:589-592）",
+      "repeat": "repeat",
+      "after": "audio_service.cc:87-89 的 lambda 直接调用 PushTaskToEncodeQueue，入队后才由 OpusCodecTask 在 466-488 出队编码"
+    },
+    {
+      "n": 7,
+      "what": "编码好的 Opus 包放进发送队列并触发发送事件",
+      "file": "main/audio/audio_service.cc",
+      "line": 500,
+      "code": "audio_send_queue_.push_back(std::move(packet));",
+      "func": "AudioService::OpusCodecTask",
+      "role": [],
+      "branch": "task.type == kAudioTaskTypeEncodeToSendQueue 且 esp_opus_enc_process 返回 ESP_AUDIO_ERR_OK",
+      "repeat": "repeat",
+      "after": "audio_service.cc:466-488 先在 OpusCodecTask 里出队并编码成功，才在 492 的这一支把包塞进发送队列"
+    },
+    {
+      "n": 8,
+      "what": "主循环取出发送队列里的包，调用协议层 SendAudio 真正把这一包音频发到服务器（本轮每一包音频都走这一句）",
+      "file": "main/application.cc",
+      "line": 242,
+      "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+      "func": "Application::Run",
+      "role": [
+        "上传首包",
+        "上传末包"
+      ],
+      "branch": "MAIN_EVENT_SEND_AUDIO 被置位，且 while 从 PopPacketFromSendQueue() 取到包（SendAudio 返回 false 就丢弃剩余包并 break）",
+      "repeat": "repeat",
+      "after": "audio_service.cc:502-504 入队后通过 on_send_queue_available 置 MAIN_EVENT_SEND_AUDIO（application.cc:79-81），Run 收到位才执行到 240-251 这一段"
+    },
+    {
+      "n": 9,
+      "what": "协议具体实现里真正把音频写进网络：websocket 版本 3 时组 BinaryProtocol3 帧后发送",
+      "file": "main/protocols/websocket_protocol.cc",
+      "line": 50,
+      "code": "return websocket_->Send(serialized.data(), serialized.size(), true);",
+      "func": "WebsocketProtocol::SendAudio",
+      "role": [],
+      "branch": "version_ == 3（协议版本从 settings(\"websocket\") 的 version 读入，websocket_protocol.cc:83-86）；通道已连接",
+      "repeat": "repeat",
+      "after": "application.cc:242 调用的 protocol_->SendAudio 就是这个虚函数实现（InitializeProtocol 里选中的协议实现，application.cc:538-545）"
+    },
+    {
+      "n": 10,
+      "what": "服务器返回本轮第一段 TTS 音频包（二进制），协议层解包后交给应用层的 OnIncomingAudio 回调",
+      "file": "main/protocols/websocket_protocol.cc",
+      "line": 128,
+      "code": "on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{",
+      "func": "WebsocketProtocol::OpenAudioChannel 里 websocket_->OnData 的 binary 分支",
+      "role": [
+        "首个结果"
+      ],
+      "branch": "收到二进制数据（binary == true）且 version_ == 3",
+      "repeat": "repeat",
+      "after": "服务器要等设备的音频（第 8/9 步）和 listen 状态才能出识别结果，所以排在发送之后；这一步是收到的第一个有声结果"
+    },
+    {
+      "n": 11,
+      "what": "应用层把收到的音频包放进解码队列（只有处于说话状态才收）",
+      "file": "main/application.cc",
+      "line": 556,
+      "code": "audio_service_.PushPacketToDecodeQueue(std::move(packet));",
+      "func": "InitializeProtocol 里的 protocol_->OnIncomingAudio 回调",
+      "role": [],
+      "branch": "GetDeviceState() == kDeviceStateSpeaking",
+      "repeat": "repeat",
+      "after": "websocket_protocol.cc:128/118 的 on_incoming_audio_ 就是这里注册的回调（application.cc:554-558）"
+    },
+    {
+      "n": 12,
+      "what": "收到 stt 消息（服务端识别出的用户文字），在 Schedule 的任务里把识别文字交给眼睛显示屏",
+      "file": "main/application.cc",
+      "line": 667,
+      "code": "display->SetChatMessage(\"user\", message.c_str());",
+      "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（stt 分支的 Schedule lambda）",
+      "role": [
+        "首个结果"
+      ],
+      "branch": "type == \"stt\" 且 cJSON_IsString(text)；执行时 DemoDisplay 屏只是回调到 LcdDisplay::SetChatMessage，字幕已被隐藏（示例显示逻辑）",
+      "repeat": "once",
+      "after": "websocket_protocol.cc:149-150 把 JSON 交给 on_incoming_json_，这一句是 Schedule 出去、由 Run 的 MAIN_EVENT_SCHEDULE 分支（application.cc:265-272）真正执行，那时已经收到识别结果"
+    },
+    {
+      "n": 13,
+      "what": "收到 tts/start 消息，在 Schedule 的任务里把设备切到说话状态",
+      "file": "main/application.cc",
+      "line": 627,
+      "code": "SetDeviceState(kDeviceStateSpeaking);",
+      "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/start 分支的 Schedule lambda）",
+      "role": [],
+      "branch": "type == \"tts\" 且 state == \"start\"",
+      "repeat": "once",
+      "after": "识别出文字（第 12 步）之后服务器才开始回话；本句入 Schedule，在 Run 的 MAIN_EVENT_SCHEDULE 分支里执行，状态切换这才让第 11 步的音频能被收下、也才允许第 17 步把声音写出去"
+    },
+    {
+      "n": 14,
+      "what": "收到 tts/sentence_start 消息，在 Schedule 的任务里把这句话的助手文字交给显示",
+      "file": "main/application.cc",
+      "line": 651,
+      "code": "display->SetChatMessage(\"assistant\", message.c_str());",
+      "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/sentence_start 分支的 Schedule lambda）",
+      "role": [],
+      "branch": "type == \"tts\" 且 state == \"sentence_start\" 且 cJSON_IsString(text)",
+      "repeat": "repeat",
+      "after": "服务器在 tts/start 之后逐句下发 sentence_start，本句与第 10 步的音频包同属一句话的内容"
+    },
+    {
+      "n": 15,
+      "what": "编码任务把收到的 Opus 包解码成 PCM（含重采样到输出采样率）",
+      "file": "main/audio/audio_service.cc",
+      "line": 426,
+      "code": "auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);",
+      "func": "AudioService::OpusCodecTask",
+      "role": [],
+      "branch": "!audio_decode_queue_.empty() 且播放队列未满；opus_decoder_ != nullptr",
+      "repeat": "repeat",
+      "after": "application.cc:556 把包 push 进 audio_decode_queue_ 后，OpusCodecTask 才在 394-409 出队并解码"
+    },
+    {
+      "n": 16,
+      "what": "解码成功的 PCM 进播放队列，等输出任务取走",
+      "file": "main/audio/audio_service.cc",
+      "line": 453,
+      "code": "audio_playback_queue_.push_back(std::move(task));",
+      "func": "AudioService::OpusCodecTask",
+      "role": [],
+      "branch": "decoded && generation == playback_generation_ && !service_stopped_",
+      "repeat": "repeat",
+      "after": "audio_service.cc:426 解码成功后重新加锁，在 452-454 这一支里入播放队列"
+    },
+    {
+      "n": 17,
+      "what": "输出任务把这段 PCM 真正写进扬声器（codec Write -> esp_codec_dev_write），本轮每一段声音都走这一句",
+      "file": "main/audio/audio_service.cc",
+      "line": 351,
+      "code": "codec_->OutputData(task.pcm);",
+      "func": "AudioService::AudioOutputTask",
+      "role": [
+        "输出"
+      ],
+      "branch": "播放队列非空、未停机，需要时先 EnableOutput(true)",
+      "repeat": "repeat",
+      "after": "audio_service.cc:335-336 从 audio_playback_queue_ 取出第 16 步压入的任务后才执行；AudioCodec::OutputData 内部是 Write->esp_codec_dev_write（audio_codec.cc:17-18、cores3_audio_codec.cc:255）"
+    },
+    {
+      "n": 18,
+      "what": "输出完这一段后判断播放队列/解码队列都已空、无解码与输出在途，返回“这一步刚放完”",
+      "file": "main/audio/audio_service.cc",
+      "line": 369,
+      "code": "notify_drained = MarkPlaybackDrainedLocked();",
+      "func": "AudioService::AudioOutputTask",
+      "role": [],
+      "branch": "每段输出后都调用；IsPlaybackDrainedLocked() 成立且尚未通知过才返回 true",
+      "repeat": "repeat",
+      "after": "这一段声音在 351 已经写进扬声器并更新了 last_output_time_（353-354），之后才在 368-369 重新加锁判断队列是否已放空"
+    },
+    {
+      "n": 19,
+      "what": "确认播放队列放空，回调通知“全部放完”",
+      "file": "main/audio/audio_service.cc",
+      "line": 374,
+      "code": "callbacks_.on_playback_drained();",
+      "func": "AudioService::AudioOutputTask",
+      "role": [
+        "全部放完"
+      ],
+      "branch": "notify_drained && callbacks_.on_playback_drained",
+      "repeat": "once",
+      "after": "第 18 步 MarkPlaybackDrainedLocked() 返回 true 才走这一支，所以只能在上一次输出之后"
+    },
+    {
+      "n": 20,
+      "what": "收到 tts/stop 消息，在 Schedule 的任务里把设备切回聆听（第二轮结束点：回复全部结束）",
+      "file": "main/application.cc",
+      "line": 635,
+      "code": "SetDeviceState(kDeviceStateListening);",
+      "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/stop 分支的 Schedule lambda）",
+      "role": [
+        "最后结果"
+      ],
+      "branch": "type == \"tts\" 且 state == \"stop\"，GetDeviceState() == kDeviceStateSpeaking，listening_mode_ != kListeningModeManualStop（本机为 kListeningModeAutoStop，所以走 else 这一支）",
+      "repeat": "once",
+      "after": "服务器最后一条 TTS 音频发出后才发 tts/stop，所以排在音频包之后；但它和第 19 步的放空通知谁先到说不准（tts/stop 走 websocket 的 JSON 路径，放空通知来自本地输出任务），两步都标了最后一个结果"
+    }
+  ],
+  "strict": true,
+  "seg_repairs": [
+    "「说话结束」按流程放到第 1 步那一行（main/audio/engines/afe_audio_engine.cc:482，once）",
+    "「识别文字到屏」按流程放到第 12 步那一行（main/application.cc:667，once）",
+    "去掉「眼睛换表情」：第 20 步的点由码表按流程放",
+    "去掉「音频喂入AFE」：这一步在起点之前就一直逐帧、逐包在跑（输入还在不断进来），起点之后它第一次处理的和前后的点不是同一份数据，两点之间量不准、会是负的；前后两点直接连成一段量",
+    "去掉「帧进编码队列」：这一步在起点之前就一直逐帧、逐包在跑（输入还在不断进来），起点之后它第一次处理的和前后的点不是同一份数据，两点之间量不准、会是负的；前后两点直接连成一段量",
+    "去掉「PCM进编码队列」：这一步在起点之前就一直逐帧、逐包在跑（输入还在不断进来），起点之后它第一次处理的和前后的点不是同一份数据，两点之间量不准、会是负的；前后两点直接连成一段量",
+    "去掉「Opus包入发送队」：这一步在起点之前就一直逐帧、逐包在跑（输入还在不断进来），起点之后它第一次处理的和前后的点不是同一份数据，两点之间量不准、会是负的；前后两点直接连成一段量",
+    "「上行首包发出」「上行末包发出」「封帧写入网络」跟着起点记：起点一轮会报好几次（每停一下、每阵杂音都判一次），码表取第一个结果之前的最后一次；这几步在起点和第一个结果之间，每报一次起点就重新记，量的是同一次之后的那一下",
+    "第 9 步在 WebsocketProtocol::SendAudio 里，这只是几种实现中的一种（另有 MqttProtocol），换一种时走不到：它的点改成顺带那条线，从第 8 步调用 SendAudio 的那一句量起；主线用第 8 步",
+    "要测的这条线的段由码表按点的先后连：3 段和模型连的不一样",
+    "「服务器停止消息到设备收尾」改成从「判定已放空」量到「回到聆听」（原来从「声音放完」：两步先后说不准）",
+    "「放空判断到通知」改成从「开始出声」量到「声音放完」（原来从「判定已放空」）：最后结果、全部放完一律从首段输出量起",
+    "「服务器停止消息到设备收尾」改成从「开始出声」量到「回到聆听」（原来从「判定已放空」）：最后结果、全部放完一律从首段输出量起"
+  ],
+  "rules": 3,
+  "warn": null,
+  "seconds": 316.8,
+  "reply": "```json\n{\n  \"category\": \"语音对话\",\n  \"summary\": \"这一轮从设备检测到人说完话起，到扬声器把回复的最后一段声音放完、设备切回聆听为止，链上一共 19 个计时点（起点 1 个、上行音频 3 个、下行与播放 8 个、收尾 2 个，另有显示类旁支）。中间有大段在设备外：语音识别、大模型生成回复、语音合成都由服务器完成，设备只负责上行音频和播放。要注意两点：一是 m5stack/core-s3 上字幕被主动隐藏，识别文字和回复文字用户都看不见，用户只能听到声音；二是官方板级代码没有定义 LED，'眼睛'屏幕才是用户能看到的唯一反馈，回复开始时眼睛从聆听态切到说话态，但没有明显的'第一下'视觉事件。\",\n  \"start_found\": true,\n  \"end_found\": true,\n  \"missing\": \"\",\n  \"start\": {\n    \"name\": \"说话结束\",\n    \"note\": \"这一句人刚说完，设备靠 VAD 判定静音，比真正最后一个字晚约几十毫秒；这段是设备内处理，不含上传和服务器\",\n    \"late\": \"false\"\n  },\n  \"main\": {\n    \"name\": \"语音问答这条\",\n    \"end\": \"声音放完\"\n  },\n  \"side\": {\n    \"name\": \"眼睛表情这条\",\n    \"end\": \"切到说话态\",\n    \"found\": \"设备状态切到说话时，眼睛渲染循环在下一帧才把眼睛从聆听态换成说话态（约一帧周期后），而对比文字和字幕的变化先发生。\",\n    \"why\": \"用户能看到的反馈只有眼睛屏幕，状态切换后眼睛晚多少才变，是用户对'反应快慢'的直接感受。\"\n  },\n  \"steps\": [\n    {\n      \"id\": \"P1\",\n      \"chain_step\": 1,\n      \"name\": \"说话结束\",\n      \"file\": \"main/audio/engines/afe_audio_engine.cc\",\n      \"line\": 482,\n      \"func\": \"AfeAudioEngine::HandleVoiceResult\",\n      \"where\": \"before\",\n      \"once\": \"last\",\n      \"line_of\": \"start\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"last\",\n      \"kind\": \"声音\",\n      \"why\": \"AFE 把内部状态从'在说话'改成'没说话'，就是设备认为人这一句说完了的那一刻。\",\n      \"doubt\": \"语音帧经 AFE 有几十毫秒的管道延迟，起点比人真正的最后一个字略晚。\"\n    },\n    {\n      \"id\": \"P2\",\n      \"chain_step\": 3,\n      \"name\": \"音频喂入AFE\",\n      \"file\": \"main/audio/engines/afe_audio_engine.cc\",\n      \"line\": 268,\n      \"func\": \"AfeAudioEngine::Feed\",\n      \"where\": \"before\",\n      \"once\": \"last\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"麦克风每 10ms 一块喂给 AFE 一次，这是识别出'说完'的那句音频真正进入处理的位置，用来量设备在检测之前的采集与处理排队。\",\n      \"doubt\": \"这个 while 循环每圈执行，取最后一次，表示检测到结束之前最后一个被喂入的块，量出来的是设备内部采集链路延迟。\"\n    },\n    {\n      \"id\": \"P3\",\n      \"chain_step\": 5,\n      \"name\": \"帧进编码队列\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 88,\n      \"func\": \"AudioService::Initialize 里的 OnOutput 回调\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"AFE 凑够一帧 60ms 音频就回调一次，这里开始要把这一帧送去编码上行；取第一帧，量编码流水线的启动。\",\n      \"doubt\": \"该回调每 60ms 一次，首包点放这里只代表'第一帧开始排队'，不代表网络已经发出。\"\n    },\n    {\n      \"id\": \"P4\",\n      \"chain_step\": 6,\n      \"name\": \"PCM进编码队列\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 593,\n      \"func\": \"AudioService::PushTaskToEncodeQueue\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"PCM 真正落进编码队列，编码任务才能取走；取第一次，量上行音频从采集到排队的开销。\",\n      \"doubt\": \"队列满时这里会先丢最老一帧（589-592），但入队本身每帧都执行。\"\n    },\n    {\n      \"id\": \"P5\",\n      \"chain_step\": 7,\n      \"name\": \"Opus包入发送队\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 500,\n      \"func\": \"AudioService::OpusCodecTask\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"编码成功的第一包 Opus 进发送队列，紧接着会通知主循环去发；量编码耗时有多少。\",\n      \"doubt\": \"发送队列满时会先弹掉最老包，但 push 本身每包都执行。\"\n    },\n    {\n      \"id\": \"P6\",\n      \"chain_step\": 8,\n      \"name\": \"上行首包发出\",\n      \"file\": \"main/application.cc\",\n      \"line\": 242,\n      \"func\": \"Application::Run\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"主循环第一次把上行音频交给协议层，这是设备侧'开始往服务器送声音'的时刻，之后就是网络和服务器的活。\",\n      \"doubt\": \"发送写在 if 条件里，点只能放 if 这一行之前，落在判断之前而不是发送成功后。\"\n    },\n    {\n      \"id\": \"P7\",\n      \"chain_step\": 8,\n      \"name\": \"上行末包发出\",\n      \"file\": \"main/application.cc\",\n      \"line\": 242,\n      \"func\": \"Application::Run\",\n      \"where\": \"before\",\n      \"once\": \"last\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"同一行取最后一次，表示这一轮最后一批麦克风音频交出去，之后设备只等服务器回话。\",\n      \"doubt\": \"Run 里的发送循环是按事件位触发、一次可能发多包；'最后一包'依赖这一轮最后一次发送事件，若发送失败会丢弃剩余包，取到的可能不是真正的末包。\"\n    },\n    {\n      \"id\": \"P8\",\n      \"chain_step\": 9,\n      \"name\": \"封帧写入网络\",\n      \"file\": \"main/protocols/websocket_protocol.cc\",\n      \"line\": 50,\n      \"func\": \"WebsocketProtocol::SendAudio\",\n      \"where\": \"before\",\n      \"once\": \"last\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"false\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"真正的网络发送语句，取最后一次，量到'声音确实离开设备'；和上行末包之差就是协议封装的开销。\",\n      \"doubt\": \"只有 websocket 版本等于 3 才走这一行；版本非 2/3 时会走 52 行那句。设备是否用 websocket 取决于 OTA 下发的配置，若是 MQTT 协议则整条发送路径不同，此时这一步不成立。\"\n    },\n    {\n      \"id\": \"P9\",\n      \"chain_step\": 10,\n      \"name\": \"首个结果到达\",\n      \"file\": \"main/protocols/websocket_protocol.cc\",\n      \"line\": 128,\n      \"func\": \"WebsocketProtocol::OpenAudioChannel 的 OnData 回调\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"服务器回来的第一包 TTS 音频被解出来交给应用层，这是设备第一次看见'回复'。\",\n      \"doubt\": \"同样只在版本 3 的二进制分支里；而且此时设备可能还没切到说话状态，是否被采用要看下一步。\"\n    },\n    {\n      \"id\": \"P10\",\n      \"chain_step\": 11,\n      \"name\": \"首包进解码队\",\n      \"file\": \"main/application.cc\",\n      \"line\": 556,\n      \"func\": \"Application::InitializeProtocol 的 OnIncomingAudio 回调\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"false\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"只有在说话状态下音频才会被收下解码；这里取第一包真正被采用的音频，避免把被丢弃的包算进时延。\",\n      \"doubt\": \"条件是 GetDeviceState()==kDeviceStateSpeaking，正常流程里 tts/start 先到才成立；若音频早于 tts/start 到达会被整包丢掉，这一步就不会发生。\"\n    },\n    {\n      \"id\": \"P11\",\n      \"chain_step\": 12,\n      \"name\": \"识别文字到屏\",\n      \"file\": \"main/application.cc\",\n      \"line\": 667,\n      \"func\": \"InitializeProtocol 的 OnIncomingJson（stt 分支）\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"false\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"服务器返回识别结果后设备第一次处理它，是'服务器听懂了吗'这一段的结束点。\",\n      \"doubt\": \"这一步与音频包走的是不同队列的调度任务，实际先后只能按消息语义判断。而且本机 DemoDisplay 把字幕藏掉了（示例显示逻辑），用户看不到这段文字，这个点只用于计时，不是用户能感觉到的结果。\"\n    },\n    {\n      \"id\": \"P12\",\n      \"chain_step\": 13,\n      \"name\": \"切到说话状态\",\n      \"file\": \"main/application.cc\",\n      \"line\": 627,\n      \"func\": \"InitializeProtocol 的 OnIncomingJson（tts/start 分支）\",\n      \"where\": \"before\",\n      \"once\": \"once\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"false\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"收到 tts/start 后设备才允许收音频、开扬声器；这一步是'回复开始'的标志，也是解码能开工的前提。\",\n      \"doubt\": \"本轮 tts/start 是否是服务器必发消息未从代码确认；若服务器不发，这一段会缺失。\"\n    },\n    {\n      \"id\": \"P13\",\n      \"chain_step\": 14,\n      \"name\": \"回复文字到屏\",\n      \"file\": \"main/application.cc\",\n      \"line\": 651,\n      \"func\": \"InitializeProtocol 的 OnIncomingJson（tts/sentence_start 分支）\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"false\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"第一句回复文字下发的时刻，用来量从识别完成到开始回话的服务器耗时。\",\n      \"doubt\": \"本机字幕被隐藏（示例显示逻辑），用户看不到；与音频包的先后代码里没有强制顺序。\"\n    },\n    {\n      \"id\": \"P14\",\n      \"chain_step\": 15,\n      \"name\": \"音频解码\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 426,\n      \"func\": \"AudioService::OpusCodecTask\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"收到第一段回复音频后开始解码，量设备侧解码的开销。\",\n      \"doubt\": \"解码失败会走 444 行报错分支，正常情况才是这条。\"\n    },\n    {\n      \"id\": \"P15\",\n      \"chain_step\": 16,\n      \"name\": \"PCM进播放队\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 453,\n      \"func\": \"AudioService::OpusCodecTask\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"解码好的第一段声音进播放队列等输出任务取走；到这里为止都还没有声音出来。\",\n      \"doubt\": \"解码失败或播放代次变化时不入队，正常一轮都满足。\"\n    },\n    {\n      \"id\": \"P16\",\n      \"chain_step\": 17,\n      \"name\": \"开始出声\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 351,\n      \"func\": \"AudioService::AudioOutputTask\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"main\",\n      \"sure\": \"高\",\n      \"always\": \"true\",\n      \"felt\": \"first\",\n      \"kind\": \"声音\",\n      \"why\": \"第一段 PCM 从这里写进扬声器，这是用户第一次听到回复的时刻。\",\n      \"doubt\": \"第一次输出前可能要先开功放（341-345），那段初始化耗时被算进这一段。\"\n    },\n    {\n      \"id\": \"P17\",\n      \"chain_step\": 17,\n      \"name\": \"最后一声\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 351,\n      \"func\": \"AudioService::AudioOutputTask\",\n      \"where\": \"before\",\n      \"once\": \"last\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"true\",\n      \"felt\": \"last\",\n      \"kind\": \"声音\",\n      \"why\": \"最后一段 PCM 交给扬声器，回复的声音在硬件缓冲里还会再响一小会儿。\",\n      \"doubt\": \"这一句每段都执行，'最后一段'是由码表按先后取最后一次；写入返回不代表最后一声的声压已经结束。\"\n    },\n    {\n      \"id\": \"P18\",\n      \"chain_step\": 18,\n      \"name\": \"判定已放空\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 369,\n      \"func\": \"AudioService::AudioOutputTask\",\n      \"where\": \"before\",\n      \"once\": \"once\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"false\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"输出任务发现解码队列、播放队列都空且没有在途任务，是'全部放完'这一步的判断支。\",\n      \"doubt\": \"解码任务那边的 457 行也会做同一判断，谁先判出来取决于线程调度；这里取输出任务这一处。若上一轮 tts/stop 提前触发了状态切换并清空队列，会从 812 行那条路径通知，这个点就可能不出现。\"\n    },\n    {\n      \"id\": \"P19\",\n      \"chain_step\": 19,\n      \"name\": \"声音放完\",\n      \"file\": \"main/audio/audio_service.cc\",\n      \"line\": 374,\n      \"func\": \"AudioService::AudioOutputTask\",\n      \"where\": \"before\",\n      \"once\": \"once\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"false\",\n      \"felt\": \"last\",\n      \"kind\": \"声音\",\n      \"why\": \"确认整轮回复都播完之后才发出放空通知，用户听到的声音到这里结束。\",\n      \"doubt\": \"只在上一步判断成立时才走到；它与 tts/stop 切换聆听谁先发生不确定。\"\n    },\n    {\n      \"id\": \"P20\",\n      \"chain_step\": 20,\n      \"name\": \"回到聆听\",\n      \"file\": \"main/application.cc\",\n      \"line\": 635,\n      \"func\": \"InitializeProtocol 的 OnIncomingJson（tts/stop 分支）\",\n      \"where\": \"before\",\n      \"once\": \"once\",\n      \"line_of\": \"main\",\n      \"sure\": \"中\",\n      \"always\": \"false\",\n      \"felt\": \"\",\n      \"kind\": \"\",\n      \"why\": \"服务器发 tts/stop 后设备把状态切回聆听，是这一轮的收尾点，下一轮从这里开始。\",\n      \"doubt\": \"本机 listening_mode_ 是 kListeningModeAutoStop，走 else 这一支；切换后语音处理要等播放队列真放空才重新打开（application.cc:1037-1041），所以'切到聆听'不等于立刻能听下一句。\"\n    },\n    {\n      \"id\": \"P21\",\n      \"chain_step\": 20,\n      \"name\": \"眼睛换表情\",\n      \"file\": \"main/boards/m5stack/core-s3/示例显示逻辑\",\n      \"line\": 774,\n      \"func\": \"DemoDisplay 渲染任务\",\n      \"where\": \"before\",\n      \"once\": \"first\",\n      \"line_of\": \"side\",\n      \"sure\": \"中\",\n      \"always\": \"true\",\n      \"felt\": \"last\",\n      \"kind\": \"画面\",\n      \"why\": \"眼睛渲染循环每帧按设备状态设定模式，状态切到说话后下一帧眼睛才从聆听态变成说话态；这是用户唯一看得见的反馈变化。\",\n      \"doubt\": \"这一步不在事件链上，是按'同一件事的生效时刻'补充的；具体哪一帧真正画到屏上还要看渲染锁与帧周期。\"\n    }\n  ],\n  \"segments\": [\n    {\n      \"from\": \"P1\",\n      \"to\": \"P2\",\n      \"name\": \"采集到检测的管道延迟\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P2\",\n      \"to\": \"P3\",\n      \"name\": \"AFE 处理凑帧\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P3\",\n      \"to\": \"P4\",\n      \"name\": \"音频帧入编码队列\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P4\",\n      \"to\": \"P5\",\n      \"name\": \"Opus 编码\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P5\",\n      \"to\": \"P6\",\n      \"name\": \"等待主循环派发\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P6\",\n      \"to\": \"P7\",\n      \"name\": \"上行音频逐包发送\",\n      \"who\": \"固件、网络\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P7\",\n      \"to\": \"P8\",\n      \"name\": \"协议封装与写入网络\",\n      \"who\": \"固件、网络\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P8\",\n      \"to\": \"P9\",\n      \"name\": \"语音识别与回复生成\",\n      \"who\": \"网络、服务器\",\n      \"outside\": true\n    },\n    {\n      \"from\": \"P9\",\n      \"to\": \"P10\",\n      \"name\": \"音频包交应用层并排队\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P10\",\n      \"to\": \"P11\",\n      \"name\": \"识别文字下行处理\",\n      \"who\": \"固件、网络\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P11\",\n      \"to\": \"P12\",\n      \"name\": \"服务器出回复并通知开始\",\n      \"who\": \"服务器\",\n      \"outside\": true\n    },\n    {\n      \"from\": \"P12\",\n      \"to\": \"P13\",\n      \"name\": \"首句回复文字下发\",\n      \"who\": \"服务器、网络\",\n      \"outside\": true\n    },\n    {\n      \"from\": \"P13\",\n      \"to\": \"P14\",\n      \"name\": \"解码线程取包\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P14\",\n      \"to\": \"P15\",\n      \"name\": \"Opus 解码与重采样\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P15\",\n      \"to\": \"P16\",\n      \"name\": \"等输出任务并开功放\",\n      \"who\": \"固件、硬件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P16\",\n      \"to\": \"P17\",\n      \"name\": \"整段回复持续播放\",\n      \"who\": \"固件、硬件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P17\",\n      \"to\": \"P18\",\n      \"name\": \"写完后确认队列状态\",\n      \"who\": \"固件、硬件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P18\",\n      \"to\": \"P19\",\n      \"name\": \"放空判断到通知\",\n      \"who\": \"固件\",\n      \"outside\": false\n    },\n    {\n      \"from\": \"P19\",\n      \"to\": \"P20\",\n      \"name\": \"服务器停止消息到设备收尾\",\n      \"who\": \"网络、服务器、固件\",\n      \"outside\": true\n    }\n  ],\n  \"side_from\": \"P12\",\n  \"side_segments\": [\n    {\n      \"from\": \"P12\",\n      \"to\": \"P21\",\n      \"name\": \"状态切换后眼睛换到说话态\",\n      \"who\": \"固件、硬件\",\n      \"outside\": false\n    }\n  ],\n  \"act\": \"先唤醒它、说一句话等它回答完，等下一轮它自己回到聆听、眼睛变回聆听态，再对着它说一句话，然后等它把回复说完。\",\n  \"outside_note\": \"服务器：语音识别、生成回复、合成语音\",\n  \"doubts\": [\n    {\n      \"text\": \"本机把字幕整段隐藏，识别文字和回复文字用户都看不见，只有声音能感觉到；如果按'看到文字'来验收会一直失败。\",\n      \"sure\": \"高\"\n    },\n    {\n      \"text\": \"官方板级代码没有定义 LED（Board::GetLed 返回 NoLed），界面上也没有'第一下'的强提示，用户感觉到的第一个结果只有开始出声。\",\n      \"sure\": \"高\"\n    },\n    {\n      \"text\": \"tts/stop 切回聆听和本地播放队列放空通知谁先发生不确定，网络慢时 tts/stop 可能先到并把队列清空，导致'放空'那两点落到别的路径上。\",\n      \"sure\": \"中\"\n    },\n    {\n      \"text\": \"音频包与 JSON 消息走不同线程、不同队列，识别文字与首包音频、句子文字的相对先后只能按语义推断，没有强制顺序。\",\n      \"sure\": \"中\"\n    },\n    {\n      \"text\": \"发送路径依赖协议选用：只有 websocket 且版本为 3 才走文档里那两句；若实际用 MQTT，上行是 UDP 加密包，发送相关的计时点位置要另找。\",\n      \"sure\": \"中\"\n    },\n    {\n      \"text\": \"自动聆听下设备切回聆听后要等播放队列真放空才重新打开语音处理，若放空通知和 tts/stop 顺序不巧，下一轮开始聆听会晚一拍，表现为对话有停顿。\",\n      \"sure\": \"中\"\n    },\n    {\n      \"text\": \"上行音频在发送队列满或编码队列满时会丢最老的帧（audio_service.cc:497-499、589-592），网络拥塞时开头几个字可能没送到服务器。\",\n      \"sure\": \"中\"\n    },\n    {\n      \"text\": \"第一次出声前要先开功放（audio_service.cc:341-345），冷启动那一下会比后续句子明显慢。\",\n      \"sure\": \"低\"\n    }\n  ]\n}\n```",
+  "flow": {
+    "trigger": "自动聆听（auto/auto-stop）连续对话的第二轮：回复播完、播放队列放空后设备自己回到聆听，用户再说一句，AFE 的 VAD 由 VAD_SPEECH 翻回 VAD_SILENCE（说话结束）即触发本轮；持续对话里第二轮的音频仍走同一个已打开的音频通道，与第一轮建立通道无关。",
+    "upload": "麦克风上行音频：AFE 输出的 16kHz Opus 帧（每帧 60ms）作为二进制音频包经协议 SendAudio 逐包发给服务器（websocket 走二进制帧，MQTT 走 UDP 加密包）；本轮不含唤醒词音频（只在唤醒那一轮上送）、也没有 listen/stop 这类文本。",
+    "mode": {
+      "what": "自动聆听（auto-stop）：回复播完后设备自己回到聆听，第二轮从说话结束检测开始，不需要按键/触摸",
+      "file": "main/application.cc",
+      "line": 1189,
+      "code": "return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;",
+      "config": "aec_mode_ 在 Application() 里按 CONFIG_USE_DEVICE_AEC/CONFIG_USE_SERVER_AEC 赋值（main/application.cc:27-35）：CONFIG_USE_DEVICE_AEC 默认 n（main/Kconfig.projbuild:996-1006），且其 depends 名单里没有 BOARD_TYPE_M5STACK_CORE_S3，m5stack/core-s3/config.json 的 sdkconfig_append 也没有开启它；CONFIG_USE_SERVER_AEC 默认 n（Kconfig.projbuild:1010-1013）；sdkconfig.defaults / sdkconfig.defaults.esp32s3 均未设置这两项，scripts/build.py:722-729 也只在用户选 device 时才写 y。所以 aec_mode_ = kAecOff，listening_mode_ = kListeningModeAutoStop（application.cc:1183-1185 SetListeningMode 落值，application.h:139 只是默认初值）",
+      "protocol": {
+        "what": "二进制音频通道：WebSocket（带协议版本的二进制帧）或 MQTT 上的 UDP 加密音频通道，二者取其一",
+        "file": "main/application.cc",
+        "line": 538,
+        "code": "if (ota_->HasMqttConfig()) {"
+      }
+    },
+    "detect": {
+      "kind": "语音活动检测（VAD）翻转：AFE 判定由 VAD_SPEECH 回到 VAD_SILENCE，即设备察觉人说完",
+      "found": true,
+      "looked": ""
+    },
+    "chain": [
+      {
+        "n": 1,
+        "what": "AFE 处理后拿到这一帧的 VAD 结果，发现已从说话翻成静音，把内部状态置回未说话",
+        "file": "main/audio/engines/afe_audio_engine.cc",
+        "line": 482,
+        "code": "is_speaking_ = false;",
+        "func": "HandleVoiceResult",
+        "role": [],
+        "branch": "result->vad_state == VAD_SILENCE && is_speaking_（else if 这一支）",
+        "repeat": "once",
+        "after": ""
+      },
+      {
+        "n": 2,
+        "what": "紧跟着把“已停止说话”的 VAD 回调发出去（AudioService 会置 voice_detected_ 并转给应用层）",
+        "file": "main/audio/engines/afe_audio_engine.cc",
+        "line": 483,
+        "code": "vad_state_change_callback_(false);",
+        "func": "HandleVoiceResult",
+        "role": [],
+        "branch": "result->vad_state == VAD_SILENCE && is_speaking_，且 vad_state_change_callback_ 已注册",
+        "repeat": "once",
+        "after": "同一支里紧接上一行（afe_audio_engine.cc:481-483），上一行刚把 is_speaking_ 清掉，这一行才通知外部"
+      },
+      {
+        "n": 3,
+        "what": "音频引擎把这一帧 10ms 麦克风数据交给 AFE 输入缓冲，攒够 AFE 需要的块后喂进去让 VAD 判定产出结果",
+        "file": "main/audio/engines/afe_audio_engine.cc",
+        "line": 268,
+        "code": "afe_iface_->feed(afe_data_, input_buffer_.data());",
+        "func": "AfeAudioEngine::Feed",
+        "role": [],
+        "branch": "afe_data_ != nullptr 且 kAfeActive 置位、input_buffer_ 长度 >= get_feed_chunksize",
+        "repeat": "repeat",
+        "after": "第 1、2 步的 VAD 结果正是 feed 进去的音频经 ProcessingTask 里 fetch_with_delay 取回来的，所以产生该判定结果的这一句排在检测之前；同理本步在第 5 步的 AFE 输出之前"
+      },
+      {
+        "n": 4,
+        "what": "AFE 把处理后的语音按帧推给编码队列（10ms 一块 16000Hz 单声道）",
+        "file": "main/audio/engines/afe_audio_engine.cc",
+        "line": 494,
+        "code": "output_callback_(std::move(output_buffer_));",
+        "func": "HandleVoiceResult",
+        "role": [],
+        "branch": "output_callback_ 存在且 output_buffer_.size() 正好等于 frame_samples_（第一支）",
+        "repeat": "repeat",
+        "after": "afe_audio_engine.cc:490-502：VAD 判断在 477-485 先做，之后才把这一帧结果拼进 output_buffer_ 并在 492 的 while 里凑够 frame_samples_ 才回调"
+      },
+      {
+        "n": 5,
+        "what": "OnOutput 回调把这一块 PCM 塞进待编码队列（附上时间戳）",
+        "file": "main/audio/audio_service.cc",
+        "line": 88,
+        "code": "PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));",
+        "func": "AudioService::Initialize 里的 audio_engine_->OnOutput 回调",
+        "role": [],
+        "branch": "AfeAudioEngine 每产出一帧输出就调用（kAudioTaskTypeEncodeToSendQueue）",
+        "repeat": "repeat",
+        "after": "afe_audio_engine.cc:494 的回调就是 AudioService::Initialize 里注册的这个 lambda（audio_service.cc:87-89）"
+      },
+      {
+        "n": 6,
+        "what": "PCM 进入编码队列，OpusCodecTask 随后取走编码成 Opus 包",
+        "file": "main/audio/audio_service.cc",
+        "line": 593,
+        "code": "audio_encode_queue_.push_back(std::move(task));",
+        "func": "AudioService::PushTaskToEncodeQueue",
+        "role": [],
+        "branch": "总是走（队列满时先丢最老的一帧，audio_service.cc:589-592）",
+        "repeat": "repeat",
+        "after": "audio_service.cc:87-89 的 lambda 直接调用 PushTaskToEncodeQueue，入队后才由 OpusCodecTask 在 466-488 出队编码"
+      },
+      {
+        "n": 7,
+        "what": "编码好的 Opus 包放进发送队列并触发发送事件",
+        "file": "main/audio/audio_service.cc",
+        "line": 500,
+        "code": "audio_send_queue_.push_back(std::move(packet));",
+        "func": "AudioService::OpusCodecTask",
+        "role": [],
+        "branch": "task.type == kAudioTaskTypeEncodeToSendQueue 且 esp_opus_enc_process 返回 ESP_AUDIO_ERR_OK",
+        "repeat": "repeat",
+        "after": "audio_service.cc:466-488 先在 OpusCodecTask 里出队并编码成功，才在 492 的这一支把包塞进发送队列"
+      },
+      {
+        "n": 8,
+        "what": "主循环取出发送队列里的包，调用协议层 SendAudio 真正把这一包音频发到服务器（本轮每一包音频都走这一句）",
+        "file": "main/application.cc",
+        "line": 242,
+        "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+        "func": "Application::Run",
+        "role": [
+          "上传首包",
+          "上传末包"
+        ],
+        "branch": "MAIN_EVENT_SEND_AUDIO 被置位，且 while 从 PopPacketFromSendQueue() 取到包（SendAudio 返回 false 就丢弃剩余包并 break）",
+        "repeat": "repeat",
+        "after": "audio_service.cc:502-504 入队后通过 on_send_queue_available 置 MAIN_EVENT_SEND_AUDIO（application.cc:79-81），Run 收到位才执行到 240-251 这一段"
+      },
+      {
+        "n": 9,
+        "what": "协议具体实现里真正把音频写进网络：websocket 版本 3 时组 BinaryProtocol3 帧后发送",
+        "file": "main/protocols/websocket_protocol.cc",
+        "line": 50,
+        "code": "return websocket_->Send(serialized.data(), serialized.size(), true);",
+        "func": "WebsocketProtocol::SendAudio",
+        "role": [],
+        "branch": "version_ == 3（协议版本从 settings(\"websocket\") 的 version 读入，websocket_protocol.cc:83-86）；通道已连接",
+        "repeat": "repeat",
+        "after": "application.cc:242 调用的 protocol_->SendAudio 就是这个虚函数实现（InitializeProtocol 里选中的协议实现，application.cc:538-545）"
+      },
+      {
+        "n": 10,
+        "what": "服务器返回本轮第一段 TTS 音频包（二进制），协议层解包后交给应用层的 OnIncomingAudio 回调",
+        "file": "main/protocols/websocket_protocol.cc",
+        "line": 128,
+        "code": "on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{",
+        "func": "WebsocketProtocol::OpenAudioChannel 里 websocket_->OnData 的 binary 分支",
+        "role": [
+          "首个结果"
+        ],
+        "branch": "收到二进制数据（binary == true）且 version_ == 3",
+        "repeat": "repeat",
+        "after": "服务器要等设备的音频（第 8/9 步）和 listen 状态才能出识别结果，所以排在发送之后；这一步是收到的第一个有声结果"
+      },
+      {
+        "n": 11,
+        "what": "应用层把收到的音频包放进解码队列（只有处于说话状态才收）",
+        "file": "main/application.cc",
+        "line": 556,
+        "code": "audio_service_.PushPacketToDecodeQueue(std::move(packet));",
+        "func": "InitializeProtocol 里的 protocol_->OnIncomingAudio 回调",
+        "role": [],
+        "branch": "GetDeviceState() == kDeviceStateSpeaking",
+        "repeat": "repeat",
+        "after": "websocket_protocol.cc:128/118 的 on_incoming_audio_ 就是这里注册的回调（application.cc:554-558）"
+      },
+      {
+        "n": 12,
+        "what": "收到 stt 消息（服务端识别出的用户文字），在 Schedule 的任务里把识别文字交给眼睛显示屏",
+        "file": "main/application.cc",
+        "line": 667,
+        "code": "display->SetChatMessage(\"user\", message.c_str());",
+        "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（stt 分支的 Schedule lambda）",
+        "role": [
+          "首个结果"
+        ],
+        "branch": "type == \"stt\" 且 cJSON_IsString(text)；执行时 DemoDisplay 屏只是回调到 LcdDisplay::SetChatMessage，字幕已被隐藏（示例显示逻辑）",
+        "repeat": "once",
+        "after": "websocket_protocol.cc:149-150 把 JSON 交给 on_incoming_json_，这一句是 Schedule 出去、由 Run 的 MAIN_EVENT_SCHEDULE 分支（application.cc:265-272）真正执行，那时已经收到识别结果"
+      },
+      {
+        "n": 13,
+        "what": "收到 tts/start 消息，在 Schedule 的任务里把设备切到说话状态",
+        "file": "main/application.cc",
+        "line": 627,
+        "code": "SetDeviceState(kDeviceStateSpeaking);",
+        "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/start 分支的 Schedule lambda）",
+        "role": [],
+        "branch": "type == \"tts\" 且 state == \"start\"",
+        "repeat": "once",
+        "after": "识别出文字（第 12 步）之后服务器才开始回话；本句入 Schedule，在 Run 的 MAIN_EVENT_SCHEDULE 分支里执行，状态切换这才让第 11 步的音频能被收下、也才允许第 17 步把声音写出去"
+      },
+      {
+        "n": 14,
+        "what": "收到 tts/sentence_start 消息，在 Schedule 的任务里把这句话的助手文字交给显示",
+        "file": "main/application.cc",
+        "line": 651,
+        "code": "display->SetChatMessage(\"assistant\", message.c_str());",
+        "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/sentence_start 分支的 Schedule lambda）",
+        "role": [],
+        "branch": "type == \"tts\" 且 state == \"sentence_start\" 且 cJSON_IsString(text)",
+        "repeat": "repeat",
+        "after": "服务器在 tts/start 之后逐句下发 sentence_start，本句与第 10 步的音频包同属一句话的内容"
+      },
+      {
+        "n": 15,
+        "what": "编码任务把收到的 Opus 包解码成 PCM（含重采样到输出采样率）",
+        "file": "main/audio/audio_service.cc",
+        "line": 426,
+        "code": "auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);",
+        "func": "AudioService::OpusCodecTask",
+        "role": [],
+        "branch": "!audio_decode_queue_.empty() 且播放队列未满；opus_decoder_ != nullptr",
+        "repeat": "repeat",
+        "after": "application.cc:556 把包 push 进 audio_decode_queue_ 后，OpusCodecTask 才在 394-409 出队并解码"
+      },
+      {
+        "n": 16,
+        "what": "解码成功的 PCM 进播放队列，等输出任务取走",
+        "file": "main/audio/audio_service.cc",
+        "line": 453,
+        "code": "audio_playback_queue_.push_back(std::move(task));",
+        "func": "AudioService::OpusCodecTask",
+        "role": [],
+        "branch": "decoded && generation == playback_generation_ && !service_stopped_",
+        "repeat": "repeat",
+        "after": "audio_service.cc:426 解码成功后重新加锁，在 452-454 这一支里入播放队列"
+      },
+      {
+        "n": 17,
+        "what": "输出任务把这段 PCM 真正写进扬声器（codec Write -> esp_codec_dev_write），本轮每一段声音都走这一句",
+        "file": "main/audio/audio_service.cc",
+        "line": 351,
+        "code": "codec_->OutputData(task.pcm);",
+        "func": "AudioService::AudioOutputTask",
+        "role": [
+          "输出"
+        ],
+        "branch": "播放队列非空、未停机，需要时先 EnableOutput(true)",
+        "repeat": "repeat",
+        "after": "audio_service.cc:335-336 从 audio_playback_queue_ 取出第 16 步压入的任务后才执行；AudioCodec::OutputData 内部是 Write->esp_codec_dev_write（audio_codec.cc:17-18、cores3_audio_codec.cc:255）"
+      },
+      {
+        "n": 18,
+        "what": "输出完这一段后判断播放队列/解码队列都已空、无解码与输出在途，返回“这一步刚放完”",
+        "file": "main/audio/audio_service.cc",
+        "line": 369,
+        "code": "notify_drained = MarkPlaybackDrainedLocked();",
+        "func": "AudioService::AudioOutputTask",
+        "role": [],
+        "branch": "每段输出后都调用；IsPlaybackDrainedLocked() 成立且尚未通知过才返回 true",
+        "repeat": "repeat",
+        "after": "这一段声音在 351 已经写进扬声器并更新了 last_output_time_（353-354），之后才在 368-369 重新加锁判断队列是否已放空"
+      },
+      {
+        "n": 19,
+        "what": "确认播放队列放空，回调通知“全部放完”",
+        "file": "main/audio/audio_service.cc",
+        "line": 374,
+        "code": "callbacks_.on_playback_drained();",
+        "func": "AudioService::AudioOutputTask",
+        "role": [
+          "全部放完"
+        ],
+        "branch": "notify_drained && callbacks_.on_playback_drained",
+        "repeat": "once",
+        "after": "第 18 步 MarkPlaybackDrainedLocked() 返回 true 才走这一支，所以只能在上一次输出之后"
+      },
+      {
+        "n": 20,
+        "what": "收到 tts/stop 消息，在 Schedule 的任务里把设备切回聆听（第二轮结束点：回复全部结束）",
+        "file": "main/application.cc",
+        "line": 635,
+        "code": "SetDeviceState(kDeviceStateListening);",
+        "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/stop 分支的 Schedule lambda）",
+        "role": [
+          "最后结果"
+        ],
+        "branch": "type == \"tts\" 且 state == \"stop\"，GetDeviceState() == kDeviceStateSpeaking，listening_mode_ != kListeningModeManualStop（本机为 kListeningModeAutoStop，所以走 else 这一支）",
+        "repeat": "once",
+        "after": "服务器最后一条 TTS 音频发出后才发 tts/stop，所以排在音频包之后；但它和第 19 步的放空通知谁先到说不准（tts/stop 走 websocket 的 JSON 路径，放空通知来自本地输出任务），两步都标了最后一个结果"
+      }
+    ],
+    "doubts": [
+      "最后结果：tts/stop 的 SetDeviceState(kDeviceStateListening)（application.cc:635）与本地“播放队列放空”通知（audio_service.cc:374 → on_playback_drained → MAIN_EVENT_PLAYBACK_DRAINED）先后不确定，取决于网络与播放队列的排空速度，两步都标了最后结果。",
+      "本轮里没有发现单独的“STT/识别完成”JSON，识别文字就是 stt 消息（application.cc:655-669），也没有 reply start/reply end 这一对消息，只有 tts/start 与 tts/stop。",
+      "第 9 步用的是 websocket 的 version_ == 3 分支（websocket_protocol.cc:41-50）；若服务器 hello 里带的版本让 version_ 不是 2/3，实际发送会落到 websocket_protocol.cc:52 那一句，但仍是同一函数里的发送语句。",
+      "第 14 步在 m5stack/core-s3 上只是走 DemoDisplay::SetChatMessage，字幕被 SetHideSubtitle(true) 隐藏（示例显示逻辑），用户看不到文字，仅有声音。",
+      "第 12/14 步（jsons 入 Schedule）与第 10/15 步（音频包直接入解码队列）不同线程、不同队列，相对先后只能按消息语义判断（stt 先于 tts/sentence_start），代码里没有强制顺序。",
+      "第 4 步只写了 output_buffer_ 装满时的第一支；缓冲超出时还有 audio_service.cc:498 那一句分帧回调，那个分支不会出现（每次只塞一帧 10ms，afe_audio_engine.cc:490-496）。",
+      "m5stack/core-s3 的 config.h 里 AUDIO_I2S_GPIO_DIN 是 GPIO_NUM_14，但 cores3_audio_codec.cc:138 的 std/tx 通道把 din 设为 I2S_GPIO_UNUSED，属于板级代码自身的不一致，不影响本链的时序判断。"
+    ],
+    "tips": [
+      "第 10 步（首个结果）不在码表找到的候选里，码表也换不了，请留意"
+    ]
+  },
+  "calls": 2,
+  "stage": "pick",
+  "chain_category": "语音对话",
+  "retries": [],
+  "followups": [
+    {
+      "stage": "理清流程",
+      "ok": true,
+      "seconds": 16.5
+    }
+  ],
+  "candidates": [
+    {
+      "role": "输入结束",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "line": 482,
+      "code": "is_speaking_ = false;",
+      "where": "在「result->vad_state == VAD_SILENCE && is_speaking_」那一支里",
+      "area": [
+        481,
+        484
+      ],
+      "id": "K1"
+    },
+    {
+      "role": "输入结束",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "line": 483,
+      "code": "vad_state_change_callback_(false);",
+      "where": "在「result->vad_state == VAD_SILENCE && is_speaking_」那一支里",
+      "area": [
+        481,
+        484
+      ],
+      "id": "K2"
+    },
+    {
+      "role": "模式",
+      "file": "main/application.cc",
+      "line": 1189,
+      "code": "return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;",
+      "where": "在函数 GetDefaultListeningMode 里按条件返回模式",
+      "area": [
+        1189,
+        1189
+      ],
+      "id": "K3"
+    },
+    {
+      "role": "协议",
+      "file": "main/application.cc",
+      "line": 538,
+      "code": "if (ota_->HasMqttConfig()) {",
+      "where": "按条件给 protocol_ 选不同的实现（MqttProtocol、WebsocketProtocol）",
+      "area": [
+        538,
+        538
+      ],
+      "id": "K4"
+    },
+    {
+      "role": "上传",
+      "file": "main/application.cc",
+      "line": 242,
+      "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+      "where": "在函数 Run 里调用 SendAudio 发出数据（发送写在 if 条件里，点放在这一行前面）",
+      "area": [
+        242,
+        242
+      ],
+      "id": "K5"
+    },
+    {
+      "role": "上传",
+      "file": "main/application.cc",
+      "line": 982,
+      "code": "protocol_->SendAudio(std::move(packet));",
+      "where": "在函数 ContinueWakeWordInvoke 里调用 SendAudio 发出数据",
+      "area": [
+        982,
+        982
+      ],
+      "id": "K6"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 617,
+      "code": "StartNotification(std::move(url), std::move(subtitles));",
+      "where": "收到 type->valuestring 为「notify」的消息，交给 Schedule 稍后执行",
+      "area": [
+        586,
+        619
+      ],
+      "id": "K7"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 627,
+      "code": "SetDeviceState(kDeviceStateSpeaking);",
+      "where": "收到 state->valuestring 为「tts/start」的消息，交给 Schedule 稍后执行",
+      "area": [
+        624,
+        629
+      ],
+      "id": "K8"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 633,
+      "code": "SetDeviceState(kDeviceStateIdle);",
+      "where": "收到 state->valuestring 为「tts/stop」的消息，交给 Schedule 稍后执行，「GetDeviceState() == kDeviceStateSpeaking」，「listening_mode_ == kListeningModeManualStop」",
+      "area": [
+        629,
+        639
+      ],
+      "id": "K9"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 635,
+      "code": "SetDeviceState(kDeviceStateListening);",
+      "where": "收到 state->valuestring 为「tts/stop」的消息，交给 Schedule 稍后执行，「GetDeviceState() == kDeviceStateSpeaking」，「listening_mode_ == kListeningModeManualStop」不成立",
+      "area": [
+        629,
+        639
+      ],
+      "id": "K10"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 650,
+      "code": "display->AddTextGlyphs(glyphs, bpp);",
+      "where": "收到 state->valuestring 为「tts/sentence_start」的消息，「cJSON_IsString(text)」，交给 Schedule 稍后执行",
+      "area": [
+        639,
+        654
+      ],
+      "id": "K11"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 651,
+      "code": "display->SetChatMessage(\"assistant\", message.c_str());",
+      "where": "收到 state->valuestring 为「tts/sentence_start」的消息，「cJSON_IsString(text)」，交给 Schedule 稍后执行",
+      "area": [
+        639,
+        654
+      ],
+      "id": "K12"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 666,
+      "code": "display->AddTextGlyphs(glyphs, bpp);",
+      "where": "收到 type->valuestring 为「stt」的消息，「cJSON_IsString(text)」，交给 Schedule 稍后执行",
+      "area": [
+        655,
+        670
+      ],
+      "id": "K13"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 667,
+      "code": "display->SetChatMessage(\"user\", message.c_str());",
+      "where": "收到 type->valuestring 为「stt」的消息，「cJSON_IsString(text)」，交给 Schedule 稍后执行",
+      "area": [
+        655,
+        670
+      ],
+      "id": "K14"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 674,
+      "code": "display->SetEmotion(emotion_str.c_str());",
+      "where": "收到 type->valuestring 为「llm」的消息，「cJSON_IsString(emotion)」，交给 Schedule 稍后执行",
+      "area": [
+        670,
+        677
+      ],
+      "id": "K15"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 680,
+      "code": "McpServer::GetInstance().ParseMessage(payload);",
+      "where": "收到 type->valuestring 为「mcp」的消息，「cJSON_IsObject(payload)」",
+      "area": [
+        677,
+        682
+      ],
+      "id": "K16"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 688,
+      "code": "Schedule([this]() { Reboot(); });",
+      "where": "收到 type->valuestring 为「system」的消息，「cJSON_IsString(command)」，「strcmp(command->valuestring, \"reboot\") == 0」",
+      "area": [
+        682,
+        693
+      ],
+      "id": "K17"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 698,
+      "code": "Alert(status->valuestring, message->valuestring, emotion->valuestring,",
+      "where": "收到 type->valuestring 为「alert」的消息，「cJSON_IsString(status) && cJSON_IsString(message)…」",
+      "area": [
+        693,
+        704
+      ],
+      "id": "K18"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 706,
+      "code": "CJsonStringUniquePtr root_json(cJSON_PrintUnformatted(root));",
+      "where": "收到 type->valuestring 为「custom」的消息",
+      "area": [
+        704,
+        720
+      ],
+      "id": "K19"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 709,
+      "code": "CJsonStringUniquePtr payload_json(cJSON_PrintUnformatted(payload));",
+      "where": "收到 type->valuestring 为「custom」的消息，「cJSON_IsObject(payload)」",
+      "area": [
+        704,
+        720
+      ],
+      "id": "K20"
+    },
+    {
+      "role": "消息",
+      "file": "main/application.cc",
+      "line": 713,
+      "code": "display->SetChatMessage(\"system\", payload_str.c_str());",
+      "where": "收到 type->valuestring 为「custom」的消息，「cJSON_IsObject(payload)」，「payload_json」，交给 Schedule 稍后执行",
+      "area": [
+        704,
+        720
+      ],
+      "id": "K21"
+    },
+    {
+      "role": "消息",
+      "file": "main/display/lcd_display.cc",
+      "line": 1312,
+      "code": "lv_obj_set_style_bg_color(bubble, lvgl_theme->user_bubble_color(), 0);",
+      "where": "收到 bubble_type 为「user」的消息",
+      "area": [
+        1311,
+        1313
+      ],
+      "id": "K22"
+    },
+    {
+      "role": "消息",
+      "file": "main/display/lcd_display.cc",
+      "line": 1314,
+      "code": "lv_obj_set_style_bg_color(bubble, lvgl_theme->assistant_bubble_color(), 0);",
+      "where": "收到 bubble_type 为「assistant」的消息",
+      "area": [
+        1313,
+        1315
+      ],
+      "id": "K23"
+    },
+    {
+      "role": "消息",
+      "file": "main/display/lcd_display.cc",
+      "line": 1316,
+      "code": "lv_obj_set_style_bg_color(bubble, lvgl_theme->system_bubble_color(), 0);",
+      "where": "收到 bubble_type 为「system」的消息",
+      "area": [
+        1315,
+        1317
+      ],
+      "id": "K24"
+    },
+    {
+      "role": "消息",
+      "file": "main/display/lcd_display.cc",
+      "line": 1318,
+      "code": "lv_obj_set_style_bg_color(bubble, lvgl_theme->system_bubble_color(), 0);",
+      "where": "收到 bubble_type 为「image」的消息",
+      "area": [
+        1317,
+        1319
+      ],
+      "id": "K25"
+    },
+    {
+      "role": "消息",
+      "file": "main/mcp_server.cc",
+      "line": 421,
+      "code": "ParseCapabilities(capabilities);",
+      "where": "收到 method_str 为「initialize」的消息，「cJSON_IsObject(params)」，「cJSON_IsObject(capabilities)」",
+      "area": [
+        417,
+        431
+      ],
+      "id": "K26"
+    },
+    {
+      "role": "消息",
+      "file": "main/mcp_server.cc",
+      "line": 430,
+      "code": "ReplyResult(id_int, message, response_sender);",
+      "where": "收到 method_str 为「initialize」的消息",
+      "area": [
+        417,
+        431
+      ],
+      "id": "K27"
+    },
+    {
+      "role": "消息",
+      "file": "main/mcp_server.cc",
+      "line": 437,
+      "code": "cursor_str = std::string(cursor->valuestring);",
+      "where": "收到 method_str 为「tools/list」的消息，「params != nullptr」，「cJSON_IsString(cursor)」",
+      "area": [
+        431,
+        445
+      ],
+      "id": "K28"
+    },
+    {
+      "role": "消息",
+      "file": "main/mcp_server.cc",
+      "line": 444,
+      "code": "GetToolsList(id_int, cursor_str, list_user_only_tools, response_sender);",
+      "where": "收到 method_str 为「tools/list」的消息",
+      "area": [
+        431,
+        445
+      ],
+      "id": "K29"
+    },
+    {
+      "role": "消息",
+      "file": "main/mcp_server.cc",
+      "line": 460,
+      "code": "ReplyError(id_int, -32602, \"Invalid arguments: expected object\", response_sender);",
+      "where": "收到 method_str 为「tools/call」的消息，「tool_arguments != nullptr && !cJSON_IsObject(tool…」",
+      "area": [
+        445,
+        465
+      ],
+      "id": "K30"
+    },
+    {
+      "role": "消息",
+      "file": "main/mcp_server.cc",
+      "line": 463,
+      "code": "DoToolCall(id_int, std::string(tool_name->valuestring), tool_arguments,",
+      "where": "收到 method_str 为「tools/call」的消息",
+      "area": [
+        445,
+        465
+      ],
+      "id": "K31"
+    },
+    {
+      "role": "输出",
+      "file": "main/audio/audio_service.cc",
+      "line": 351,
+      "code": "codec_->OutputData(task.pcm);",
+      "where": "在函数 AudioOutputTask 的循环里，每段输出都经过",
+      "area": [
+        351,
+        351
+      ],
+      "id": "K32"
+    },
+    {
+      "role": "全部放完",
+      "file": "main/audio/audio_service.cc",
+      "line": 374,
+      "code": "callbacks_.on_playback_drained();",
+      "where": "在「notify_drained && callbacks_.on_playback_drained」那一支里",
+      "area": [
+        373,
+        375
+      ],
+      "id": "K33"
+    }
+  ],
+  "page": {
+    "steps": [
+      {
+        "p": "P1",
+        "n": "说话结束",
+        "f": "afe_audio_engine.cc",
+        "path": "main/audio/engines/afe_audio_engine.cc",
+        "l": 482,
+        "line": "start",
+        "why": "AFE 把内部状态从'在说话'改成'没说话'，就是设备认为人这一句说完了的那一刻。",
+        "sure": "高",
+        "code": "is_speaking_ = false;",
+        "loc_ok": true,
+        "where": "before",
+        "once": "once",
+        "func": "HandleVoiceResult",
+        "struct_ok": true,
+        "chk": [],
+        "note": "语音帧经 AFE 有几十毫秒的管道延迟，起点比人真正的最后一个字略晚。",
+        "felt": "last",
+        "kind": "声音"
+      },
+      {
+        "p": "P6",
+        "n": "上行首包发出",
+        "f": "application.cc",
+        "path": "main/application.cc",
+        "l": 242,
+        "line": "talk",
+        "why": "主循环第一次把上行音频交给协议层，这是设备侧'开始往服务器送声音'的时刻，之后就是网络和服务器的活。",
+        "sure": "高",
+        "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "Application::Run",
+        "struct_ok": true,
+        "chk": [
+          {
+            "level": "tip",
+            "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+          }
+        ],
+        "note": "发送写在 if 条件里，点只能放 if 这一行之前，落在判断之前而不是发送成功后。",
+        "follow": true
+      },
+      {
+        "p": "P7",
+        "n": "上行末包发出",
+        "f": "application.cc",
+        "path": "main/application.cc",
+        "l": 242,
+        "line": "talk",
+        "why": "同一行取最后一次，表示这一轮最后一批麦克风音频交出去，之后设备只等服务器回话。",
+        "sure": "中",
+        "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+        "loc_ok": true,
+        "where": "before",
+        "once": "last",
+        "func": "Application::Run",
+        "struct_ok": true,
+        "chk": [
+          {
+            "level": "tip",
+            "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+          }
+        ],
+        "note": "Run 里的发送循环是按事件位触发、一次可能发多包；'最后一包'依赖这一轮最后一次发送事件，若发送失败会丢弃剩余包，取到的可能不是真正的末包。",
+        "follow": true
+      },
+      {
+        "p": "P8",
+        "n": "封帧写入网络",
+        "f": "websocket_protocol.cc",
+        "path": "main/protocols/websocket_protocol.cc",
+        "l": 50,
+        "line": "face",
+        "why": "真正的网络发送语句，取最后一次，量到'声音确实离开设备'；和上行末包之差就是协议封装的开销。",
+        "sure": "中",
+        "code": "return websocket_->Send(serialized.data(), serialized.size(), true);",
+        "loc_ok": true,
+        "where": "before",
+        "once": "last",
+        "func": "WebsocketProtocol::SendAudio",
+        "struct_ok": true,
+        "chk": [],
+        "note": "只有 websocket 版本等于 3 才走这一行；版本非 2/3 时会走 52 行那句。设备是否用 websocket 取决于 OTA 下发的配置，若是 MQTT 协议则整条发送路径不同，此时这一步不成立。",
+        "opt": true,
+        "follow": true
+      },
+      {
+        "p": "P9",
+        "n": "首个结果到达",
+        "f": "websocket_protocol.cc",
+        "path": "main/protocols/websocket_protocol.cc",
+        "l": 128,
+        "line": "talk",
+        "why": "服务器回来的第一包 TTS 音频被解出来交给应用层，这是设备第一次看见'回复'。",
+        "sure": "高",
+        "code": "on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "WebsocketProtocol::OpenAudioChannel 里 websocket_->OnData 的 binary 分支",
+        "struct_ok": true,
+        "chk": [],
+        "note": "同样只在版本 3 的二进制分支里；而且此时设备可能还没切到说话状态，是否被采用要看下一步。"
+      },
+      {
+        "p": "P10",
+        "n": "首包进解码队",
+        "f": "application.cc",
+        "path": "main/application.cc",
+        "l": 556,
+        "line": "talk",
+        "why": "只有在说话状态下音频才会被收下解码；这里取第一包真正被采用的音频，避免把被丢弃的包算进时延。",
+        "sure": "高",
+        "code": "audio_service_.PushPacketToDecodeQueue(std::move(packet));",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "Application::InitializeProtocol 的 OnIncomingAudio 回调",
+        "struct_ok": true,
+        "chk": [],
+        "note": "条件是 GetDeviceState()==kDeviceStateSpeaking，正常流程里 tts/start 先到才成立；若音频早于 tts/start 到达会被整包丢掉，这一步就不会发生。",
+        "opt": true
+      },
+      {
+        "p": "P11",
+        "n": "识别文字到屏",
+        "f": "application.cc",
+        "path": "main/application.cc",
+        "l": 667,
+        "line": "talk",
+        "why": "服务器返回识别结果后设备第一次处理它，是'服务器听懂了吗'这一段的结束点。",
+        "sure": "中",
+        "code": "display->SetChatMessage(\"user\", message.c_str());",
+        "loc_ok": true,
+        "where": "before",
+        "once": "once",
+        "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（stt 分支的 Schedule lambda）",
+        "struct_ok": true,
+        "chk": [
+          {
+            "level": "tip",
+            "text": "「识别文字下行处理」这一段从「首包进解码队」到「识别文字到屏」：两头写在同一个函数 InitializeProtocol 里，但「首包进解码队」在第 554 行交给 OnIncomingAudio 的 lambda 里，「识别文字到屏」在第 665 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+          }
+        ],
+        "note": "这一步与音频包走的是不同队列的调度任务，实际先后只能按消息语义判断。而且本机 DemoDisplay 把字幕藏掉了（示例显示逻辑），用户看不到这段文字，这个点只用于计时，不是用户能感觉到的结果。",
+        "opt": true
+      },
+      {
+        "p": "P12",
+        "n": "切到说话状态",
+        "f": "application.cc",
+        "path": "main/application.cc",
+        "l": 627,
+        "line": "talk",
+        "why": "收到 tts/start 后设备才允许收音频、开扬声器；这一步是'回复开始'的标志，也是解码能开工的前提。",
+        "sure": "中",
+        "code": "SetDeviceState(kDeviceStateSpeaking);",
+        "loc_ok": true,
+        "where": "before",
+        "once": "once",
+        "func": "InitializeProtocol 的 OnIncomingJson（tts/start 分支）",
+        "struct_ok": true,
+        "chk": [
+          {
+            "level": "tip",
+            "text": "「服务器出回复并通知开始」这一段从「识别文字到屏」到「切到说话状态」：两头写在同一个函数 InitializeProtocol 里，但「识别文字到屏」在第 665 行交给 Schedule 的 lambda 里，「切到说话状态」在第 625 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+          }
+        ],
+        "note": "本轮 tts/start 是否是服务器必发消息未从代码确认；若服务器不发，这一段会缺失。",
+        "opt": true
+      },
+      {
+        "p": "P13",
+        "n": "回复文字到屏",
+        "f": "application.cc",
+        "path": "main/application.cc",
+        "l": 651,
+        "line": "talk",
+        "why": "第一句回复文字下发的时刻，用来量从识别完成到开始回话的服务器耗时。",
+        "sure": "中",
+        "code": "display->SetChatMessage(\"assistant\", message.c_str());",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "InitializeProtocol 的 OnIncomingJson（tts/sentence_start 分支）",
+        "struct_ok": true,
+        "chk": [
+          {
+            "level": "tip",
+            "text": "「首句回复文字下发」这一段从「切到说话状态」到「回复文字到屏」：两头写在同一个函数 InitializeProtocol 里，但「切到说话状态」在第 625 行交给 Schedule 的 lambda 里，「回复文字到屏」在第 649 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+          }
+        ],
+        "note": "本机字幕被隐藏（示例显示逻辑），用户看不到；与音频包的先后代码里没有强制顺序。",
+        "opt": true
+      },
+      {
+        "p": "P14",
+        "n": "音频解码",
+        "f": "audio_service.cc",
+        "path": "main/audio/audio_service.cc",
+        "l": 426,
+        "line": "talk",
+        "why": "收到第一段回复音频后开始解码，量设备侧解码的开销。",
+        "sure": "高",
+        "code": "auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "AudioService::OpusCodecTask",
+        "struct_ok": true,
+        "chk": [],
+        "note": "解码失败会走 444 行报错分支，正常情况才是这条。"
+      },
+      {
+        "p": "P15",
+        "n": "PCM进播放队",
+        "f": "audio_service.cc",
+        "path": "main/audio/audio_service.cc",
+        "l": 453,
+        "line": "talk",
+        "why": "解码好的第一段声音进播放队列等输出任务取走；到这里为止都还没有声音出来。",
+        "sure": "高",
+        "code": "audio_playback_queue_.push_back(std::move(task));",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "AudioService::OpusCodecTask",
+        "struct_ok": true,
+        "chk": [],
+        "note": "解码失败或播放代次变化时不入队，正常一轮都满足。"
+      },
+      {
+        "p": "P16",
+        "n": "开始出声",
+        "f": "audio_service.cc",
+        "path": "main/audio/audio_service.cc",
+        "l": 351,
+        "line": "talk",
+        "why": "第一段 PCM 从这里写进扬声器，这是用户第一次听到回复的时刻。",
+        "sure": "高",
+        "code": "codec_->OutputData(task.pcm);",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "AudioService::AudioOutputTask",
+        "struct_ok": true,
+        "chk": [],
+        "note": "第一次输出前可能要先开功放（341-345），那段初始化耗时被算进这一段。",
+        "felt": "first",
+        "kind": "声音"
+      },
+      {
+        "p": "P17",
+        "n": "最后一声",
+        "f": "audio_service.cc",
+        "path": "main/audio/audio_service.cc",
+        "l": 351,
+        "line": "talk",
+        "why": "最后一段 PCM 交给扬声器，回复的声音在硬件缓冲里还会再响一小会儿。",
+        "sure": "中",
+        "code": "codec_->OutputData(task.pcm);",
+        "loc_ok": true,
+        "where": "before",
+        "once": "last",
+        "func": "AudioService::AudioOutputTask",
+        "struct_ok": true,
+        "chk": [],
+        "note": "这一句每段都执行，'最后一段'是由码表按先后取最后一次；写入返回不代表最后一声的声压已经结束。",
+        "felt": "last",
+        "kind": "声音"
+      },
+      {
+        "p": "P18",
+        "n": "判定已放空",
+        "f": "audio_service.cc",
+        "path": "main/audio/audio_service.cc",
+        "l": 369,
+        "line": "talk",
+        "why": "输出任务发现解码队列、播放队列都空且没有在途任务，是'全部放完'这一步的判断支。",
+        "sure": "中",
+        "code": "notify_drained = MarkPlaybackDrainedLocked();",
+        "loc_ok": true,
+        "where": "before",
+        "once": "first",
+        "func": "AudioService::AudioOutputTask",
+        "struct_ok": true,
+        "chk": [],
+        "note": "解码任务那边的 457 行也会做同一判断，谁先判出来取决于线程调度；这里取输出任务这一处。若上一轮 tts/stop 提前触发了状态切换并清空队列，会从 812 行那条路径通知，这个点就可能不出现。",
+        "opt": true
+      },
+      {
+        "p": "P19",
+        "n": "声音放完",
+        "f": "audio_service.cc",
+        "path": "main/audio/audio_service.cc",
+        "l": 374,
+        "line": "talk",
+        "why": "确认整轮回复都播完之后才发出放空通知，用户听到的声音到这里结束。",
+        "sure": "中",
+        "code": "callbacks_.on_playback_drained();",
+        "loc_ok": true,
+        "where": "before",
+        "once": "every",
+        "func": "AudioService::AudioOutputTask",
+        "struct_ok": true,
+        "chk": [],
+        "note": "只在上一步判断成立时才走到；它与 tts/stop 切换聆听谁先发生不确定。",
+        "opt": true,
+        "felt": "last",
+        "kind": "声音",
+        "whole": true
+      },
+      {
+        "p": "P20",
+        "n": "回到聆听",
+        "f": "application.cc",
+        "path": "main/application.cc",
+        "l": 635,
+        "line": "talk",
+        "why": "服务器发 tts/stop 后设备把状态切回聆听，是这一轮的收尾点，下一轮从这里开始。",
+        "sure": "中",
+        "code": "SetDeviceState(kDeviceStateListening);",
+        "loc_ok": true,
+        "where": "before",
+        "once": "once",
+        "func": "InitializeProtocol 里的 protocol_->OnIncomingJson 回调（tts/stop 分支的 Schedule lambda）",
+        "struct_ok": true,
+        "chk": [],
+        "note": "本机 listening_mode_ 是 kListeningModeAutoStop，走 else 这一支；切换后语音处理要等播放队列真放空才重新打开（application.cc:1037-1041），所以'切到聆听'不等于立刻能听下一句。",
+        "opt": true
+      }
+    ],
+    "segs": [
+      {
+        "a": "P1",
+        "b": "P6",
+        "t": "说话结束到上行首包发出",
+        "who": "固件"
+      },
+      {
+        "a": "P6",
+        "b": "P7",
+        "t": "上行音频逐包发送",
+        "who": "固件、网络"
+      },
+      {
+        "a": "P6",
+        "b": "P9",
+        "t": "语音识别与回复生成",
+        "who": "网络、服务器",
+        "out": true
+      },
+      {
+        "a": "P9",
+        "b": "P10",
+        "t": "音频包交应用层并排队",
+        "who": "固件"
+      },
+      {
+        "a": "P10",
+        "b": "P11",
+        "t": "识别文字下行处理",
+        "who": "固件、网络"
+      },
+      {
+        "a": "P11",
+        "b": "P12",
+        "t": "服务器出回复并通知开始",
+        "who": "服务器",
+        "out": true
+      },
+      {
+        "a": "P12",
+        "b": "P13",
+        "t": "首句回复文字下发",
+        "who": "服务器、网络",
+        "out": true
+      },
+      {
+        "a": "P13",
+        "b": "P14",
+        "t": "解码线程取包",
+        "who": "固件"
+      },
+      {
+        "a": "P14",
+        "b": "P15",
+        "t": "Opus 解码与重采样",
+        "who": "固件"
+      },
+      {
+        "a": "P15",
+        "b": "P16",
+        "t": "等输出任务并开功放",
+        "who": "固件、硬件"
+      },
+      {
+        "a": "P16",
+        "b": "P17",
+        "t": "整段回复持续播放",
+        "who": "固件、硬件"
+      },
+      {
+        "a": "P16",
+        "b": "P18",
+        "t": "写完后确认队列状态",
+        "who": "固件、硬件"
+      },
+      {
+        "a": "P16",
+        "b": "P19",
+        "t": "放空判断到通知",
+        "who": "固件"
+      },
+      {
+        "a": "P16",
+        "b": "P20",
+        "t": "服务器停止消息到设备收尾",
+        "who": "网络、服务器、固件",
+        "out": true
+      }
+    ],
+    "fsegs": [
+      {
+        "a": "P7",
+        "b": "P8",
+        "t": "协议封装与写入网络",
+        "who": "固件、网络"
+      }
+    ],
+    "ln": {
+      "start": "起点",
+      "talk": "语音问答这条",
+      "face": "眼睛表情这条"
+    },
+    "main": [
+      "P1",
+      "P6",
+      "P7",
+      "P9",
+      "P10",
+      "P11",
+      "P12",
+      "P13",
+      "P14",
+      "P15",
+      "P16",
+      "P17",
+      "P18",
+      "P19",
+      "P20"
+    ],
+    "branch": {
+      "from": "P12",
+      "nodes": [
+        "P8"
+      ]
+    },
+    "dash": [
+      5,
+      6
+    ],
+    "server": "服务器：语音识别、生成回复、合成语音",
+    "mapWhat": "全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果",
+    "category": "语音对话",
+    "mapSel": "P7",
+    "measure": "说话结束 → 声音放完",
+    "mainTitle": "语音问答这条：说话结束 → 声音放完",
+    "act": "先唤醒它、说一句话等它回答完，等下一轮它自己回到聆听、眼睛变回聆听态，再对着它说一句话，然后等它把回复说完。",
+    "summary": "这一轮从设备检测到人说完话起，到扬声器把回复的最后一段声音放完、设备切回聆听为止，链上一共 19 个计时点（起点 1 个、上行音频 3 个、下行与播放 8 个、收尾 2 个，另有显示类旁支）。中间有大段在设备外：语音识别、大模型生成回复、语音合成都由服务器完成，设备只负责上行音频和播放。要注意两点：一是 m5stack/core-s3 上字幕被主动隐藏，识别文字和回复文字用户都看不见，用户只能听到声音；二是官方板级代码没有定义 LED，'眼睛'屏幕才是用户能看到的唯一反馈，回复开始时眼睛从聆听态切到说话态，但没有明显的'第一下'视觉事件。",
+    "doubts": [
+      {
+        "text": "本机把字幕整段隐藏，识别文字和回复文字用户都看不见，只有声音能感觉到；如果按'看到文字'来验收会一直失败。",
+        "sure": "高"
+      },
+      {
+        "text": "官方板级代码没有定义 LED（Board::GetLed 返回 NoLed），界面上也没有'第一下'的强提示，用户感觉到的第一个结果只有开始出声。",
+        "sure": "高"
+      },
+      {
+        "text": "tts/stop 切回聆听和本地播放队列放空通知谁先发生不确定，网络慢时 tts/stop 可能先到并把队列清空，导致'放空'那两点落到别的路径上。",
+        "sure": "中"
+      },
+      {
+        "text": "音频包与 JSON 消息走不同线程、不同队列，识别文字与首包音频、句子文字的相对先后只能按语义推断，没有强制顺序。",
+        "sure": "中"
+      },
+      {
+        "text": "发送路径依赖协议选用：只有 websocket 且版本为 3 才走文档里那两句；若实际用 MQTT，上行是 UDP 加密包，发送相关的计时点位置要另找。",
+        "sure": "中"
+      },
+      {
+        "text": "自动聆听下设备切回聆听后要等播放队列真放空才重新打开语音处理，若放空通知和 tts/stop 顺序不巧，下一轮开始聆听会晚一拍，表现为对话有停顿。",
+        "sure": "中"
+      },
+      {
+        "text": "上行音频在发送队列满或编码队列满时会丢最老的帧（audio_service.cc:497-499、589-592），网络拥塞时开头几个字可能没送到服务器。",
+        "sure": "中"
+      },
+      {
+        "text": "第一次出声前要先开功放（audio_service.cc:341-345），冷启动那一下会比后续句子明显慢。",
+        "sure": "低"
+      }
+    ],
+    "warn": null,
+    "startNote": "这一句人刚说完，设备靠 VAD 判定静音，比真正最后一个字晚约几十毫秒；这段是设备内处理，不含上传和服务器",
+    "startLate": false,
+    "sideAsk": {
+      "found": "设备状态切到说话时，眼睛渲染循环在下一帧才把眼睛从聆听态换成说话态（约一帧周期后），而对比文字和字幕的变化先发生",
+      "main": "说话结束 → 声音放完",
+      "side": "说话结束 → 切到说话态",
+      "why": "用户能看到的反馈只有眼睛屏幕，状态切换后眼睛晚多少才变，是用户对'反应快慢'的直接感受。",
+      "k": 1,
+      "q": "切到说话态",
+      "addEx": "",
+      "addGuess": null,
+      "h": "码表读代码发现：设备状态切到说话时，眼睛渲染循环在下一帧才把眼睛从聆听态换成说话态（约一帧周期后），而对比文字和字幕的变化先发生。用户能看到的反馈只有眼睛屏幕，状态切换后眼睛晚多少才变，是用户对'反应快慢'的直接感受。要不要把\"切到说话态\"也一起测？",
+      "no": "不用，只测声音放完",
+      "d1": "眼睛表情这条一起测（多 1 个计时点）",
+      "note": "一起测：多插 1 个计时点，报告里多一条线；不影响语音问答这条的结果。"
+    },
+    "sideTitle": "眼睛表情这条：说话结束 → 切到说话态",
+    "sideLbl": "眼睛表情这条 →"
+  },
+  "found": [
+    "说话结束",
+    "上行首包发出",
+    "上行末包发出",
+    "封帧写入网络",
+    "首个结果到达",
+    "首包进解码队",
+    "识别文字到屏",
+    "切到说话状态",
+    "回复文字到屏",
+    "音频解码",
+    "PCM进播放队",
+    "开始出声",
+    "最后一声",
+    "判定已放空",
+    "声音放完",
+    "回到聆听"
+  ],
+  "what": "全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果",
+  "provider": "deepseek"
+}

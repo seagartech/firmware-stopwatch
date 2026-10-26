@@ -52,7 +52,7 @@ def collect(lines, pg):
 
 def test_saved_identify_reparse_marks_follow_points():
     r, a = reparsed()
-    assert r["rules"] == 2 and a["ok"] and a["rules"] == idf.RULES_VER == 3
+    assert r["rules"] == 2 and a["ok"] and a["rules"] == idf.RULES_VER >= 3
     by = {s["id"]: s for s in a["steps"]}
     assert {k for k, s in by.items() if s.get("follow")} == {"P2", "P5", "P6"}
     assert by["P1"].get("line_of") == "start" and not by["P1"].get("follow")
@@ -76,9 +76,9 @@ def test_saved_identify_reuse_resorts_without_model_calls(tmp_path):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
     got = idf.identify_cached(NoLLM(), str(FX / "src"), r.get("what") or "", **kw)
-    assert got["reused"] and got["calls"] == 0 and got["rules"] == 3
+    assert got["reused"] and got["calls"] == 0 and got["rules"] == idf.RULES_VER
     assert {s["p"] for s in got["page"]["steps"] if s.get("follow")} == {"P2", "P5", "P6"}
-    assert json.loads(f.read_text(encoding="utf-8"))["rules"] == 3  # 重排过的存回去了
+    assert json.loads(f.read_text(encoding="utf-8"))["rules"] == idf.RULES_VER  # 重排过的存回去了
 
 
 def test_old_log_front_segments_are_thin_not_fake_medians():

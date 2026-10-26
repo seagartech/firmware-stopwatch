@@ -1,0 +1,173 @@
+[
+ {
+  "p": "P1",
+  "n": "说话结束",
+  "path": "main/audio/engines/afe_audio_engine.cc",
+  "l": 482,
+  "line": "start",
+  "why": "AFE 把内部状态从'在说话'改成'没说话'，就是设备认为人这一句说完了的那一刻。",
+  "where": "before",
+  "once": "once"
+ },
+ {
+  "p": "P6",
+  "n": "上行首包发出",
+  "path": "main/application.cc",
+  "l": 242,
+  "line": "talk",
+  "why": "主循环第一次把上行音频交给协议层，这是设备侧'开始往服务器送声音'的时刻，之后就是网络和服务器的活。",
+  "where": "before",
+  "once": "first",
+  "follow": true
+ },
+ {
+  "p": "P7",
+  "n": "上行末包发出",
+  "path": "main/application.cc",
+  "l": 242,
+  "line": "talk",
+  "why": "同一行取最后一次，表示这一轮最后一批麦克风音频交出去，之后设备只等服务器回话。",
+  "where": "before",
+  "once": "last",
+  "follow": true
+ },
+ {
+  "p": "P8",
+  "n": "封帧写入网络",
+  "path": "main/protocols/websocket_protocol.cc",
+  "l": 50,
+  "line": "face",
+  "why": "真正的网络发送语句，取最后一次，量到'声音确实离开设备'；和上行末包之差就是协议封装的开销。",
+  "where": "before",
+  "once": "last",
+  "opt": true,
+  "follow": true
+ },
+ {
+  "p": "P9",
+  "n": "首个结果到达",
+  "path": "main/protocols/websocket_protocol.cc",
+  "l": 128,
+  "line": "talk",
+  "why": "服务器回来的第一包 TTS 音频被解出来交给应用层，这是设备第一次看见'回复'。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P10",
+  "n": "首包进解码队",
+  "path": "main/application.cc",
+  "l": 556,
+  "line": "talk",
+  "why": "只有在说话状态下音频才会被收下解码；这里取第一包真正被采用的音频，避免把被丢弃的包算进时延。",
+  "where": "before",
+  "once": "first",
+  "opt": true
+ },
+ {
+  "p": "P11",
+  "n": "识别文字到屏",
+  "path": "main/application.cc",
+  "l": 667,
+  "line": "talk",
+  "why": "服务器返回识别结果后设备第一次处理它，是'服务器听懂了吗'这一段的结束点。",
+  "where": "before",
+  "once": "once",
+  "opt": true
+ },
+ {
+  "p": "P12",
+  "n": "切到说话状态",
+  "path": "main/application.cc",
+  "l": 627,
+  "line": "talk",
+  "why": "收到 tts/start 后设备才允许收音频、开扬声器；这一步是'回复开始'的标志，也是解码能开工的前提。",
+  "where": "before",
+  "once": "once",
+  "opt": true
+ },
+ {
+  "p": "P13",
+  "n": "回复文字到屏",
+  "path": "main/application.cc",
+  "l": 651,
+  "line": "talk",
+  "why": "第一句回复文字下发的时刻，用来量从识别完成到开始回话的服务器耗时。",
+  "where": "before",
+  "once": "first",
+  "opt": true
+ },
+ {
+  "p": "P14",
+  "n": "音频解码",
+  "path": "main/audio/audio_service.cc",
+  "l": 426,
+  "line": "talk",
+  "why": "收到第一段回复音频后开始解码，量设备侧解码的开销。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P15",
+  "n": "PCM进播放队",
+  "path": "main/audio/audio_service.cc",
+  "l": 453,
+  "line": "talk",
+  "why": "解码好的第一段声音进播放队列等输出任务取走；到这里为止都还没有声音出来。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P16",
+  "n": "开始出声",
+  "path": "main/audio/audio_service.cc",
+  "l": 351,
+  "line": "talk",
+  "why": "第一段 PCM 从这里写进扬声器，这是用户第一次听到回复的时刻。",
+  "where": "before",
+  "once": "first"
+ },
+ {
+  "p": "P17",
+  "n": "最后一声",
+  "path": "main/audio/audio_service.cc",
+  "l": 351,
+  "line": "talk",
+  "why": "最后一段 PCM 交给扬声器，回复的声音在硬件缓冲里还会再响一小会儿。",
+  "where": "before",
+  "once": "last"
+ },
+ {
+  "p": "P18",
+  "n": "判定已放空",
+  "path": "main/audio/audio_service.cc",
+  "l": 369,
+  "line": "talk",
+  "why": "输出任务发现解码队列、播放队列都空且没有在途任务，是'全部放完'这一步的判断支。",
+  "where": "before",
+  "once": "first",
+  "opt": true
+ },
+ {
+  "p": "P19",
+  "n": "声音放完",
+  "path": "main/audio/audio_service.cc",
+  "l": 374,
+  "line": "talk",
+  "why": "确认整轮回复都播完之后才发出放空通知，用户听到的声音到这里结束。",
+  "where": "before",
+  "once": "every",
+  "opt": true
+ },
+ {
+  "p": "P20",
+  "n": "回到聆听",
+  "path": "main/application.cc",
+  "l": 635,
+  "line": "talk",
+  "why": "服务器发 tts/stop 后设备把状态切回聆听，是这一轮的收尾点，下一轮从这里开始。",
+  "where": "before",
+  "once": "once",
+  "opt": true
+ }
+]

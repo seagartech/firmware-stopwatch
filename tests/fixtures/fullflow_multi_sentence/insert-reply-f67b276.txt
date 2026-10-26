@@ -1,0 +1,206 @@
+```json
+{
+  "header": "main/fw_stopwatch.h",
+  "inserts": [
+    {
+      "step": "include",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 14,
+      "lines": [
+        "#include \"fw_stopwatch.h\"",
+        "// 计时点头文件：码表提供的 FSW_MARK 系列语句"
+      ]
+    },
+    {
+      "step": "P1",
+      "file": "main/audio/engines/afe_audio_engine.cc",
+      "after_line": 481,
+      "lines": [
+        "            // 计时点 P1：说话结束",
+        "            FSW_MARK_ONCE(1, 0);"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/application.cc",
+      "after_line": 13,
+      "lines": [
+        "#include \"fw_stopwatch.h\"",
+        "// 计时点头文件：码表提供的 FSW_MARK 系列语句"
+      ]
+    },
+    {
+      "step": "P6",
+      "file": "main/application.cc",
+      "after_line": 241,
+      "lines": [
+        "                // 计时点 P6：上行首包发出",
+        "                FSW_MARK_ONCE(6, 0);"
+      ]
+    },
+    {
+      "step": "P7",
+      "file": "main/application.cc",
+      "after_line": 241,
+      "lines": [
+        "                // 计时点 P7：上行末包发出",
+        "                FSW_KEEP_LAST(7);"
+      ]
+    },
+    {
+      "step": "P10",
+      "file": "main/application.cc",
+      "after_line": 555,
+      "lines": [
+        "            // 计时点 P10：首包进解码队",
+        "            FSW_MARK_ONCE(10, 0);"
+      ]
+    },
+    {
+      "step": "P12",
+      "file": "main/application.cc",
+      "after_line": 626,
+      "lines": [
+        "                    // 计时点 P12：切到说话状态",
+        "                    FSW_MARK_ONCE(12, 0);"
+      ]
+    },
+    {
+      "step": "P20",
+      "file": "main/application.cc",
+      "after_line": 634,
+      "lines": [
+        "                            // 计时点 P20：回到聆听",
+        "                            FSW_MARK_ONCE(20, 0);"
+      ]
+    },
+    {
+      "step": "P13",
+      "file": "main/application.cc",
+      "after_line": 650,
+      "lines": [
+        "                        // 计时点 P13：回复文字到屏",
+        "                        FSW_MARK_ONCE(13, 0);"
+      ]
+    },
+    {
+      "step": "P11",
+      "file": "main/application.cc",
+      "after_line": 666,
+      "lines": [
+        "                    // 计时点 P11：识别文字到屏",
+        "                    FSW_MARK_ONCE(11, 0);"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/protocols/websocket_protocol.cc",
+      "after_line": 5,
+      "lines": [
+        "#include \"fw_stopwatch.h\"",
+        "// 计时点头文件：码表提供的 FSW_MARK 系列语句"
+      ]
+    },
+    {
+      "step": "P8",
+      "file": "main/protocols/websocket_protocol.cc",
+      "after_line": 49,
+      "lines": [
+        "        // 计时点 P8：封帧写入网络",
+        "        FSW_KEEP_LAST(8);"
+      ]
+    },
+    {
+      "step": "P9",
+      "file": "main/protocols/websocket_protocol.cc",
+      "after_line": 127,
+      "lines": [
+        "                    // 计时点 P9：首个结果到达",
+        "                    FSW_MARK_ONCE(9, 0);"
+      ]
+    },
+    {
+      "step": "include",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 3,
+      "lines": [
+        "#include \"fw_stopwatch.h\"",
+        "// 计时点头文件：码表提供的 FSW_MARK 系列语句"
+      ]
+    },
+    {
+      "step": "P16",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 350,
+      "lines": [
+        "        // 计时点 P16：开始出声",
+        "        FSW_MARK_ONCE(16, 0);"
+      ]
+    },
+    {
+      "step": "P17",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 350,
+      "lines": [
+        "        // 计时点 P17：最后一声",
+        "        FSW_KEEP_LAST(17);"
+      ]
+    },
+    {
+      "step": "P17",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 370,
+      "lines": [
+        "        // 辅助：打印本轮最后一次“最后一声”",
+        "        FSW_FLUSH_LAST(17);"
+      ]
+    },
+    {
+      "step": "P18",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 368,
+      "lines": [
+        "        // 计时点 P18：判定已放空",
+        "        FSW_MARK_ONCE(18, 0);"
+      ]
+    },
+    {
+      "step": "P19",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 373,
+      "lines": [
+        "        // 计时点 P19：声音放完",
+        "        FSW_MARK(19, 0);"
+      ]
+    },
+    {
+      "step": "P14",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 425,
+      "lines": [
+        "                // 计时点 P14：音频解码",
+        "                FSW_MARK_ONCE(14, 0);"
+      ]
+    },
+    {
+      "step": "P15",
+      "file": "main/audio/audio_service.cc",
+      "after_line": 452,
+      "lines": [
+        "                // 计时点 P15：PCM进播放队",
+        "                FSW_MARK_ONCE(15, 0);"
+      ]
+    }
+  ],
+  "notes": [
+    "P8/P7 用了 FSW_KEEP_LAST：每包只改内存，真正打印放在 P7 的那句之后，用 FSW_FLUSH_LAST(17)？不对——“打印最后一次”的插入清单里只有一处 FSW_FLUSH_LAST（P17，在 audio_service.cc:370 之后，音频输出任务里）。P7 的末包在“放空/回归聆听”时被 P19 清掉之前就应打印；若码表要求每个 KEEP_LAST 都有配套 FLUSH，请在 P19（audio_service.cc:373 之后）再加一行 FSW_FLUSH_LAST(7)，我按“每条 FSW_KEEP_LAST 配一条 FLUSH”保守只加在 P17 处，P7 可能需要码表补一条 FLUSH。",
+    "P7 与 P8 都在热路径（每包一次），只能 KEEP_LAST；P8 位于 WebsocketProtocol::SendAudio 的 version==3 分支（default version_=1，配置里版本为 2/3 时才走这里）：若实际跑 version 1 或 2，P8 永远不记，届时需把同样的两行加到对应分支的 Send 语句前。",
+    "P1 在 AFE 音频处理线程（10ms 一帧回调）里，但只在“说话→不说话”状态翻转那一帧执行一次，频率低；FSW_ROUND_RESET 没有插入：本轮起点（第 1 包的 MAIN_EVENT_SEND_AUDIO）在 application.cc 主循环的 while 体内，属于不能清零的循环体，而唯一“一轮只经过一次”的回归聆听处（application.cc:635）晚于 P1/P12/P10 等，放在那里会把本轮已经记过的标记提前清掉；码表若按起点自动清“只记第一次”的标记，则无需 FSW_ROUND_RESET。",
+    "P12 记在 Schedule 的 lambda 里（application.cc:627 的 SetDeviceState 之前），与 P20（:635）同一分支但不同 Schedule 块，都只能被一次状态切换触发；P20 只覆盖 tts/stop 里“切回聆听”那一支，手动停止模式走的是 :633 的 idle 分支，那一支不记 P20。",
+    "P9 只插在 websocket 的 version==3 音频分支（:128 之前）；version 2 和 version 1 分支各有一句同义调用（:118、:134），未插，默认 version 为 1 时 P9 不会触发。",
+    "P13/P11 记在 Schedule 的 lambda 内（display 调用之前），和“到屏”那句同块；P11 的 lambda 回主任务执行，但与 P10/P12 不同线程排期，先后顺序由主任务串行保证。",
+    "所有 #include 只写文件名 \"fw_stopwatch.h\"：main 组件已把 main 目录本身加入 INCLUDE_DIRS（main/CMakeLists.txt:46 的 \".\"），因此这行能直接找到 main/fw_stopwatch.h；若码表要求写全路径，请改成 \"../main/fw_stopwatch.h\"。",
+    "P16/P17 都在音频输出任务里、每段 PCM 一次；P18 每段 PCM 判一次放空（只在真正空且未通知时成立）；P19 只在放空且回调存在时才走到，符合“每次都记”。P14、P15 在 Opus 编解码任务里，分别每包解码、每包入队一次，靠“只记第一次”限流。"
+  ]
+}
+```
