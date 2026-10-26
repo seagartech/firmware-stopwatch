@@ -883,6 +883,65 @@ def _outside_body(root, rel, after, lines, cache):
         return None
 
 
+def _tool_include_at(root, rel):
+    """码表自己加 #include 的位置：文件最外层（不在编译开关、大括号里）最后一个 #include 后面。"""
+    from fsw import structure
+    try:
+        src = structure.Project(root).file(rel)
+        if src is not None and src.balanced:
+            return structure.include_spot(src)
+    except Exception:
+        pass
+    src_lines = _read_lines(Path(root) / rel)
+    return max((k for k, l in enumerate(src_lines, 1) if l.lstrip().startswith("#include")), default=0)
+
+
+def _src_of(root, rel, cache):
+    from fsw import structure
+    if rel not in cache:
+        cache[rel] = structure.Project(root).file(rel)
+    return cache[rel]
+
+
+def _include_place(root, rel, after, cache):
+    """#include 插在第 after 行后面不行（在 #if/#ifdef/#else 里、大括号里、多行宏中间）：返回码表定的位置（文件最外层），行就返回 None。
+    文件结构看不懂（大括号对不上）时不挪。"""
+    from fsw import structure
+    try:
+        src = _src_of(root, rel, cache)
+        if src is None or not src.balanced or structure.include_ok(src, after):
+            return None
+        to = structure.include_spot(src)
+        return to if to != after and structure.include_ok(src, to) else None
+    except Exception:
+        return None
+
+
+def _pp_note(root, rel, after, name, cache):
+    """插在第 after 行后面的计时点落在编译开关（#if/#ifdef/#else）里：说清是哪个开关、按这块板子的配置编不编进固件。
+    返回 {"file", "after_line", "name", "on": True/False/None, "text"}；不在开关里返回 None。按配置一定会编进去的不提。"""
+    from fsw import structure
+    try:
+        src = _src_of(root, rel, cache)
+        if src is None:
+            return None
+        regions = structure.pp_regions(structure.Project(root), src, after + 1)
+    except Exception:
+        return None
+    if not regions or all(f["on"] is True for f in regions):
+        return None
+    off = [f for f in regions if f["on"] is False]
+    f = (off or [f for f in regions if f["on"] is None])[0]
+    sw = f"第 {f['line']} 行「{f['text'][:60]}」"
+    if off:
+        text = (f"「{name}」插在 {rel} 第 {after} 行后面，在{sw}那一支里：按这块板子的配置（sdkconfig）这一支不编进固件，"
+                f"这个点一次也记不到，试一次会一直缺它。回到「找关键步骤」换成开关外面、每种配置都会走的那一句，或者删掉这一步")
+    else:
+        text = (f"「{name}」插在 {rel} 第 {after} 行后面，在{sw}这个编译开关里，码表按配置判断不了编不编进固件；"
+                f"试一次一直缺它的话，多半就是这个开关没打开")
+    return {"file": rel, "after_line": after, "name": name, "on": False if off else None, "text": text}
+
+
 def _use_tool_reset(data, root, steps, flow=None, warn=None):
     """把 AI 写的清零换成码表放的（见 place_reset）。返回 (换掉的那几条, 码表放的那一条或 None)。"""
     auto = place_reset(root, steps, flow, warn)
@@ -905,8 +964,7 @@ def _use_tool_reset(data, root, steps, flow=None, warn=None):
     if not has and "fw_stopwatch.h" not in (Path(root) / rel).read_text(errors="replace"):
         inc = next((l for x in data["inserts"] if isinstance(x, dict) and x.get("step") == "include"
                     for l in (x.get("lines") or []) if isinstance(l, str) and l.strip().startswith("#include")), None)
-        src_lines = _read_lines(Path(root) / rel)
-        at = max((k for k, l in enumerate(src_lines, 1) if l.lstrip().startswith("#include")), default=0)
+        at = _tool_include_at(root, rel)
         if inc:
             data["inserts"].append({"step": "include", "file": rel, "after_line": at, "lines": [inc.strip()]})
     return mine, auto
@@ -937,7 +995,7 @@ def parse_plan(text, root, steps, needs=None, flow=None):
             or root not in (root / header).resolve().parents:
         header = default_header(root)
     ids = {f"P{number(s['p'], steps)}": s for s in steps}
-    out, problems, bad, moved, srcs = [], [], [], [], {}
+    out, problems, bad, moved, srcs, ifdef = [], [], [], [], {}, []
     warn = []  # 每轮结束那一步和识别结果对不上、好几处 case 说不准：照旧插，说清楚
     replaced, auto = _use_tool_reset(data, root, steps, flow, warn)
     flushed = _drop_model_flush(data) if auto else []
@@ -978,6 +1036,18 @@ def parse_plan(text, root, steps, needs=None, flow=None):
             reject(x, f"{rel} 第 {after} 行的附加值不是只读的：<code>{html.escape(badv[0][:80])}</code>"
                       "（附加值只能读已有的变量或不带参数的函数返回值）")
             continue
+        rel0 = p.relative_to(root).as_posix()
+        if any(isinstance(l, str) and l.strip().startswith("#include") for l in lines):
+            to = _include_place(root, rel0, after, srcs)
+            if to is not None:  # 码表自己挪，不用问 AI
+                moved.append({"kind": "moved", "step": step, "file": rel0, "after_line": after, "to": to, "lines": [str(l) for l in lines],
+                              "why": f"#include 放在第 {after} 行后面会落进编译开关（#if/#else）或大括号里，有的配置下根本不会被读到"
+                                     f"（计时点语句会报\"没有声明\"、编译不过）；码表放到文件最外层第 {to} 行后面"})
+                after = to
+        if any(isinstance(l, str) and l.strip().startswith("FSW_") for l in lines):
+            pp = _pp_note(root, rel0, after, ids[step]["n"] if step in ids else HELPER_NAMES.get(step, step), srcs)
+            if pp:
+                ifdef.append(pp)
         un = _unchecked(root, p.relative_to(root).as_posix(), srcs) if any(isinstance(l, str) and l.strip().startswith("FSW_") for l in lines) else None
         if un:
             unchecked.setdefault(p.relative_to(root).as_posix(), {"file": p.relative_to(root).as_posix(), "why": un, "steps": []})["steps"].append(step)
@@ -1060,7 +1130,8 @@ def parse_plan(text, root, steps, needs=None, flow=None):
                      "确认最后一步（比如回到聆听、回到等待）在表里、没有标「可能不走」，再点\"重新插入\"。", lost=stuck)
     st = next((s for s in steps if s.get("line") == "start"), steps[0] if steps else None)  # 一轮的起点（和场景里一样）
     start = number(st["p"], steps) if st and f"P{number(st['p'], steps)}" in {x["step"] for x in out} else None
-    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes,
+    notes += [x["text"] for x in ifdef]
+    return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes, "ifdef": ifdef,
             "tail": tail if start is not None else [], "unchecked": list(unchecked.values()),
             "follow": follow_points(steps, flow) if start is not None else [],
             "end": (lambda e: {"step": point_id(e, steps), "name": e.get("n")} if e else None)(round_end(steps, (flow or {}).get("hint")))
@@ -1289,6 +1360,7 @@ def plan_checks(plan):
     out = [f"没核对：{u['file']} {u['why'].split('，', 1)[0]}，这个文件里插的 {'、'.join(u['steps'])} 在不在函数里、在不在对应那一句的同一块里码表没法核对，编译和试一次时会再看"
            for u in plan.get("unchecked") or []]
     out += [f"每轮结束是哪一步说不准：{f['why']}。清零用的是 AI 给的位置" for f in plan.get("fixes") or [] if f.get("kind") == "reset_end_unsure"]
+    out += [x["text"] for x in plan.get("ifdef") or [] if x.get("on") is False]
     return out
 
 
@@ -1324,6 +1396,11 @@ def _rel(f, root):
         return None
 
 
+def _undeclared(text, rel):
+    """报错说 FSW_ 计时点语句"没有声明"：不是点放错了，是这个文件里码表的头文件没被读到（#include 落进了没编译的那一支）。"""
+    return bool(re.search(rf"{re.escape(rel)}:\d+(?::\d+)?:\s*error:\s*'FSW_\w+' was not declared", text or ""))
+
+
 def error_place(text, rec, root):
     """按报错的"文件:行号"（报错在码表头文件里时，按"在哪里展开的这个宏"）对回是插进去的哪一处（计时点或辅助语句）。
     返回 {"step", "file", "at"（原文件第几行后面）, "line"（插完后的行号）, "lines"}；对不上返回 None。"""
@@ -1338,7 +1415,8 @@ def error_place(text, rec, root):
         for pl in rec.get("places") or []:
             nl = pl.get("new_lines") or []
             if pl["file"] == rel and nl and (line in nl or line == max(nl) + 1):
-                return {"step": pl["step"], "file": rel, "at": pl["at"], "line": line, "lines": pl.get("lines") or []}
+                return {"step": pl["step"], "file": rel, "at": pl["at"], "line": line, "lines": pl.get("lines") or [],
+                        "undeclared": _undeclared(text, rel)}
         for sid, s in rec["steps"].items():  # 老的插入记录没有 new_lines
             if s["file"] == rel and s["lines"] and (line in s["lines"] or line == max(s["lines"]) + 1):
                 return {"step": sid, "file": rel, "at": s.get("at"), "line": line, "lines": []}
@@ -1350,6 +1428,9 @@ def error_text(place, steps):
     sid = place["step"]
     name = HELPER_NAMES.get(sid) or next((s.get("n") for s in steps if point_id(s, steps) == sid), None) or sid
     what = f"「{name}」那一句" if sid in HELPER_NAMES else f"计时点 {sid}「{name}」"
+    if place.get("undeclared"):
+        return (f"{place['file']} 里的计时点语句编译时说\"没有声明\"：这个文件里码表加的 #include 没被读到"
+                f"（多半落进了 #if/#else 编译开关里没编译的那一支），不是{what}放错了。重新插入时码表会把 #include 放到文件最外层")
     return f"码表插的{what}放的地方不对，编译不过：{place['file']} 第 {place['at']} 行后面（插完后是第 {place['line']} 行）"
 
 
