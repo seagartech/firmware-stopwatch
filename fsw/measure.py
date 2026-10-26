@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 POINT = re.compile(r"FSW,(P\d+|RESET),(-?\d+),(-?\d+)")
 LATE = re.compile(r"FSW,LATE,(P\d+),(-?\d+),(-?\d+)")  # 一轮开始时补打的"记最后一次"（见 fw_stopwatch.h 的 fsw_round_reset）
+TAIL = re.compile(r"FSW,TAIL,(P\d+),(-?\d+),(-?\d+)")  # 清零之后超过 1 秒才走到的"记最后一次"：设备只说一声晚了，不算数
 
 
 def parse_line(line):
@@ -36,6 +37,7 @@ class Spec:
     last: set = field(default_factory=set)  # 一轮里取最后一次的点（比如回答全部放完、门完全打开）：中途可能先报一次
     soft: set = field(default_factory=set)  # 只在"看内容长短、不判快慢"那条线上用的点：一轮缺了它，其余的线照样算，不整轮补测
     marks: set = field(default_factory=set)  # 插成"记最后一次"的点（含中间点）：可能越过下一步，不拿来查下一步的先后
+    follow: set = field(default_factory=set)  # 跟着起点记的点（起点和第一个结果之间）：只认码表取的那次起点之后的，取起点时不拿它们当"后面的一步"
 
     def __post_init__(self):
         if self.need is None:
@@ -67,6 +69,7 @@ class Spec:
             other = {p for i, l in enumerate(lines) if i != len(lines) - 1 for g in l["segs"] for p in g}
             spec.soft = {p for g in lines[-1]["segs"] for p in g} - other - {spec.start}
         spec.marks = set(s.get("last_points") or [])
+        spec.follow = set(s.get("follow") or []) - {spec.start}
         opt = set(s.get("optional") or [])  # 只在某种触发方式才走的计时点：有就记，一轮收齐不等它
         if opt:
             spec.need = [p for p in spec.need if p not in opt] or spec.need
@@ -158,6 +161,7 @@ class Collector:
     def __init__(self, spec, att=0, n=0):
         self.spec, self.att, self.n = spec, att, n
         self.last = ""
+        self.late = []  # 晚过了 1 秒窗口才到的尾巴点（设备打的 TAIL、清零 1 秒以后才到的）：不算数，报告里点名（停下再接着测也留着）
         self._open()
 
     def _open(self):
@@ -248,7 +252,9 @@ class Collector:
         if pv.get("carry") and self.spec.start in self.cur:  # 试一次带过来的那一轮：下一句已经开始，之后放的声音都是下一句的
             return False, self._prev_close()
         if pv.get("ready"):  # 已经收齐、在等"取最后一次"的终点的尾巴：结束标记之后才报出来的最后一声算回上一轮
-            if (name in self.spec.last or tail) and self._before_end(name) not in self.cur:
+            # 线的终点、或"记最后一次"的点（比如每句放完都报一次的"全部放完"，不一定是线的终点）
+            if (name in self.spec.last or tail or (name in self.spec.marks and name != self.spec.start and name not in self.spec.follow)) \
+                    and self._before_end(name) not in self.cur:
                 pv["occ"].setdefault(name, []).append((us, val))
                 return True, self._prev_update()
             return False, []
@@ -261,8 +267,15 @@ class Collector:
         pv["miss"].discard(name)
         return True, ([self._prev_do(self._ok_or_stale)] if not pv["miss"] else [])
 
+    def _flag_late(self, name, us, how):
+        if len(self.late) < 200:
+            self.late.append({"p": name, "name": self.spec.names.get(name, name), "us": us, "how": how})
+
     def feed(self, line):
         p = parse_line(line)
+        if not p and (tm := TAIL.search(line or "")):
+            self._flag_late(tm.group(1), int(tm.group(2)), "tail")
+            return []
         if not p:
             m = LATE.search(line or "")
             # 当"取最后一次"的终点用（比如设备先回到等待、后放空声音的最后一声）。起点和别的要的点补打出来：
@@ -306,6 +319,11 @@ class Collector:
                 return out
         if name != "RESET" and self._leftover(name, us):  # 上一轮的尾巴（上一轮已判过）：不记进这一轮
             return out
+        if (name != "RESET" and name in self.spec.marks and name != self.spec.start and name not in self.spec.follow
+                and self.reset_us is not None and us > self.reset_us + LATE_US and self.spec.start not in self.cur
+                and self.last_cur and name in self.last_cur and not self.done):
+            # 记最后一次的点，清零 1 秒以后、这一轮起点之前才到：是上一轮更晚的一下（比如最后一声放完晚了），已经不算回上一轮了
+            self._flag_late(name, us, "after_window")
         if name == "RESET":
             if self.prev:  # 等尾巴时又一轮结束了：上一轮收尾（差点的算没收全）
                 out += self._prev_close()
@@ -407,7 +425,7 @@ class Collector:
         ends = self._line_ends()
         # 老的场景（没标"记最后一次"）照旧：起点之前半秒内的也算；一次一记的中间点必须在起点之后
         # （打断回答后服务器补发的"开始说话"早于你说完 0.44 秒，算进来就成了负数段，10-19 真测）
-        tol = 0 if x in self.spec.marks else STALE_US if not self.spec.marks or x in ends else 0
+        tol = 0 if x in self.spec.marks or x in self.spec.follow else STALE_US if not self.spec.marks or x in ends else 0
         got = sorted(o for o in self.occ.get(x, [self.cur[x]] if x in self.cur else []) if o[0] >= t0 - tol)
         if not got or x == self.spec.start or not (x in self.spec.marks or x in ends):
             return got
@@ -592,6 +610,13 @@ class Collector:
             return
         felt = [l["segs"][-1][1] for l in self.spec.lines if l.get("first") and l["segs"]]
         nxt = set(felt) or {g[0][1] for g in (l["segs"] for l in self.spec.lines) if g and g[0][0] == st}  # 每条线起点之后的第一步
+        if self.spec.follow:
+            # 有跟着起点记的点（每报一次起点就重新记一次）：取第一个结果（不跟着起点的第一步，比如收到识别结果）之前的最后一次，
+            # 跟着起点的那几步（静音回调、上传首包）量的就是这次起点之后的那一下（10-26 真测：取晚了、早了都会让这几段空着）
+            line = next((l["segs"] for l in self.spec.lines if l.get("first") and l["segs"]), None) or \
+                next((l["segs"] for l in self.spec.lines if l["segs"] and l["segs"][0][0] == st), [])
+            pts = {b for _, b in line} - self.spec.follow - self.spec.marks - {st}
+            nxt = pts or nxt
         ts = [o[0] for x in nxt for o in self.occ.get(x, []) if o[0] >= occ[0][0]]
         if not ts:
             return

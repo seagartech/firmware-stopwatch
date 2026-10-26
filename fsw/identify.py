@@ -882,7 +882,8 @@ def parse(text, root, chain=None, strict=False):
     if strict and data.get("chain"):  # 两步识别的新结果：关键步骤上的点和主线的段由码表按流程放、连，再理顺（负段、先后说不准、没量到的最后结果）
         steps, pnotes = place_role_points(root, steps, data["chain"])
         steps, snotes = drop_stream_points(steps, data["chain"])
-        pnotes = pnotes + snotes
+        steps, fnotes = follow_start_points(steps, data["chain"])
+        pnotes = pnotes + snotes + fnotes
         side_add, onotes = side_for_one_impl(root, steps, data["chain"], data.get("segments"))
         if side_add:
             data["side_segments"] = [g for g in data.get("side_segments") or [] if isinstance(g, dict)] + side_add
@@ -902,7 +903,9 @@ def parse(text, root, chain=None, strict=False):
 POINT_ROLES = ROLES + (OUTPUT, DONE)
 # 码表放点、连段的规则版本：存下的两步识别结果版本不同，沿用时用存下的大模型回答按现在的规则重排一遍（不调大模型）
 # 2：去掉起点之前就一直在跑的流水线中间那几步；全部放完每次都记
-RULES_VER = 2
+# 3：起点和第一个结果之间的点跟着起点记（起点一轮报好几次时，每报一次重新记）
+RULES_VER = 3
+RESULT_ROLES = ("首个结果", OUTPUT, "最后结果", DONE)  # 设备拿到了结果、开始往外给的那几步（不算上传）
 
 
 def _want(roles, repeat):
@@ -1037,6 +1040,31 @@ def drop_stream_points(steps, chain):
     return out, notes
 
 
+def follow_start_points(steps, chain):
+    """起点那一步（比如"检出说话结束"）一轮常常报好几次：每停一下、每阵杂音都判一次，码表取第一个结果之前的最后一次当起点。
+    起点和第一个结果（首个结果、输出、最后结果、全部放完）之间的点（比如同一处的"静音回调"、持续上传时的"上传首包"）
+    如果只记第一次，记到的是第一次起点之后的那一下，和码表取的起点对不上（10-26 真测：10 轮里 9 轮这几段空着）。
+    这些点标上 follow：计时点工具每报一次起点就让它们重新记（见 fw_stopwatch.h 的 FSW_FOLLOW_MASK），
+    收数据时也只认码表取的那次起点之后的。返回 (点, [说明])。"""
+    by_n = {c["n"]: c for c in chain if isinstance(c, dict) and isinstance(c.get("n"), int)}
+    if not by_n:
+        return steps, []
+    first_n = min(by_n)
+    res = sorted(n for n, c in by_n.items() if n != first_n and any(r in _roles_of(c) for r in RESULT_ROLES))
+    if not res:
+        return steps, []
+    start = next((x for x in steps if x.get("line_of") == "start"), None)
+    mine = [x for x in steps if x is not start and x.get("line_of") in ("start", "main")
+            and isinstance(x.get("chain_step"), int) and first_n <= x["chain_step"] < res[0]]
+    for x in mine:
+        x["follow"] = "start"
+    if not mine:
+        return steps, []
+    names = "」「".join(str(x.get("name")) for x in mine)
+    return steps, [f"「{names}」跟着起点记：起点一轮会报好几次（每停一下、每阵杂音都判一次），码表取第一个结果之前的最后一次；"
+                   f"这几步在起点和第一个结果之间，每报一次起点就重新记，量的是同一次之后的那一下"]
+
+
 def place_role_points(root, steps, chain):
     """第 1 步和标了角色的步骤上的点由码表放：反复执行的放 first、last 两个，一轮一次的放一个，都插在那一步那一行前面。
     模型在这一步写的点留着名字、felt 这些，只改位置和 first/last/once；多出来的去掉，要两个却只放了一个的补上另一个。
@@ -1152,7 +1180,8 @@ def to_page(r, what):
               "struct_ok": s.get("struct_ok", True), "chk": [{"level": c["level"], "text": c["text"]} for c in s.get("chk") or []],
               **({"note": s["doubt"]} if s["doubt"] else {}), **({} if s.get("always", True) else {"opt": True}),
               **({"felt": s["felt"], "kind": s.get("kind") or ""} if s.get("felt") else {}),
-              **({"whole": True} if s.get("every_why") else {})} for s in r["steps"]]  # whole：一轮里报好几次，取最后那次（全部放完）
+              **({"whole": True} if s.get("every_why") else {}),
+              **({"follow": True} if s.get("follow") else {})} for s in r["steps"]]  # follow：跟着起点记（见 follow_start_points）  # whole：一轮里报好几次，取最后那次（全部放完）
     ids = {s["p"] for s in steps}
     start, main, side = r.get("start") or {}, r.get("main") or {}, r.get("side")
     side_steps = [s["p"] for s in steps if s["line"] == "face"]
@@ -1392,6 +1421,10 @@ def identify_cached(llm, root, what, project_dir, fingerprint, provider, reuse=T
                 again = parse(r["reply"], root, chain=r["chain"], strict=True)
                 if again.get("ok"):
                     r = {**r, **{k: v for k, v in again.items() if k != "ok"}}
+                    try:  # 重排过的存回去（页面数据一起）：码表别处读识别结果（插点时核对结束那一步）拿到的也是新的
+                        f.write_text(json.dumps({**r, "page": to_page(r, what)}, ensure_ascii=False, indent=1), encoding="utf-8")
+                    except OSError:
+                        pass
             # 沿用的结果也按现在的源码重新做一遍结构检查（存下时可能还没有这层检查，或者是改完再测挪过行号的）
             structure.check(root, r.get("steps") or [], r.get("segments"), r.get("side_segments"), r.get("chain"),
                             strict=r.get("strict") is True)  # 旧缓存没有这一项：照旧宽松

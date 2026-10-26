@@ -23,6 +23,17 @@ PASS_BAD, PASS_OK = 0.5, 0.9   # 达标率 < 50% 必须改，< 90% 建议改
 FEW = 10          # 少于 10 轮（中途停了）：结论只供参考。正常固定测 10 轮（10-21 用户定）
 SPIKE_RATIO, SPIKE_GAP = 2.5, 0.3   # 偶发特别慢：最慢一次超过一般的 2.5 倍，且多出 0.3 秒以上
 OFTEN = 0.1       # 每 10 次 1 次以上算"经常"
+ENOUGH = 0.8      # 一段（一条线）有数的轮次不到这次轮数的八成：数据不足，不给中位数当结论、不拿来点名慢在哪
+THIN = "数据不足"
+
+
+def enough(count, n):
+    return n <= 0 or count >= math.ceil(n * ENOUGH)
+
+
+def thin_why(count, n, kind="段"):
+    return (f"{n} 轮里只有 {count} 轮记到了这{kind}两头的计时点（别的轮缺了其中一个、或记到的不是这一轮的），"
+            f"几轮的数说明不了一般情况，先不当结论")
 
 
 def med(a):
@@ -147,12 +158,26 @@ def judge(scenario, rounds, prev=None):
     # 有"到第一声"那条线时，第一声之后到全部放完的那几段是在放回答：长短跟回答说了多少有关，不算"偶发特别慢"
     first = next((l for l in lines_def if l.get("first")), None)
     playing = set(lines_def[-1]["segments"]) - set(first["segments"]) if first else set()
-    seg_st = {}
+    seg_st, thin = {}, set()
+    checks = []
     for k, g in segs_def.items():
         vals = [r["segs"][k] for r in rounds if r["segs"].get(k) is not None]
         if not vals:
+            if n:
+                thin.add(k)
+                checks.append({"kind": "thin", "k": k, "name": g["name"], "count": 0, "of": n,
+                               "why": f"「{g['name']}」{n} 轮里一轮都没有数：{thin_why(0, n)}"})
             continue
         st = stats(vals)
+        if not enough(len(vals), n):
+            # 几轮的数不当结论：显示"数据不足（n/10 轮）"，不进最大头、最值得优化、每轮慢在哪、偶发特别慢
+            thin.add(k)
+            out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
+                                    "outside": g.get("side") == "outside", "verdict": THIN, "vs": None, "spiky": False,
+                                    "spiky_rounds": [], "count": len(vals), "of": n, "thin": True, "why": thin_why(len(vals), n)})
+            checks.append({"kind": "thin", "k": k, "name": g["name"], "count": len(vals), "of": n,
+                           "why": f"「{g['name']}」数据不足（{len(vals)}/{n} 轮）：{thin_why(len(vals), n)}"})
+            continue
         seg_st[k] = st
         # 放回答那几段里每轮都差不多长的（比如放完设备里剩下的声音，每轮 0.12～0.14 秒）跟回答长短无关：照常判
         by_answer = k in playing and st["max"] - st["min"] > SPIKE_GAP
@@ -161,7 +186,7 @@ def judge(scenario, rounds, prev=None):
         out["segments"].append({"k": k, "name": g["name"], "owner": g.get("owner", ""), **st,
                                 "outside": g.get("side") == "outside",
                                 "verdict": "推算" if g.get("basis") == "estimated" else ANSWER if by_answer else vs["change"] if vs else RECORDED, "vs": vs,
-                                "spiky": spiky,
+                                "spiky": spiky, "count": len(vals), "of": n,
                                 "spiky_rounds": [r["n"] for r in rounds if r["segs"].get(k) is not None
                                                  and r["segs"][k] > st["med"] * SPIKE_RATIO] if spiky else []})
 
@@ -182,6 +207,9 @@ def judge(scenario, rounds, prev=None):
         if not ends:
             continue
         st = stats(ends)
+        if not enough(len(ends), n):
+            checks.append({"kind": "thin_line", "line": l["name"], "count": len(ends), "of": n,
+                           "why": f"「{l['name']}」这条线数据不足（{len(ends)}/{n} 轮）：{thin_why(len(ends), n, '条线')}"})
         # 有"到第一声"那条时，"到全部放完"那条主要看回答说了多少字：不判快慢
         by_answer = bool(first) and l is lines_def[-1] and l is not first
         es = experience_of(scenario, l["name"])
@@ -192,7 +220,8 @@ def judge(scenario, rounds, prev=None):
             st["big_rounds"] = [r["n"] for r in rounds if r["ends"][i] is not None and r["ends"][i] > fair * TAIL_BIG]
         e = experience(l["name"], st, es)
         vs = None if by_answer or not pv else vs_prev(st["med"], (pv.get("lines") or {}).get(l["name"]), (pv.get("noise_lines") or {}).get(l["name"]))
-        out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "count": len(ends),
+        out["lines"].append({"name": l["name"], "end": l.get("end", l["name"]), **st, "count": len(ends), "of": n,
+                             **({"thin": True} if not enough(len(ends), n) else {}),
                              "verdict": ANSWER if by_answer else vs["change"] if vs else RECORDED, "exp": e, "vs": vs,
                              "exp_std": {k: es.get(k) for k in ("fair", "good", "source", "short", "category", "start_gap")} if es else None,
                              "combo": ANSWER_TXT if by_answer and e is None else combo(e, vs, _big(l, seg_st, segs_def, st), es, st["med"]),
@@ -212,6 +241,7 @@ def judge(scenario, rounds, prev=None):
 
     # 要测的那条线（最后一条）里最大头的一段
     # 和报告、写建议同一条主线：看回答长短的线不算（10-20 修）
+    out["checks"] = checks
     keep = [x for x in out["lines"] if x["verdict"] != ANSWER] or out["lines"]
     main = keep[-1] if keep else None
     if main:
@@ -223,7 +253,7 @@ def judge(scenario, rounds, prev=None):
     tgt = next((x for x in out["lines"] if x["name"] == want.get("name")), main)
     if tgt:
         byk = {g["k"]: g for g in out["segments"]}
-        cand = [k for k in tgt["segments"] if k in byk and not byk[k]["outside"] and byk[k]["verdict"] not in (ANSWER, "推算")]
+        cand = [k for k in tgt["segments"] if k in byk and not byk[k]["outside"] and byk[k]["verdict"] not in (ANSWER, "推算", THIN)]
         if cand:
             k = max(cand, key=lambda k: byk[k]["med"])
             out["best_fix"] = {"k": k, "name": byk[k]["name"], "med": byk[k]["med"], "line": tgt["name"],

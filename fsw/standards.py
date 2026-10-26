@@ -227,6 +227,12 @@ def real_scenario(page, standard, values=None):
         return None
 
     ln = page.get("ln") or {}
+    # 要测的这条线按一轮真正结束的那一步（结果页主线最后一个点，比如回到聆听）收尾：从同一个点分出去的几段（放完、回到聆听）
+    # 原来按段的先后取最后一段，总的那条线叫"到播放全部放完"，量的不是一轮的结尾（10-26 真测）
+    tail_end = (page.get("main") or [None])[-1]
+    if tail_end and main and main[-1][1] != tail_end and any(b == tail_end for _, b, _ in main):
+        k = max(i for i, (_, b, _) in enumerate(main) if b == tail_end)
+        main = main[:k] + main[k + 1:] + [main[k]]
     lines = []
     for name, items in ([(ln.get("face", "顺带的那条"), side)] if side else []) + [(ln.get("talk", "要测的这条"), main)]:
         if not items:
@@ -271,6 +277,8 @@ def real_scenario(page, standard, values=None):
             "last_points": [x["p"] for x in steps if x.get("felt") == "last" or x.get("once") == "last" or x.get("whole")],
             "start_late": bool(page.get("startLate")), "start_note": page.get("startNote") or "",
             "optional": [x["p"] for x in steps if x.get("opt")],
+            # 跟着起点记的点（见 identify.follow_start_points）：只认码表取的那次起点之后的
+            "follow": [x["p"] for x in steps if x.get("follow")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l"),
                                 **({"at": a} if (a := point_at(x)) else {})} for x in steps},
             "matched": mp}

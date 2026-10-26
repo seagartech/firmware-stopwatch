@@ -36,6 +36,9 @@ HEADER = r"""// fw_stopwatch.h —— 固件码表的计时点工具（只记时
 // 可能在清零之后才走到的点（FSW_TAIL_MASK，码表按流程先后找出来写进来）：清零后 FSW_TAIL_US 内、下一轮起点之前走到，
 // 还是上一轮的尾巴——"记最后一次"的直接补打一行 LATE，"每次都记"的照常打印；
 // 更晚才走到的"记最后一次"打一行 FSW,TAIL,P<编号>,<微秒>,0（每轮一次），只是告诉码表它晚了，不算数
+// 跟着起点的点（FSW_FOLLOW_MASK，码表按流程找出来写进来：起点和第一个结果之间的几步，比如"静音回调""上传首包"）：
+// 起点一轮会报好几次（每停一下判一次"说完"、杂音也算），码表取第一个结果之前的最后一次；这几个"只记第一次"的点
+// 每报一次起点就重新记一次（第一个结果之后的点走到过就不再重新记），量的是同一次"说完"之后的那一下
 // 开销：取时间用 esp_timer_get_time()，只用原子读写，不分配内存、不加锁。
 #pragma once
 #include <stdint.h>
@@ -66,6 +69,10 @@ extern "C" {
 #ifndef FSW_TAIL_US
 #define FSW_TAIL_US 1000000
 #endif
+// 跟着起点重新记的点（第几位 = 编号）。0 = 没有（老的插法）：和以前一样
+#ifndef FSW_FOLLOW_MASK
+#define FSW_FOLLOW_MASK 0UL
+#endif
 
 // 几个文件共用同一份记录：weak 让链接时合成一份（C 和 C++ 文件都行）
 __attribute__((weak)) unsigned char fsw_done[FSW_MAX_ID];   // "一轮只记第一次"：这一轮记过没有
@@ -76,6 +83,7 @@ __attribute__((weak)) unsigned char fsw_started;            // 这一轮的起�
 __attribute__((weak)) unsigned char fsw_pre[FSW_MAX_ID];    // 起点之前打过没有：起点之前每个点最多打一次
 __attribute__((weak)) int64_t fsw_tail_until;               // 上一轮（有起点的）清零后，到这个时间之前算它的尾巴
 __attribute__((weak)) int32_t fsw_tail_n[FSW_MAX_ID];       // 尾巴里"记最后一次"的点：接着上一轮数到第几次
+__attribute__((weak)) unsigned char fsw_past;               // 起点之后，跟着起点的那几步以外的点走到过没有（走到过就不再重新记）
 
 static inline int fsw_ok(int id) { return id >= 0 && id < FSW_MAX_ID; }
 
@@ -107,12 +115,27 @@ static inline int fsw_tail(int id, int64_t now) {
         && now <= __atomic_load_n(&fsw_tail_until, __ATOMIC_RELAXED);
 }
 
+static inline int fsw_follow(int id) { return (int)((((unsigned long)FSW_FOLLOW_MASK) >> id) & 1UL); }
+// 起点之后走到了跟着起点的那几步以外的点（比如收到识别结果）：之后再报起点，不再重新记那几步
+static inline void fsw_passed(int id) {
+    if (FSW_FOLLOW_MASK && id != FSW_START_ID && !fsw_follow(id) && !fsw_before_start(id))
+        __atomic_store_n(&fsw_past, (unsigned char)1, __ATOMIC_RELAXED);
+}
+// 又报了一次起点：跟着起点的那几步重新记
+static inline void fsw_rearm(int id) {
+    if (!FSW_FOLLOW_MASK || id != FSW_START_ID || __atomic_load_n(&fsw_past, __ATOMIC_RELAXED)) return;
+    for (int i = 0; i < FSW_MAX_ID; i++)
+        if (fsw_follow(i)) __atomic_store_n(&fsw_done[i], (unsigned char)0, __ATOMIC_RELAXED);
+}
+
 // 每次都记
 static inline void fsw_mark(int id, int32_t v) {
     if (!fsw_ok(id)) return;
     fsw_seen(id);
+    fsw_rearm(id);
     int64_t now = esp_timer_get_time();
     if (fsw_before_start(id) && !fsw_tail(id, now)) { fsw_print_pre(id, v); return; }
+    fsw_passed(id);
     fsw_print(id, now, v);
 }
 
@@ -123,6 +146,7 @@ static inline void fsw_mark_once(int id, int32_t v) {
     if (!fsw_ok(id)) return;
     fsw_seen(id);
     if (id == FSW_START_ID) {
+        fsw_rearm(id);
         __atomic_store_n(&fsw_done[id], (unsigned char)1, __ATOMIC_RELAXED);
         fsw_print(id, esp_timer_get_time(), v);
         return;
@@ -132,6 +156,7 @@ static inline void fsw_mark_once(int id, int32_t v) {
         return;
     }
     if (!__atomic_exchange_n(&fsw_done[id], (unsigned char)1, __ATOMIC_RELAXED)) {
+        fsw_passed(id);
         fsw_print(id, esp_timer_get_time(), v);
     }
 }
@@ -161,6 +186,7 @@ static inline void fsw_keep_last(int id) {
     if (((((unsigned long)FSW_TAIL_MASK) >> id) & 1UL) && fsw_before_start(id) && __atomic_load_n(&fsw_tail_until, __ATOMIC_RELAXED)
         && !__atomic_exchange_n(&fsw_pre[id], (unsigned char)1, __ATOMIC_RELAXED))
         printf("FSW,TAIL,P%d,%lld,0\n", id, (long long)now);
+    if (!fsw_before_start(id)) fsw_passed(id);
     __atomic_store_n(&fsw_last_us[id], now, __ATOMIC_RELAXED);
     __atomic_fetch_add(&fsw_last_n[id], 1, __ATOMIC_RELAXED);
 }
@@ -186,6 +212,7 @@ static inline void fsw_round_reset(void) {
     }
     __atomic_store_n(&fsw_armed, (unsigned char)0, __ATOMIC_RELAXED);
     __atomic_store_n(&fsw_started, (unsigned char)0, __ATOMIC_RELAXED);
+    __atomic_store_n(&fsw_past, (unsigned char)0, __ATOMIC_RELAXED);
     int64_t now = esp_timer_get_time();
     __atomic_store_n(&fsw_tail_until, had ? now + FSW_TAIL_US : (int64_t)0, __ATOMIC_RELAXED);
     printf("FSW,RESET,%lld,0\n", (long long)now);
@@ -218,14 +245,26 @@ static inline void fsw_round_reset(void) {
 #endif  // FW_STOPWATCH_ENABLE
 """
 
-def header_text(start=None, tail=None):
+def _bits(ks):
+    return sorted({int(str(k).lstrip("P")) for k in ks or [] if str(k).lstrip("P").isdigit() and 0 < int(str(k).lstrip("P")) < 32})
+
+
+def header_text(start=None, tail=None, follow=None):
     """计时点工具的内容：知道这一轮的起点是哪个计时点就写进去（"一轮只记第一次"的点起点之前不占名额）；
-    可能在每轮清零之后才走到的点（见 tail_points）写进 FSW_TAIL_MASK。"""
+    可能在每轮清零之后才走到的点（见 tail_points）写进 FSW_TAIL_MASK；跟着起点重新记的点（见 follow_points）写进 FSW_FOLLOW_MASK。"""
     out = HEADER if start is None else HEADER.replace("#define FSW_START_ID -1", f"#define FSW_START_ID {int(start)}", 1)
-    ids = sorted({int(str(k).lstrip("P")) for k in tail or [] if str(k).lstrip("P").isdigit() and 0 < int(str(k).lstrip("P")) < 32})
-    if ids and start is not None:
-        out = out.replace("#define FSW_TAIL_MASK 0UL", f"#define FSW_TAIL_MASK 0x{sum(1 << i for i in ids):X}UL  // {' '.join(f'P{i}' for i in ids)}", 1)
+    for macro, ks in (("FSW_TAIL_MASK", tail), ("FSW_FOLLOW_MASK", [k for k in follow or [] if str(k).lstrip("P") != str(start)])):
+        ids = _bits(ks)
+        if ids and start is not None:
+            out = out.replace(f"#define {macro} 0UL", f"#define {macro} 0x{sum(1 << i for i in ids):X}UL  // {' '.join(f'P{i}' for i in ids)}", 1)
     return out
+
+
+def follow_points(steps, flow=None):
+    """跟着起点的点（识别时码表按流程标的 follow，见 identify.follow_start_points；老的步骤表看识别结果里的 follow）：
+    起点和第一个结果之间、"只记第一次"的点。起点一轮报好几次时，每报一次起点它们重新记一次。返回 [P 编号]。"""
+    names = set((flow or {}).get("follow") or [])
+    return [point_id(s, steps) for s in steps if (s.get("follow") or s.get("p") in names) and s.get("line") != "start"]
 
 
 LATE_SECS = 1  # 和 measure.LATE_US、头文件里的 FSW_TAIL_US 一样：清零之后这么久内到的尾巴还算上一轮
@@ -320,7 +359,10 @@ def build_prompt(steps, header, needs=None, extra=None):
     rows = "\n".join(
         f"- P{number(s['p'], steps)}（编号 {number(s['p'], steps)}）{s['n']}：{s.get('path') or s.get('f')} 第 {s['l']} 行"
         f"{'这一句之前' if s.get('where') == 'before' else '这一句之后' if s.get('where') == 'after' else ''}，"
-        f"{ONCE.get(s.get('once'), '一轮只记第一次')}" + (f"；为什么在这：{s['why']}" if s.get("why") else "")
+        f"{ONCE.get(s.get('once'), '一轮只记第一次')}"
+        + ("（跟着起点：起点一轮会报好几次，码表的工具每报一次起点就让它重新记，照样写 FSW_MARK_ONCE，不用自己判断）"
+           if s.get("follow") and s.get("once") in ("once", "first") else "")
+        + (f"；为什么在这：{s['why']}" if s.get("why") else "")
         for s in steps)
     out = PROMPT.format(table=rows, header=header, values=VALUES.format(rows=vrows) if nb else "",
                         values_out=VALUES_OUT if nb else "")
@@ -998,6 +1040,7 @@ def parse_plan(text, root, steps, needs=None, flow=None):
     start = number(st["p"], steps) if st and f"P{number(st['p'], steps)}" in {x["step"] for x in out} else None
     return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes,
             "tail": tail if start is not None else [], "unchecked": list(unchecked.values()),
+            "follow": follow_points(steps, flow) if start is not None else [],
             "end": (lambda e: {"step": point_id(e, steps), "name": e.get("n")} if e else None)(round_end(steps, (flow or {}).get("hint")))
             if auto else None}
 
@@ -1106,7 +1149,7 @@ def apply(root, plan, backup):
     if rec["deleted"]:  # 还没动任何文件
         return _fail("deleted", f"码表核对时发现会删掉或改掉 {rec['deleted']} 行原有代码，已经撤回，一个文件都没改。")
     if created:
-        rec["added"] += len(header_text(plan.get("start"), [x["step"] for x in plan.get("tail") or []]).splitlines())
+        rec["added"] += len(header_text(plan.get("start"), [x["step"] for x in plan.get("tail") or []], plan.get("follow")).splitlines())
     rec.update(state="applying", before={f: _sha(root / f) for f in files},
                after={f: hashlib.sha256(news[f]).hexdigest() for f in files})
     try:
@@ -1125,7 +1168,7 @@ def apply(root, plan, backup):
             (root / f).write_bytes(news[f])
         if created:
             header.parent.mkdir(parents=True, exist_ok=True)
-            header.write_text(header_text(plan.get("start"), [x["step"] for x in plan.get("tail") or []]), encoding="utf-8")
+            header.write_text(header_text(plan.get("start"), [x["step"] for x in plan.get("tail") or []], plan.get("follow")), encoding="utf-8")
         rec["state"] = "done"
         _write_record(backup, rec, plan)
     except BaseException as e:  # 只读文件、磁盘满、杀毒软件锁住文件、被强行中断：已改的撤回
