@@ -261,7 +261,7 @@ function timeline(D){
    const li=rows.map(r=>`<li><span class="nm"><b>${htmlEsc(plainWhere(D,r.k)==='cloud'?`等云端${sv?`（${sv}）`:''}`:r.name)}</b>：一般 ${f(r.d)} 秒，占 ${Math.round(r.share*100)}%。${say(r)}</span></li>`).join('');
    const tn=!tiny.length?'':ts<0.05&&tiny.every(x=>x.where==='dev')?'设备内部还有几步，加起来不到 0.05 秒，可忽略。':`另有几步很短，加起来约 ${f(ts)} 秒（${tiny.map(x=>htmlEsc(x.name)).join('、')}）。`;
    return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="时间花在哪">${g}</svg></div>
-  <ul class="tlst plain" style="padding-left:20px">${li}</ul><p class="note" style="margin:6px 0 0">${tn?tn+'':''}图里的数是 ${D.n} 次里的一般情况（中位数）；各段加起来和总数可能差几十毫秒，是正常的。</p>`}
+  <ul class="plainlst" style="margin:8px 0 0;padding-left:20px;line-height:1.7;font-size:14px">${li}</ul><p class="note" style="margin:6px 0 0">${tn?tn+'':''}图里的数是 ${D.n} 次里的一般情况（中位数）；各段加起来和总数可能差几十毫秒，是正常的。</p>`}
   const list=rows.map(r=>`<li><span class="no">${r.no}</span><span class="nm">${htmlEsc(r.name)}${r.shared?'（共用）':''}</span><span class="r num">${f(r.d)} 秒</span><span class="r num">${Math.round(r.share*100)}%</span><span class="ow">${htmlEsc(r.owner)}</span><span class="ow">${r.inc?`另含极短段：${r.tiny.map(t=>`${htmlEsc(t.name)} ${f(t.v)} 秒`).join('、')}`:''}</span></li>`).join('');
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
   <ol class="tlst">${list}</ol><p class="note" style="margin:6px 0 0">按 ${D.n} 轮中位数画：每条线总长是这条线的中位数；块里和上面列的秒数是这一段自己的中位数，和「分段用时」一样（各段中位数加起来和整条线的中位数不一定相等，色块按比例画）。不到 5% 的段并进相邻的块，名字和秒数单独写出。</p>`;
