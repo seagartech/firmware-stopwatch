@@ -536,7 +536,9 @@ def _same_block(root, rel, after, s, cache):
                f"（中间隔着「{crossed or '块的边界'}」），会落进旁边另一支或块外，可能永远走不到；"
                f"要插在第 {line} 行{what}、同一层")
         if where != "after":
-            to = first - 1 if structure.real_stmt(src, first) or structure.call_in_if(src.clines[first - 1]) else None
+            # 对应的那一句是一整个 if / switch 的开头（点要放在整个判断前面，见 identify.lift_alt_branches）：它前面就是同一层
+            to = first - 1 if structure.real_stmt(src, first) or structure.call_in_if(src.clines[first - 1]) \
+                or re.match(r"(?:if|switch)\b", c) else None
         else:
             to = line if structure.real_stmt(src, line) and not structure._UNFINISHED.search(c) else None
         if to is not None:
@@ -567,7 +569,8 @@ def _hinted(steps, hint):
 
 
 def round_end(steps, hint=None):
-    """一轮的结束那一步：要测的这条线上（顺带的那条不算），表里（按流程先后）最后一个"一轮只经过一次"、不是可选、不是起点的计时点。
+    """一轮的结束那一步：要测的这条线上（顺带的那条不算），表里（按流程先后）最后一个"一轮只经过一次"、不是可选、不是起点的计时点；
+    一轮只经过一次的全是可选的，就用其中最后那个（不然没处清零，"记最后一次"的点一直报不出来）。
     试一次看出来一轮其实到后面某一步才完（hint，见 _hinted）就用那一步。没有就 None。"""
     h = _hinted(steps, hint)
     if h:
@@ -575,6 +578,8 @@ def round_end(steps, hint=None):
     main = _main_steps(steps)
     st = next((s for s in main if s.get("line") == "start"), None)
     ends = [s for s in main if s is not st and not s.get("opt") and s.get("once") == "once"]
+    if not ends:  # 一轮只经过一次的全标成了可选（识别说"不一定走"）：还是用最后那个，一轮结束总得有个地方
+        ends = [s for s in main if s is not st and s.get("once") == "once"]
     return ends[-1] if ends else None
 
 
@@ -907,6 +912,17 @@ def _use_tool_reset(data, root, steps, flow=None, warn=None):
     return mine, auto
 
 
+def _keep_without_reset(out, auto, ids):
+    """只记最后一次（FSW_KEEP_LAST）的点要在清零时、或单独写的 FSW_FLUSH_LAST 处才打出来：
+    清单里两样都没有的，这个点插了也一次都报不出来（10-26 真测：上行末包一直等不到）。返回这些点的名字。"""
+    lines = [l for x in out for l in x.get("lines") or [] if isinstance(l, str)]
+    if auto or any(RESET_CALL.search(l) for l in lines):
+        return []
+    flushed = {int(m.group(1)) for l in lines for m in FLUSH_CALL.finditer(l)}
+    kept = sorted({int(m.group(1)) for l in lines for m in KEEP_CALL.finditer(l)} - flushed)
+    return [ids[f"P{k}"]["n"] if f"P{k}" in ids else f"P{k}" for k in kept]
+
+
 def parse_plan(text, root, steps, needs=None, flow=None):
     """读 AI 给的插入清单，逐条核对。只能插计时点语句、注释和 #include，别的代码一行都不插。
     不合规的那几条（比如夹带了 if 判断）：去掉以后每个计时点都还在、留下的都能照常工作，就只去掉这几条，其余照插，
@@ -1036,6 +1052,12 @@ def parse_plan(text, root, steps, needs=None, flow=None):
         expect = said.get(k, {}).get("expect")
         values[k] = {"expr": expr, "expect": expect if isinstance(expect, int) and not isinstance(expect, bool) else need.get("value"),
                      "what": need["what"]}
+    stuck = _keep_without_reset(out, auto, ids)
+    if stuck:
+        return _fail("no_round_end", f"「{'」「'.join(stuck)}」要记一轮里的最后一次，得等一轮结束（清零）才报出来，"
+                     "可这份清单里没有每轮清零，也没有单独打印它，插进去以后它一次也报不出来，码表没有用，一个文件都没改。"
+                     "多半是识别时一轮只走一次的那几步都没找到（或者都标成了不一定走）：回到识别结果页，"
+                     "确认最后一步（比如回到聆听、回到等待）在表里、没有标「可能不走」，再点\"重新插入\"。", lost=stuck)
     st = next((s for s in steps if s.get("line") == "start"), steps[0] if steps else None)  # 一轮的起点（和场景里一样）
     start = number(st["p"], steps) if st and f"P{number(st['p'], steps)}" in {x["step"] for x in out} else None
     return {"ok": True, "header": header, "inserts": out, "notes": notes, "values": values, "start": start, "fixes": fixes,
