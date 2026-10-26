@@ -612,6 +612,21 @@ def _fallback(proj, file, line, cands, single, text=""):
     return None
 
 
+END_ROLES = ("最后结果", DONE)
+
+
+def _end_verified(proj, c, ends, of, located):
+    """这一步标了 ends 里的某个角色，而且位置核对过：码表认准了（located，比如全部放完那一支），或在这一类候选旁边。"""
+    mine = [r for r in c["role"] if r in ends]
+    if not mine:
+        return False
+    if any(r in located for r in mine):
+        return True
+    kinds = {k for r in mine for k in CAND_ROLES.get(r, ())}
+    opts = of(kinds)
+    return bool(opts) and bool(_near_cand(proj, c["file"], c["line"], opts))
+
+
 def _cand_fixes(proj, chain, mode, cands, located, fixes, repairs, apply, tips):
     """关键步骤（第 1 步、标了角色的步骤）、mode、mode.protocol 和码表找到的候选对一对：
     不在候选里（也不和候选在同一支）的，问一次（不挡），列出能选的候选；apply 时还不在就换成最近的候选，换不了的只提醒。"""
@@ -643,6 +658,19 @@ def _cand_fixes(proj, chain, mode, cands, located, fixes, repairs, apply, tips):
             continue
         single = kinds <= {"输入结束"}
         to = _fallback(proj, c["file"], c["line"], opts, single, f"{c.get('what') or ''} {c.get('branch') or ''}")
+        ends = [r for r in c["role"] if r in END_ROLES]
+        if to is None and ends:
+            # 一轮的结尾（最后结果、全部放完）不在候选里、追问也没改过来（8783：标在了主循环里转发"播放放空"通知的那一支，
+            # 一轮会走好几次，清零放在那里每句之间都清一次）：不带着它往下走，按通用的办法自己定——
+            # 别的步骤已经标了这个角色、而且在候选里（或码表认准了位置）：去掉这一步的这个标记，一轮的结尾按那一步；
+            # 没有：换成候选里离它最近的（同一个文件优先）
+            ok = [o for o in chain if o is not c and _end_verified(proj, o, ends, of, located)]
+            if ok:
+                c["role"] = [r for r in c["role"] if r not in ends]
+                repairs.append(f"第 {c['n']} 步（{label}）不在码表找到的候选里，追问后也没改对；第 {'、'.join(str(o['n']) for o in ok)} 步"
+                               f"已经标了{'、'.join(ends)}、位置核对过：去掉第 {c['n']} 步的{'、'.join(ends)}，一轮的结尾按核对过的那一步")
+                continue
+            to = min(opts, key=lambda o: (o["file"] != c["file"], abs(o["line"] - c["line"])))
         if to is None:
             tips.append(f"第 {c['n']} 步（{label}）不在码表找到的候选里，码表也换不了，请留意")
             continue
