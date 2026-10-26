@@ -309,9 +309,10 @@ def directives_at(src, line):
             nxt = next((x.strip() for x in lines[k:k + 3] if x.strip()), "")
             guard = d == "ifndef" and re.match(rf"#\s*define\s+{re.escape(rest)}\b", nxt) is not None
             cond = rest if d == "if" else f"defined({rest})" if d == "ifdef" else f"!defined({rest})"
-            stack.append({"line": start + 1, "text": s, "branch": "if", "cond": cond, "first": cond, "guard": guard})
+            stack.append({"line": start + 1, "text": s, "branch": "if", "cond": cond, "first": cond, "guard": guard, "conds": [cond]})
         elif d == "elif" and stack:
             stack[-1].update(branch="elif", cond=rest, text=s, line=start + 1)
+            stack[-1]["conds"] = stack[-1].get("conds", []) + [rest]
         elif d == "else" and stack:
             stack[-1].update(branch="else", line=start + 1, text=s)
         elif d == "endif" and stack:
@@ -528,6 +529,11 @@ def check_ifdef(proj, src, line):
     for f in frames:
         names = sorted(set(_CONFIG.findall(f["first"] + " " + f["cond"])))
         where = f"第 {f['line']} 行「{_cond_text(f['text'])}」" + ("（开关条件不成立时才编进去的那一支）" if f["branch"] == "else" else "")
+        on = frame_on(proj, f) if any(n for n in names) else None
+        if on is not None:  # 编译用的 sdkconfig 能算出来（几个开关一起的条件、#elif、#else 也算）
+            vals = "；".join(f"{n}：{_value(proj, n)[0]}" for n in names)
+            parts.append(f"{where}，{vals}，按编译用的配置" + ("这一支会编进固件" if on else "这一支不会编进固件，这一步一次也记不到"))
+            continue
         if not names:
             others = sorted(set(re.findall(r"[A-Za-z_]\w*", f["cond"])) - {"defined"})
             parts.append(f"{where}：{'、'.join(others) or '这个条件'} 不在 sdkconfig 里，码表判断不了会不会编进去")
@@ -1834,3 +1840,160 @@ def _alt_switch(src, sw, line, callee, fn):
     while head > 1 and not re.match(r"\s*switch\b", src.clines[head - 1]):
         head -= 1
     return {"head": head, "callee": callee, "cond": _cond_of(b["head"]), "names": sorted(names), "n": len(labels)}
+
+
+# ---------- 编译开关（#if）：插进去的东西会不会编进固件 ----------
+_PP_TOK = re.compile(r"\s*(defined|\|\||&&|!=|==|>=|<=|[!()<>]|[A-Za-z_]\w*|0[xX][0-9a-fA-F]+|\d+)[uUlL]*")
+
+
+def cond_value(proj, cond):
+    """按配置算一个 #if 条件：True / False，算不出来（用到配置之外的宏、写法复杂）返回 None。
+    只认 CONFIG_ 开头的开关（sdkconfig 里 y 算 1、n 或没写算 0、数字照数字）、defined(...)、! && || 比较和括号。"""
+    toks, pos, s = [], 0, (cond or "").strip()
+    while pos < len(s):
+        m = _PP_TOK.match(s, pos)
+        if not m:
+            return None
+        toks.append(m.group(1))
+        pos = m.end()
+    vals = {}
+
+    def val(name):
+        if name in vals:
+            return vals[name]
+        if not name.startswith("CONFIG_"):
+            raise ValueError(name)
+        hits = [(f, v[name]) for f, v in proj.config() if name in v]
+        if hits and hits[0][0] == "sdkconfig":
+            v = hits[0][1]
+        elif not hits and any(f == "sdkconfig" for f, _ in proj.config()):
+            v = "n"  # 编译用的 sdkconfig 里没写：没打开
+        else:
+            raise ValueError(name)
+        v = str(v).strip('"')
+        out = 1 if v == "y" else 0 if v in ("n", "") else int(v, 0) if re.fullmatch(r"-?(?:0[xX][0-9a-fA-F]+|\d+)", v) else None
+        if out is None:
+            raise ValueError(name)
+        vals[name] = out
+        return out
+
+    i = 0
+
+    def peek():
+        return toks[i] if i < len(toks) else None
+
+    def take():
+        nonlocal i
+        i += 1
+        return toks[i - 1]
+
+    def prim():
+        tk = take()
+        if tk == "(":
+            v = orr()
+            if take() != ")":
+                raise ValueError(")")
+            return v
+        if tk == "!":
+            return int(not prim())
+        if tk == "defined":
+            par = peek() == "("
+            if par:
+                take()
+            name = take()
+            if par and take() != ")":
+                raise ValueError(")")
+            if not name.startswith("CONFIG_"):
+                raise ValueError(name)
+            try:
+                return int(val(name) != 0 or any(f == "sdkconfig" and name in v for f, v in proj.config()))
+            except ValueError:
+                raise
+        if re.fullmatch(r"0[xX][0-9a-fA-F]+|\d+", tk or ""):
+            return int(tk, 0)
+        if tk and re.fullmatch(r"[A-Za-z_]\w*", tk):
+            return val(tk)
+        raise ValueError(tk)
+
+    def cmp():
+        v = prim()
+        while peek() in ("==", "!=", "<", ">", "<=", ">="):
+            op, w = take(), prim()
+            v = int({"==": v == w, "!=": v != w, "<": v < w, ">": v > w, "<=": v <= w, ">=": v >= w}[op])
+        return v
+
+    def andd():
+        v = cmp()
+        while peek() == "&&":
+            take()
+            w = cmp()
+            v = int(bool(v) and bool(w))
+        return v
+
+    def orr():
+        v = andd()
+        while peek() == "||":
+            take()
+            w = andd()
+            v = int(bool(v) or bool(w))
+        return v
+
+    try:
+        v = orr()
+        return None if i != len(toks) else bool(v)
+    except (ValueError, IndexError, TypeError):
+        return None
+
+
+def frame_on(proj, f):
+    """包住某一行的一层 #if：这一支按配置会不会编进去；算不出来 None。"""
+    conds = f.get("conds") or [f.get("first")]
+    vs = [cond_value(proj, c) for c in conds]
+    if f["branch"] == "else":
+        return None if None in vs else not any(vs)
+    if None in vs:
+        return None
+    return all(not v for v in vs[:-1]) and vs[-1]
+
+
+def pp_regions(proj, src, line):
+    """插在第 line 行之前的东西落在哪几层编译开关里（不算头文件保护）：[{"line", "text", "on": True/False/None}]，从外到里。"""
+    return [{**f, "on": frame_on(proj, f)} for f in directives_at(src, line)]
+
+
+def include_ok(src, after):
+    """#include 插在第 after 行后面行不行：不在任何 #if / #ifdef / #else 里（头文件保护不算），也不在任何大括号里
+    （命名空间、extern "C"、函数）。"""
+    if directives_at(src, after + 1):
+        return False
+    if 0 < after <= len(src.lines) and src.lines[after - 1].rstrip().endswith("\\"):
+        return False  # 多行宏（行尾 \）的中间
+    at = src.starts[after] if 0 < after < len(src.starts) else (0 if after <= 0 else len(src.code))
+    return not src.chain(at)
+
+
+def include_spot(src):
+    """码表自己定 #include 放在第几行后面：文件最外层、不在任何编译开关和大括号里的最后一个 #include 后面；
+    一个都没有就放在第一个编译开关或第一句代码前面（有头文件保护的放在保护的 #define 后面）。"""
+    best = None
+    for k, raw in enumerate(src.lines, 1):
+        if re.match(r"\s*#\s*include\b", raw) and include_ok(src, k) and not directives_at(src, k):
+            best = k
+    if best is not None:
+        return best
+    guard = 0
+    for k, raw in enumerate(src.lines, 1):
+        s = raw.strip()
+        if not s or s.startswith(("//", "/*", "*")):
+            continue
+        m = re.match(r"#\s*ifndef\s+(\w+)", s)
+        if m and not guard:
+            nxt = next((j for j in range(k + 1, min(k + 4, len(src.lines) + 1)) if src.lines[j - 1].strip()), None)
+            if nxt and re.match(rf"#\s*define\s+{re.escape(m.group(1))}\b", src.lines[nxt - 1].strip()):
+                guard = nxt
+                continue
+        if s.startswith("#pragma once"):
+            guard = k
+            continue
+        return max(guard, k - 1) if include_ok(src, max(guard, k - 1)) else guard
+    return guard
