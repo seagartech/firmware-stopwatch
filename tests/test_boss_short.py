@@ -53,7 +53,8 @@ def test_recommended_option_line():
 
 def test_decide_comes_before_the_timing_chart():
     page = grab("reportPage")
-    assert page.index("<h2>要你拍板</h2>") < page.index("<h2>一次的计时图</h2>")
+    assert page.index("要你拍板") < page.index("一次的计时图")  # 结论版（说人话）写成"结论和建议"在"时间花在哪"前面
+    assert page.index("结论和建议") < page.index("时间花在哪")
 
 
 def test_details_folded_by_default():

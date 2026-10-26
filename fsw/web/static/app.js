@@ -76,7 +76,10 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
  const start=st[sc.start.point];
  return {crumb:`${htmlEsc(withChip(pName))} · ${htmlEsc(sShort)}到${htmlEsc(mEnd)} · ${J.n} 轮`,real:true,startShort:sShort,start:sShort,est:{label:'推算段',note:'起点之前设备看不见的那段，不计入'},exp,segs,lines,
-  firstBeforeSecond:lines.length>1,recOnly:sc.recOnly||null,fixes:ADV&&ADV.status==='done'?ADV.fixes:[],
+  firstBeforeSecond:lines.length>1,recOnly:sc.recOnly||null,
+  // 结论版说人话用（10-26）：设备类别、设备外那段在做什么（识别时的 outside_note）、各步怎么感觉到、AI 是否说过用户感觉不到
+  plain:{cat:String(P.category||'').trim(),words:P.plain&&typeof P.plain==='object'?P.plain:{},server:String(P.server||'').trim(),kind:Object.fromEntries((P.steps||[]).filter(x=>x.felt).map(x=>[x.n,x.kind||''])),
+   unseen:Object.fromEntries((P.steps||[]).filter(x=>x.felt).map(x=>[x.n,(typeof UNSEEN_RX!=='undefined'&&UNSEEN_RX.test(`${x.note||''} ${x.why||''}`))]))},fixes:ADV&&ADV.status==='done'?ADV.fixes:[],
   tech:{
    loc:Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,st[g.to]?`${st[g.to].f} ${lnTxt(st[g.to].l)}`:''])),log:J.raw_log||S0.tech.log},J}}
 // 判快慢、两把尺子、结论标签：后台按固定规则算（任务 16，fsw/judge.py），这里只照着显示
@@ -114,7 +117,48 @@ function headline(D){
 function measureLine(D){const J=D.J;return J&&(J.lines||[]).find(x=>x.measure&&!x.bad)||null}
 // 主指标（设备往外给出结果的第一下，比如开始出声，见 standards.primary_first）当标题、首屏的大数；其余的线跟在后面（10-26 用户：最关心说完到首段出声）
 function mainFirst(D){const ls=(D.J&&D.J.scenario&&D.J.scenario.lines)||[],p=ls.find(x=>x.first);return p?D.lines.find(l=>l.name===p.name)||null:null}
-function titleHtml(D){const m=measureLine(D),M=D.S.real?mainFirst(D):null;
+// ===== 结论版说人话（10-26 用户：最终用户看不懂代码、也没法追问，报告要自己说明白）=====
+// 只在真测、有主指标、拿得到后台判定时用；老存档、演示数据、缺信息时退回原来的写法。词按设备类别和主指标那一下怎么感觉到取，类别对不上用通用词
+const UNSEEN_RX=/看不到|看不见|不显示|不会显示|显示不出|藏起来|被隐藏|隐藏了|听不到|听不见|不可见|用户感觉不到|感觉不到/;  // 和 standards.UNSEEN 一样
+// 类别对应的说法由后台给（identify.PLAIN_WORDS → page.plain.words）；对不上的类别用通用说法
+const PLAIN_GEN={start:'操作完',done:'处理完你的输入',len:'这次要做的事有多少'};
+const PLAIN_FEEL={'声音':'听到设备的第一声','画面':'看到屏幕有变化','灯光':'看到灯亮','动作':'看到它开始动'};
+function plainOn(D){const M=D&&D.S&&D.S.real&&D.S.plain&&D.J&&D.J.scenario?mainFirst(D):null;return !!(M&&M.med!=null&&isFinite(M.med)&&(M.segs||[]).length)}
+function plainWords(D){const p=D.S.plain||{},w={...PLAIN_GEN,...(p.words||{})},M=mainFirst(D),k=M&&p.kind?p.kind[M.end]:'';
+ return {...w,feel:(k==='声音'&&w.sound)||PLAIN_FEEL[k]||'感觉到设备的第一下反应'}}
+// 谁负责：服务器 → 云端（含网络）；固件、硬件 → 设备；网络 + 固件 → 设备（含网络）
+const plainWho=o=>{o=String(o||'');const sv=/服务器|云/.test(o),dv=/固件|硬件|设备/.test(o),nt=/网络/.test(o);
+ return sv&&dv?'云端和设备都有':sv?'云端（含网络）':dv?(nt?'设备（含网络）':'设备'):nt?'网络':o}
+// 这一段算在哪边：在设备外（服务器）→ 云端；设备上的（含网络）→ 设备；只有网络、或服务器和设备都有 → 其他 / 混合
+function plainWhere(D,k){const g=((D.J.scenario||{}).segments||{})[k]||{},o=String(g.owner||(D.S.segs[k]||{}).owner||''),sv=/服务器|云/.test(o),dv=/固件|硬件|设备/.test(o);
+ if(sv&&dv)return 'mix';if(sv||(g.side==='outside'&&!dv))return 'cloud';return dv?'dev':'mix'}
+const plainServer=D=>String((D.S.plain||{}).server||'').replace(/^(服务器|云端|服务端)[：:]\s*/,'');
+function plainSplit(D,M){const t={cloud:0,dev:0,mix:0};(M.segs||[]).forEach(k=>{const v=segMed(D,k);if(v!=null&&isFinite(v)&&v>0)t[plainWhere(D,k)]+=v});return t}
+// 体验标准按平均判（T/CESA 1045 6.3.3 写的是平均）；逐次超过的只当补充
+function plainStd(D,M){const j=(D.J.lines||[]).find(x=>x.name===M.name)||{},es=j.exp_std;if(!es||es.fair==null)return null;
+ const e=num(M.ends||[]);if(!e.length)return null;const avg=e.reduce((t,x)=>t+x,0)/e.length;
+ return {fair:es.fair,good:es.good,avg,n:e.length,over:e.filter(x=>x>es.fair).length,ok:avg<=es.fair}}
+function plainHead(D){const M=mainFirst(D),w=plainWords(D),st=plainStd(D,M);
+ return `你${w.start}后，一般约 ${f(M.med)} 秒${w.feel}${st?`（${st.n} 次里 ${st.n-st.over} 次在 ${st.fair} 秒内）`:''}。`}
+function plainWhy(D){const M=mainFirst(D),w=plainWords(D),st=plainStd(D,M),t=plainSplit(D,M),tot=t.cloud+t.dev+t.mix,sv=plainServer(D);
+ const s2=t.cloud>0.005?`其中约 ${f(t.cloud)} 秒在等云端${sv?`（${htmlEsc(sv)}）`:''}，设备自己约 ${f(t.dev)} 秒${t.mix>0.005?`，另有约 ${f(t.mix)} 秒是网络或两边都有的部分`:''}。`
+  :`这段时间基本都花在设备上（约 ${f(t.dev)} 秒）${t.mix>0.005?`，另有约 ${f(t.mix)} 秒是网络或两边都有的部分`:''}。`;
+ const fast=st?(st.good!=null?M.med<=st.good:st.ok&&!st.over):false,b=D.J.best_fix;
+ const s3=fast?'已经很快，不用改。'
+  :tot>0&&t.cloud/tot>=.7?'慢主要在云端，改设备代码帮不上；要更快需要换更快的服务、离你更近的服务器或更好的网络。'
+  :b&&b.name?`最值得改的是设备上的「${htmlEsc(b.name)}」，一般约 ${fms(b.med)} 秒${b.share!=null?`，占 ${Math.round(+b.share)}%`:''}。`
+  :st&&st.ok?'已经很快，不用改。':'';
+ const s4=st?`按行业标准（从你${w.start}到设备开始回应，平均不超过 ${st.fair} 秒），这次平均 ${f(st.avg)} 秒，${st.ok?'达标':'没达标'}${st.ok&&st.good!=null&&st.avg>st.good?`，离理想水平（${st.good} 秒）还差约 ${f(st.avg-st.good,1)} 秒`:''}${st.over?`；${st.ok?'偶尔超过':'超过的次数'}：${st.n} 次里 ${st.over} 次超过 ${st.fair} 秒`:''}。`:'';
+ return [s2,s3,s4].filter(Boolean).join('')}
+// 其他参考：次要的"第一下"（比如识别文字到达）、全程，每条一句说清它意味着什么
+function plainRefs(D){const M=mainFirst(D),w=plainWords(D),p=D.S.plain||{},sl=(D.J.scenario.lines||[]),out=[];
+ sl.filter(x=>x.also_first).forEach(x=>{const l=D.lines.find(y=>y.name===x.name);if(!l||l.med==null||!isFinite(l.med))return;
+  const last=(l.segs||[])[l.segs.length-1],cloud=last&&plainWhere(D,last)==='cloud',ld=D.J.lead&&D.J.lead.first===l.name&&D.J.lead.second===M.name?D.J.lead.med:null;
+  out.push(`<li><b>${htmlEsc(l.end)}</b>：一般约 ${f(l.med)} 秒${ld!=null&&ld>0?`，比${htmlEsc(M.end)}早约 ${f(ld)} 秒`:''}。${cloud?`这只说明云端很快就${w.done}`:`这只说明「${htmlEsc(l.end)}」这一步来得早`}，不是你等到结果的时间${p.unseen&&p.unseen[l.end]?'；这台设备不显示这一步，你感觉不到':''}。你真正在等的是${htmlEsc(M.end)}那 ${f(M.med)} 秒。</li>`)});
+ const m=measureLine(D),me=m&&(sl.find(x=>x.name===m.name)||{}).end;if(m&&m.med!=null)out.push(`<li><b>全程（到${htmlEsc(me||m.end||m.name)}）</b>：一般约 ${f(m.med)} 秒${m.min!=null&&m.max!=null?`，最快 ${f(m.min)}、最慢 ${f(m.max)} 秒`:''}。长短主要看${w.len}，不判快慢。</li>`);
+ return out.length?`<section class="panel" id="sec-refs"><h2>其他参考</h2><ul style="margin:0;padding-left:20px">${out.join('')}</ul></section>`:''}
+const PLAIN_LV=['需要处理','可以改进','仅供参考','没问题','出错了'];
+function titleHtml(D){if((typeof plainOn==='function'&&plainOn(D)))return `<h1>${plainHead(D)}</h1>`;const m=measureLine(D),M=D.S.real?mainFirst(D):null;
  if(M&&M.med!=null&&isFinite(M.med)){const rest=D.lines.filter(l=>l!==M&&l.med!=null&&isFinite(l.med)&&!(m&&l.name===m.name)).map(l=>`${htmlEsc(l.end)} ${f(l.med)} 秒`);
   return `<h1>${htmlEsc(D.S.startShort)}到${htmlEsc(M.end)} ${f(M.med)} 秒</h1></div><p class="headnum" style="font-size:16px;font-weight:600;margin:4px 0 0">主指标：从「${htmlEsc(D.S.startShort)}」到「${htmlEsc(M.end)}」（设备给出结果的第一下）${rest.length?`；另外：${rest.join('，')}`:''}${m?`；全程 ${f(m.med)} 秒${htmlEsc(m.end)}<span class="note" style="font-weight:400">（只记录、不判快慢）</span>`:''}</p><div>`}
  if(!m)return `<h1>${headline(D)}</h1>`;
@@ -166,6 +210,9 @@ function lineParts(D,l){const bad=new Set(((D.J&&D.J.segments)||[]).filter(x=>x.
   const m=ks.map(k=>Math.max(0,segMed(D,k)||0)),sum=m.reduce((t,x)=>t+x,0);
   return ks.map((k,j)=>({k,real:segMed(D,k),share:sum>0?m[j]/sum:1/ks.length,d:l.med==null?0:(sum>0?m[j]/sum:1/ks.length)*l.med}))}
 function timeline(D){
+  // 结论版说人话（10-26）：只画主指标那条（和顺带的线），次要的"第一下"放到"其他参考"；不用圈号，色块直接写短名字和秒数
+  const PL=(typeof plainOn==='function'&&plainOn(D));if(PL){const also=new Set(((D.J.scenario||{}).lines||[]).filter(x=>x.also_first).map(x=>x.name));D={...D,lines:D.lines.filter(l=>!also.has(l.name))}}
+  const pname=k=>PL&&plainWhere(D,k)==='cloud'?'等云端':(D.S.segs[k]||{}).name||k;
   const T=niceT(Math.max(...D.lines.map(l=>l.med).filter(x=>x!=null&&isFinite(x))));const W=900,X0=150,X1=820,sx=t=>X0+(X1-X0)*t/T,h=22,gap=64,top=60;
   const H=top+D.lines.length*gap+30;
   let g='';const st=step(T);
@@ -173,7 +220,7 @@ function timeline(D){
   // 体验标准每条线一条：画在那条线自己那一行上，写明是哪条线的；演示数据只有一条（主线）的，照旧画一条贯穿的
   const jls=D.J&&D.J.lines?D.lines.map(l=>(D.J.lines.find(x=>x.name===l.name)||{}).exp_std):null;
   if(jls&&jls.some(Boolean))D.lines.forEach((l,i)=>{const es=jls[i];if(!es||es.fair==null||es.fair>T)return;const y=top+i*gap,x=sx(es.fair),below=i>0;  // 下面几条写在横条下面，不和"早多少秒"叠在一起
-   g+=`<line x1="${x}" x2="${x}" y1="${below?y-4:y-16}" y2="${below?y+h+18:y+h+10}" stroke="var(--warn)" stroke-dasharray="3 4" stroke-width="1.5"/><text x="${x>W-320?x-4:x+4}" text-anchor="${x>W-320?'end':'start'}" y="${below?y+h+16:y-6}" font-size="11.5" fill="var(--warn)">${l.name}：超过 ${es.fair} 秒算体验差（${htmlEsc(es.short||'参考值')}）</text>`});
+   g+=`<line x1="${x}" x2="${x}" y1="${below?y-4:y-16}" y2="${below?y+h+18:y+h+10}" stroke="var(--warn)" stroke-dasharray="3 4" stroke-width="1.5"/><text x="${x>W-320?x-4:x+4}" text-anchor="${x>W-320?'end':'start'}" y="${below?y+h+16:y-6}" font-size="11.5" fill="var(--warn)">${PL?`行业标准：平均不超过 ${es.fair} 秒`:`${l.name}：超过 ${es.fair} 秒算体验差（${htmlEsc(es.short||'参考值')}）`}</text>`});
   else if(D.S.exp&&D.S.exp.fair<=T)g+=`<line x1="${sx(D.S.exp.fair)}" x2="${sx(D.S.exp.fair)}" y1="30" y2="${H-30}" stroke="var(--warn)" stroke-dasharray="3 4"/><text x="${sx(D.S.exp.fair)+4}" y="40" font-size="11.5" fill="var(--warn)">${D.S.exp.label}</text>`;
   g+=`<text x="${sx(0)}" y="22" text-anchor="middle" font-size="12" fill="var(--muted)">${D.S.start}</text>`;
   // 归成阶段（10-20 用户定）：占这条线不到 5% 的段算极短，不单独画；连着的极短段并进后面那个大段，排在最后的并进前一个大段。
@@ -197,17 +244,24 @@ function timeline(D){
       const th=x.parts.find(p=>(D.allSegs.find(s=>s.k===p.k)||{}).thin),ths=th&&D.allSegs.find(s=>s.k===th.k);
       // 块里、图下写的秒数是这一段自己的中位数，和「分段用时」同一个数（10-26 核对：按比例摊到整条线后写成 0.29 / 0.30，表里是 0.28）；
       // 并进来的极短段单独写名字和秒数，不加进这个数里。色块长短仍按比例画到整条线的中位数
-      const own=x.parts[0].real,tiny=x.parts.slice(1).map(p=>({name:D.S.segs[p.k].name,v:p.real}));
-      if(!seen)rows.push({no,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:own,share:l.med>0&&own!=null?own/l.med:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,tiny,shared});
+      const own=x.parts[0].real,tiny=x.parts.slice(1).map(p=>({k:p.k,name:D.S.segs[p.k].name,v:p.real}));
+      if(!seen)rows.push({k,no,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:own,share:l.med>0&&own!=null?own/l.med:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,tiny,shared});
       g+=`<g><rect x="${sx(a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
-      if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(own)}</text>`;
+      if(PL){const nm=pname(k),lab=w>nm.length*12+44?`${nm} ${f(own)}`:w>36?f(own):'';if(lab)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${htmlEsc(lab)}</text>`}
+      else if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(own)}</text>`;
       else if(w>16)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${no}</text>`;g+='</g>'});
     g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
   const L0=D.lines[0],L1=D.lines[1];
   // "早多少秒"用后台按每轮算的差的中位数（judge lead），和逐轮一致；没有才用两条线中位数相减（10-26 核对：图上 0.38、逐轮中位 0.36）
   const LD=D.J&&D.J.lead&&D.J.lead.first===L0.name&&L1&&D.J.lead.second===L1.name?D.J.lead.med:null;
-  if(L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)&&(LD!=null?LD>0:L1.med>L0.med)){const a=L0.med,b=L1.med,y=top+gap-12,early=LD!=null?LD:b-a;  // 上面那条真的更早才写「早多少」
+  if(!PL&&L1&&L0.med!=null&&L1.med!=null&&isFinite(L0.med)&&isFinite(L1.med)&&(LD!=null?LD>0:L1.med>L0.med)){const a=L0.med,b=L1.med,y=top+gap-12,early=LD!=null?LD:b-a;  // 上面那条真的更早才写「早多少」
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(early,2)} 秒</text>`;}
+  if(PL){const sv=plainServer(D),tiny=rows.flatMap(r=>r.tiny.map(t=>({...t,where:plainWhere(D,t.k)}))),ts=tiny.reduce((t,x)=>t+Math.max(0,x.v||0),0);
+   const say=r=>{const wh=plainWhere(D,r.k);return wh==='cloud'?'这段在设备外，设备改不了。':wh==='dev'?`在${plainWho(r.owner)}上。`:`${plainWho(r.owner)||'网络'}。`};
+   const li=rows.map(r=>`<li><span class="nm"><b>${htmlEsc(plainWhere(D,r.k)==='cloud'?`等云端${sv?`（${sv}）`:''}`:r.name)}</b>：一般 ${f(r.d)} 秒，占 ${Math.round(r.share*100)}%。${say(r)}</span></li>`).join('');
+   const tn=!tiny.length?'':ts<0.05&&tiny.every(x=>x.where==='dev')?'设备内部还有几步，加起来不到 0.05 秒，可忽略。':`另有几步很短，加起来约 ${f(ts)} 秒（${tiny.map(x=>htmlEsc(x.name)).join('、')}）。`;
+   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="时间花在哪">${g}</svg></div>
+  <ul class="tlst plain" style="padding-left:20px">${li}</ul><p class="note" style="margin:6px 0 0">${tn?tn+'':''}图里的数是 ${D.n} 次里的一般情况（中位数）；各段加起来和总数可能差几十毫秒，是正常的。</p>`}
   const list=rows.map(r=>`<li><span class="no">${r.no}</span><span class="nm">${htmlEsc(r.name)}${r.shared?'（共用）':''}</span><span class="r num">${f(r.d)} 秒</span><span class="r num">${Math.round(r.share*100)}%</span><span class="ow">${htmlEsc(r.owner)}</span><span class="ow">${r.inc?`另含极短段：${r.tiny.map(t=>`${htmlEsc(t.name)} ${f(t.v)} 秒`).join('、')}`:''}</span></li>`).join('');
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
   <ol class="tlst">${list}</ol><p class="note" style="margin:6px 0 0">按 ${D.n} 轮中位数画：每条线总长是这条线的中位数；块里和上面列的秒数是这一段自己的中位数，和「分段用时」一样（各段中位数加起来和整条线的中位数不一定相等，色块按比例画）。不到 5% 的段并进相邻的块，名字和秒数单独写出。</p>`;
@@ -251,12 +305,12 @@ function tiers(D){  // 依据合成一张表（10-21 样子）：一般 ｜ 最�
   const jl=l=>D.J&&D.J.lines.find(x=>x.name===l.name);
   const std=l=>{const j=jl(l),es=j&&j.exp_std;return es&&es.fair!=null?`超过 ${es.fair} 秒算差${es.good!=null?`，${es.good} 秒内算好`:''}`:'—'};
   const vs=l=>{const j=jl(l),v=j&&j.vs;return v?`${f(v.prev)} → ${f(l.med)} 秒，<b class="${v.change==='慢了'?'up':'down'}">${v.change}</b>`:'第一次测'};
-  return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">最差</span><span class="h">达标率</span><span class="h">体验标准</span><span class="h">和上次比</span>
+  return `<div class="tiers num"><span></span><span class="h">一般（中位数）</span><span class="h">最差</span><span class="h">${(typeof plainOn==='function'&&plainOn(D))?'在标准内的次数':'达标率'}</span><span class="h">体验标准</span><span class="h">和上次比</span>
   ${D.lines.map(l=>`<b style="color:${l.col};font-family:var(--sans)">${l.end}</b><span>${f(l.med)} 秒</span><span>${f(l.max)} 秒</span><span${l.pass_rate==null?' style="font-family:var(--sans)"':''}>${l.pass_rate==null?'—':`${passPct(l)}（${l.pass_n}/${l.count}）`}</span><span style="font-family:var(--sans)">${std(l)}</span><span style="font-family:var(--sans)">${vs(l)}</span>`).join('')}</div>`;
 }
 function stdNote(D){  // 表下一行：达标率怎么算 + 标准出处（每条标准只写一次）
   const seen=new Set(),src=[];(D.J?D.J.lines:[]).forEach(j=>{const es=j.exp_std;if(es&&es.source&&!seen.has(es.source)){seen.add(es.source);src.push(srcHtml(es.source).replace(/。$/,'')+(es.good==null?'（只有及格线）':''))}});
-  return `<p class="note" style="margin:8px 0 0">达标率：没超过体验标准的轮次占几成${D.n<10?`；只测了 ${D.n} 轮，只供参考`:''}。${src.length?`体验标准出处：${src.join('；')}。`:'这个场景没有对得上的体验标准。'}</p>`;
+  return `<p class="note" style="margin:8px 0 0">${(typeof plainOn==='function'&&plainOn(D))?'在标准内的次数：这几次里没超过体验标准的有几次（行业标准看的是平均，这一列只作补充）':'达标率：没超过体验标准的轮次占几成'}${D.n<10?`；只测了 ${D.n} 轮，只供参考`:''}。${src.length?`体验标准出处：${src.join('；')}。`:'这个场景没有对得上的体验标准。'}</p>`;
 }
 // 负责人版写短（决策 98）：越重要越靠前：出错、必须改、建议改、未判，都展开；达标的收起来（10-20 用户定）。内容不删，只是默认收起
 function bossSplit(ds){const by=lv=>ds.filter(x=>x.lv===lv);return {open:[...by(4),...by(0),...by(1),...by(2)],fold:by(3)}}  // 未判的不收进"不用改"：没判不等于没问题
@@ -268,7 +322,21 @@ function recLine(F){const o=F&&F.opts?(F.opts.find(o=>o.rec)||F.opts[0]):null;if
 // 设备自己的段都正常时，拍板列表末尾说一句（10-21 用户定）：负责人知道不用找固件研发；明细在分段用时表里
 function devOk(D){const g=D.J?D.J.segments.filter(x=>!x.outside):[];if(!g.length||g.some(x=>x.spiky||x.bad||x.verdict==='慢了'))return '';
   return `<p class="note" style="margin:6px 0 0;color:var(--fg)">设备自己的几段都正常${D.J.prev&&D.J.prev.segs?'，也没比上次慢':''}，不用改。</p>`}
-function decideList(D){const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
+// 结论版的"结论和建议"（10-26）：主指标按平均已达标就不再列"建议改"（顶上几句已经说清，免得和"设备都正常"打架）；次要的线、全程、未判的不列；
+// 标签换成人话，"标签规则"换成"这些说法怎么定的"
+function plainDecide(D){const FX=activeFixes(D),M=mainFirst(D),st=plainStd(D,M),sl=D.J.scenario.lines||[],t=plainSplit(D,M),tot=t.cloud+t.dev+t.mix;
+  const side=n=>{const x=sl.find(y=>y.name===n);return !x||x.also_first||x.measure};
+  const ds=decisions(D).filter(x=>x.lv!==2&&x.lv!==3).filter(x=>{if(x.k==='main')return !(st&&st.ok);if(String(x.k).startsWith('line:'))return !side(String(x.k).slice(5));return true})
+   .map(x=>x.k==='main'&&st?{...x,t:`${htmlEsc(M.end)} ${f(M.med)} 秒`,d:`平均 ${f(st.avg)} 秒，超过行业标准（平均不超过 ${st.fair} 秒）；${st.n} 次里 ${st.over} 次超过。${tot>0&&t.cloud/tot>=.7?'慢主要在云端，改设备代码帮不上。':''}`}:x);
+  const tag=lv=>`<span class="lvtag ${LV[lv][1]}">${PLAIN_LV[lv]}</span>`;
+  const li=x=>{const n=cardOf(FX,x),r=n>=0?recLine(FX[n]):'';return `<li><span class="tagcol">${tag(x.lv)}</span><span><b>${x.t}</b>：${x.d}${r?` <b>${r}</b>`:''}　${n>=0?jump('fix-'+n,'详情 → 问题 '+(n+1)):''}${jump('sec-'+x.src[0],'依据 → '+String(x.src[1]).replace('用时和达标率','用时和标准'))}</span></li>`};
+  return `${ds.length?`<ul class="decide">${ds.map(li).join('')}</ul>`:'<p class="note" style="margin:0 0 8px">没有需要你处理的。</p>'}${devOk(D)}
+  <details class="lvwhy"><summary>这些说法怎么定的</summary><p class="note" style="margin:8px 0">数字由码表按这几次的数据直接算出，不经过 AI；"为什么、怎么改"是 AI 读代码写的。</p><ul class="decide rules">
+  <li><span class="tagcol">${tag(4)}</span><span>功能出错了，先不看快慢。</span></li>
+  <li><span class="tagcol">${tag(0)}</span><span>明显比标准慢，或者很多次都超过标准很多。</span></li>
+  <li><span class="tagcol">${tag(1)}</span><span>平均还行，但不够稳定，或者比上次慢了。</span></li></ul>
+  <p class="note" style="margin:4px 0 0">行业标准看的是平均用时；偶尔超过一两次，只作为补充写出来。</p></details>`}
+function decideList(D){if((typeof plainOn==='function'&&plainOn(D)))return plainDecide(D);const FX=activeFixes(D),{open,fold}=bossSplit(decisions(D));
   // 每条一句（10-20 用户定）：标签（右对齐一列）、线名 用时：问题。建议：做什么，预计效果。　详情 → 问题 N　依据 → 数据
   // 标签规则（10-20 用户定）：一句来源 + 每个标签一行，和上面列表同一套标签、同样右对齐
   // 还有一个选择（10-21 用户定）：同一个问题里有找别人做的方案，点一句，免得藏在收起的方案表里；同一个方案只点一次
@@ -301,6 +369,7 @@ function checksBox(J){const C=(J&&J.checks)||[];if(!C.length)return '';const thi
 function gapLine(G){if(!G||!G.length)return '';const by={};G.forEach(g=>g.names.forEach(x=>(by[x]=by[x]||[]).push(g.n)));
  return '；'+Object.entries(by).map(([x,ns])=>`第 ${ns.join('、')} 轮没记到起点之后的「${x}」（只有起点之前的一次，那是上一轮的），这几轮用到它的两段空着，整条线照样按首尾算`).join('；')}
 function subline(D){
+  if((typeof plainOn==='function'&&plainOn(D)))return plainWhy(D);
   // 只留一句判断（10-20 用户定）：哪条线按哪类设备的标准算什么；"可以"等标签悬停看离"好"差多少。
   // 别的（谁比谁早、出错的轮次、偶发慢）各有自己的位置，不挤在这里
   const je=D.J&&D.J.lines?D.J.lines.filter(x=>x.exp):[];  // 体验标准挂在哪条线上就说哪条（比如只挂在"到喇叭出第一声"）
@@ -848,11 +917,11 @@ function recOnlyBox(D){const R=D.S.recOnly,J=D.J;if(!R||!J||!(R.lines.length||R.
 function reportPage(D){
   if(mode==='dev')return dev(D);
   return `<div class="stack">${expDone()}<div><div class="titlerow">${titleHtml(D)}${vsTag()}</div><p class="sub">${subline(D)}</p>${D.S.real&&JREP?checksBox(JREP):''}${D.S.real&&JREP?`<details class="fold"><summary>数据怎么来的、起点怎么算</summary>${qualityLine(JREP.quality,JREP)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged)}</details>`:''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
-  <section class="panel"><h2>要你拍板</h2>${decideList(D)}</section>
-  <section class="panel" id="sec-tl"><h2>一次的计时图</h2>${timeline(D)}</section>
+  <section class="panel"><h2>${(typeof plainOn==='function'&&plainOn(D))?'结论和建议':'要你拍板'}</h2>${decideList(D)}</section>
+  <section class="panel" id="sec-tl"><h2>${(typeof plainOn==='function'&&plainOn(D))?'时间花在哪':'一次的计时图'}</h2>${timeline(D)}</section>${(typeof plainOn==='function'&&plainOn(D))?plainRefs(D):''}
   <section class="stack"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note" style="margin:8px 0 0">沿用 ${htmlEsc(ADV.at)} 写的：要改的问题和那次一样，没再调用大模型。文中的秒数是那次的，这次的数看上面。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():fixA(D)}</section>
   <h2 style="margin:12px 0 -6px">依据</h2>
-  <section class="panel" id="sec-tiers"><h2>用时和达标率</h2>${tiers(D)}${stdNote(D)}</section>${recOnlyBox(D)}
+  <section class="panel" id="sec-tiers"><h2>${(typeof plainOn==='function'&&plainOn(D))?'用时和标准':'用时和达标率'}</h2>${tiers(D)}${stdNote(D)}</section>${recOnlyBox(D)}
   <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 

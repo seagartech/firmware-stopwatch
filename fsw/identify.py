@@ -150,6 +150,14 @@ CARD_HINT = """
 - 门锁动作或提示音有"真正做完"信号的（比如动作到位、提示音放完），这一步标全部放完。
 """
 HINTS = {"语音对话": VOICE_HINT, "门禁": CARD_HINT, "智能门锁": CARD_HINT, "刷卡终端": CARD_HINT}
+# 报告结论句用的说法（按设备类别；对不上的类别网页用通用说法）。start：用户做完的那个动作；sound：主指标是声音时"感觉到的第一下"；
+# done：识别 / 核对完成那一步的说法；len：整轮长短取决于什么
+PLAIN_WORDS = {
+    "语音对话": {"start": "说完话", "sound": "听到第一声回复", "done": "听懂了你的话", "len": "回答说了多少字"},
+    "门禁": {"start": "刷完卡", "done": "核对完身份"},
+    "智能门锁": {"start": "刷完卡或按完指纹", "done": "核对完身份"},
+    "刷卡终端": {"start": "刷完卡", "done": "处理完这次刷卡"},
+}
 
 
 CANDS_RULE = ("第 1 步、链里标了角色的步骤、mode、mode.protocol 先从这些候选里挑：在那一步（或 mode、mode.protocol）里写 \"cand\": \"K编号\"，"
@@ -1380,6 +1388,7 @@ def to_page(r, what):
         "dash": [i for i, (a, b) in enumerate(zip(main_ids, main_ids[1:]))
                  if any(g.get("out") and g["a"] == a and g["b"] == b for g in segs)],
         "server": r.get("outside_note") or "", "mapWhat": what, "category": str(r.get("category") or "").strip(),
+        "plain": dict(PLAIN_WORDS.get(str(r.get("category") or "").strip()) or {}),
         "mapSel": next((s["p"] for s in steps if s["sure"] != "高"), steps[0]["p"]),
         "measure": f"{sname} → {mend}", "mainTitle": f"{mname}：{sname} → {mend}",
         "act": str(r.get("act") or "").strip(), "summary": r.get("summary") or "", "doubts": r.get("doubts") or [], "warn": r.get("warn"), "startNote": start.get("note") or "", "startLate": start.get("late") in (True, "true", "是"),
