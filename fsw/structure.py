@@ -1641,7 +1641,8 @@ def check(root, steps, segments=None, side_segments=None, chain=None, strict=Fal
             s["chk"].append({"level": "tip", "kind": "error", "text": f"码表检查各段两头执行时机时出错（{type(e).__name__}），请自己核对"})
     for sid, t in found:
         if not any(c["text"] == t for c in by[sid]["chk"]):
-            by[sid]["chk"].append({"level": "tip", "kind": "timing", "text": t})
+            # split：两头分别在不同的回调里（各自收到一条消息才执行），报告据此判这段是不是在等服务器（standards.split_recv）
+            by[sid]["chk"].append({"level": "tip", "kind": "timing", "text": t, **({"split": True} if "两处分别在被调度或回调时执行" in t else {})})
     try:
         for sid, t in check_uncertain(steps, [g for g in list(segments or []) + list(side_segments or []) if isinstance(g, dict)], by_n):
             if sid in by and not any(c["text"] == t for c in by[sid]["chk"]):

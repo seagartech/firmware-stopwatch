@@ -70,7 +70,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const sc=lenByContent(J),st={...Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),...(sc.points||{})};
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,v:val(k)}]));
  const P=IDENT.page,mEnd=sc.cutEnd||(P.measure||'起点 → 终点').split('→').map(x=>x.trim())[1],sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
- const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first||l.also_first||l.sl?l.end:side?(sEnd||l.end):mEnd;const li=J.scenario.lines.findIndex(x=>x.name===l.name);
+ const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first||l.also_first||l.sl||l.actual?l.end:side?(sEnd||l.end):mEnd;const li=J.scenario.lines.findIndex(x=>x.name===l.name);
   // 线的用时用后台每轮按首尾算的数（中间某段空着的轮也有，比如被打断那几轮）；按段相加会把这些轮丢掉（10-19：报告写 1.22、实际中位 1.34）
   return {name:l.name,end,phrase:(side&&!l.first?'先':'后')+end,segs:l.segments,ends0:li<0?null:J.rounds.map(r=>(r.ends||[])[li]??null)}});
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
@@ -210,6 +210,13 @@ function lineParts(D,l){const bad=new Set(((D.J&&D.J.segments)||[]).filter(x=>x.
   const m=ks.map(k=>Math.max(0,segMed(D,k)||0)),sum=m.reduce((t,x)=>t+x,0);
   return ks.map((k,j)=>({k,real:segMed(D,k),share:sum>0?m[j]/sum:1/ks.length,d:l.med==null?0:(sum>0?m[j]/sum:1/ks.length)*l.med}))}
 function timeline(D){
+// 和上面画过的线一样的开头（色块里、图下都用）：写成"和上面一样，走到「某一步」"，不用圈号（10-26 用户：同上 ①–④ 看不懂）
+const sameEnd=(D,k)=>{const sc=(D.J&&D.J.scenario)||{},g=(sc.segments||{})[k]||{},to=g.to||String(k).split('-')[1];return (sc.point_names||{})[to]||''}
+const sameTxt=(D,k,w)=>{const n=sameEnd(D,k),a=n?`和上面一样，走到「${n}」`:'和上面一样',b=n?`同上，到「${n}」`:'同上',cw=t=>[...t].reduce((x,c)=>x+(c.charCodeAt(0)>255?11:6.5),8);
+ return w>cw(a)?a:w>cw(b)?b:w>30?'同上':''}
+const sameTo=(D,l,rows,i)=>{const mine=rows.filter(r=>r.li===i),own=new Set(mine.flatMap(r=>[r.k,...(r.tiny||[]).map(t=>t.k)])),ks=(l.segs||[]),pre=[];
+ for(const k of ks){if(own.has(k))break;if(rows.some(r=>r.li!==i&&(r.k===k||(r.tiny||[]).some(t=>t.k===k))))pre.push(k)}
+ if(!pre.length)return '';const n=sameEnd(D,pre[pre.length-1]);return n?`和上面一样，走到「${n}」`:'和上面一样'}
   // 结论版说人话（10-26）：只画主指标那条（和顺带的线），次要的"第一下"放到"其他参考"；不用圈号，色块直接写短名字和秒数
   const PL=(typeof plainOn==='function'&&plainOn(D));if(PL){const also=new Set(((D.J.scenario||{}).lines||[]).filter(x=>x.also_first).map(x=>x.name));D={...D,lines:D.lines.filter(l=>!also.has(l.name))}}
   const pname=k=>PL&&plainWhere(D,k)==='cloud'?'等云端':(D.S.segs[k]||{}).name||k;
@@ -235,7 +242,7 @@ function timeline(D){
     const parts=lineParts(D,l),pre=[];
     if(drawn.length)while(parts.length>1&&numOf[parts[0].k])pre.push(parts.shift());  // 开头和前面画过的线共用的那几段：并成一块灰的"同上"
     if(pre.length){const d=pre.reduce((t,p)=>t+p.d,0),w=sx(d)-sx(0),nos=pre.map(p=>numOf[p.k]);t0=d;
-      g+=`<g><rect x="${sx(0)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="var(--soft)" stroke="var(--panel)" stroke-width="1" rx="2"/>${w>60?`<text x="${(sx(0)+sx(d))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="var(--muted)">同上 ${nos[0]}${nos.length>1?'–'+nos[nos.length-1]:''}</text>`:''}</g>`}
+      g+=`<g><rect x="${sx(0)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="var(--soft)" stroke="var(--panel)" stroke-width="1" rx="2"/>${(()=>{const lab=sameTxt(D,pre[pre.length-1].k,w);return lab?`<text x="${(sx(0)+sx(d))/2}" y="${y+h/2+4}" text-anchor="middle" font-size="11" fill="var(--muted)">${htmlEsc(lab)}</text>`:''})()}</g>`}
     drawn.push(i);
     const st=stages(parts);
     st.forEach((x,j)=>{const a=t0,b=t0+x.d;t0=b;const last=j===st.length-1,k=x.parts[0].k,shared=x.parts.some(p=>D.use[p.k]>1),seen=numOf[k],no=seen||NO[rows.length]||String(rows.length+1),w=sx(b)-sx(a);
@@ -245,7 +252,7 @@ function timeline(D){
       // 块里、图下写的秒数是这一段自己的中位数，和「分段用时」同一个数（10-26 核对：按比例摊到整条线后写成 0.29 / 0.30，表里是 0.28）；
       // 并进来的极短段单独写名字和秒数，不加进这个数里。色块长短仍按比例画到整条线的中位数
       const own=x.parts[0].real,tiny=x.parts.slice(1).map(p=>({k:p.k,name:D.S.segs[p.k].name,v:p.real}));
-      if(!seen)rows.push({k,no,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:own,share:l.med>0&&own!=null?own/l.med:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,tiny,shared});
+      if(!seen)rows.push({k,no,li:i,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:own,share:l.med>0&&own!=null?own/l.med:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,tiny,shared});
       g+=`<g><rect x="${sx(a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
       if(PL){const nm=pname(k),lab=w>nm.length*12+44?`${nm} ${f(own)}`:w>36?f(own):'';if(lab)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${htmlEsc(lab)}</text>`}
       else if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(own)}</text>`;
@@ -258,10 +265,23 @@ function timeline(D){
     g+=`<line x1="${sx(a)}" x2="${sx(a)}" y1="${top+h}" y2="${top+gap+h/2}" stroke="var(--muted)" stroke-dasharray="2 3"/><line x1="${sx(a)}" x2="${sx(b)}" y1="${y}" y2="${y}" stroke="var(--muted)"/><text x="${(sx(a)+sx(b))/2}" y="${y-6}" text-anchor="middle" font-size="12" fill="var(--muted)" class="halo">早 ${f(early,2)} 秒</text>`;}
   if(PL){const sv=plainServer(D),tiny=rows.flatMap(r=>r.tiny.map(t=>({...t,where:plainWhere(D,t.k)}))),ts=tiny.reduce((t,x)=>t+Math.max(0,x.v||0),0);
    const say=r=>{const wh=plainWhere(D,r.k);return wh==='cloud'?'这段在设备外，设备改不了。':`属于${plainWho(r.owner)||'网络'}。`};
-   const li=rows.map(r=>`<li><span class="nm"><b>${htmlEsc(plainWhere(D,r.k)==='cloud'?`等云端${sv?`（${sv}）`:''}`:r.name)}</b>：一般 ${f(r.d)} 秒，占 ${Math.round(r.share*100)}%。${say(r)}</span></li>`).join('');
-   const tn=!tiny.length?'':ts<0.05&&tiny.every(x=>x.where==='dev')?'设备内部还有几步，加起来不到 0.05 秒，可忽略。':`另有几步很短，加起来约 ${f(ts)} 秒（${tiny.map(x=>htmlEsc(x.name)).join('、')}）。`;
+   // 设备外那段写它自己在等什么（后台按段名、"服务器负责什么"算好的 plain，见 standards.plain_cloud）；老存档没有就照旧写"服务器负责什么"
+   const cloudLbl=k=>{const p=String((((D.J.scenario||{}).segments||{})[k]||{}).plain||'').trim()||sv;return `等云端${p?`（${p}）`:''}`};
+   const tnOf=tiny=>{const ts=tiny.reduce((t,x)=>t+Math.max(0,x.v||0),0);return !tiny.length?'':ts<0.05&&tiny.every(x=>x.where==='dev')?'设备内部还有几步，加起来不到 0.05 秒，可忽略。':`另有几步很短，加起来约 ${f(ts)} 秒（${tiny.map(x=>htmlEsc(x.name)).join('、')}）。`};
+   const one=(r,of)=>`<li><span class="nm"><b>${htmlEsc(plainWhere(D,r.k)==='cloud'?cloudLbl(r.k):r.name)}</b>：一般 ${f(r.d)} 秒，占${of} ${Math.round(r.share*100)}%。${say(r)}${r.also&&r.also.length?`<span class="note">（${r.also.map(n=>`「${htmlEsc(n)}」`).join('、')}也走这一段）</span>`:''}</span></li>`;
+   const UL='class="plainlst" style="margin:8px 0 0;padding-left:20px;line-height:1.7;font-size:14px"';
+   const tail=`图里的数是 ${D.n} 次里的一般情况（中位数）；各段加起来和总数可能差几十毫秒，是正常的。`;
+   if(drawn.length<2){const li=rows.map(r=>one(r,'')).join(''),tn=tnOf(tiny);
+    return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="时间花在哪">${g}</svg></div>
+  <ul ${UL}>${li}</ul><p class="note" style="margin:6px 0 0">${tn}${tail}</p>`}
+   // 几条线（10-26 用户：0.04 秒那行看不出是哪条线的、占的是哪条线）：按线分组，每行写占这条线的百分之几；
+   // 几条线共用的段只写一次（写在第一次画到它的那条线下面），注明还有哪几条也走；和上面画过的线一样的开头只写一句
+   const M=D.main,grp=drawn.map(i=>{const l=D.lines[i],mine=rows.filter(r=>r.li===i).map(r=>({...r,also:D.lines.filter((o,j)=>j!==i&&drawn.includes(j)&&(o.segs||[]).includes(r.k)).map(o=>o.name)}));
+     const tn=tnOf(mine.flatMap(r=>r.tiny.map(t=>({...t,where:plainWhere(D,t.k)})))),pre=sameTo(D,l,rows,i),side=!M||l.name!==M.name;
+     return `<li style="margin-top:6px"><b>${htmlEsc(l.name)}</b>${side?'<span class="note">（顺带的线，不是上面的主数）</span>':''}：一般 ${f(l.med)} 秒到「${htmlEsc(l.end)}」${pre?`；开头${htmlEsc(pre)}`:''}
+      ${mine.length?`<ul class="plainlst" style="margin:2px 0 0;padding-left:18px;line-height:1.7;font-size:14px">${mine.map(r=>one(r,'这条线')).join('')}</ul>`:''}${tn?`<div class="note">${tn}</div>`:''}</li>`});
    return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="时间花在哪">${g}</svg></div>
-  <ul class="plainlst" style="margin:8px 0 0;padding-left:20px;line-height:1.7;font-size:14px">${li}</ul><p class="note" style="margin:6px 0 0">${tn?tn+'':''}图里的数是 ${D.n} 次里的一般情况（中位数）；各段加起来和总数可能差几十毫秒，是正常的。</p>`}
+  <ul ${UL}>${grp.join('')}</ul><p class="note" style="margin:6px 0 0">${tail}</p>`}
   const list=rows.map(r=>`<li><span class="no">${r.no}</span><span class="nm">${htmlEsc(r.name)}${r.shared?'（共用）':''}</span><span class="r num">${f(r.d)} 秒</span><span class="r num">${Math.round(r.share*100)}%</span><span class="ow">${htmlEsc(r.owner)}</span><span class="ow">${r.inc?`另含极短段：${r.tiny.map(t=>`${htmlEsc(t.name)} ${f(t.v)} 秒`).join('、')}`:''}</span></li>`).join('');
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="计时图">${g}</svg></div>
   <ol class="tlst">${list}</ol><p class="note" style="margin:6px 0 0">按 ${D.n} 轮中位数画：每条线总长是这条线的中位数；块里和上面列的秒数是这一段自己的中位数，和「分段用时」一样（各段中位数加起来和整条线的中位数不一定相等，色块按比例画）。不到 5% 的段并进相邻的块，名字和秒数单独写出。</p>`;

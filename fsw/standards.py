@@ -14,7 +14,7 @@ import json
 import re
 from pathlib import Path
 
-from fsw.scenario import experiences
+from fsw.scenario import experiences, names_too_close
 
 HERE = Path(__file__).parent / "standards"
 REF_FILE = HERE / "reference.json"  # 通用参考值固定在码表里；HERE 可以换成别的标准文件夹（测试用）
@@ -190,6 +190,144 @@ def point_at(step):
     return f"{path}|{step.get('where') or ''}|{code}" if code and path else None
 
 
+# 一段两头在同一个函数里、但分别交给不同的回调（各自收到一条服务器消息才执行）：结构检查写进终点 chk 的那句话里有这个标记
+# （新存档另有 split=True）。见 structure.check_segments
+SPLIT_MARK = "两处分别在被调度或回调时执行"
+
+
+def split_recv(page, steps, a, b):
+    """这一段是不是"在等服务器的下一条消息"：起点本身是收到服务器消息的那一步（它是某个设备外的段的终点），
+    终点在另一个回调里（收到另一条消息才执行）。这种段两头都在设备上记，但中间是在等网络、服务器，不是固件在忙。
+    老存档没有这个检查结果就返回 False（照原来的写法）。"""
+    sp = {x.get("p"): x for x in steps}
+    sa, sb = sp.get(a), sp.get(b)
+    if not sa or not sb:
+        return False
+    na, nb = f"「{sa.get('n')}」", f"「{sb.get('n')}」"
+    hit = any((c.get("split") or SPLIT_MARK in str(c.get("text") or "")) and na in str(c.get("text") or "") and nb in str(c.get("text") or "")
+              for c in sb.get("chk") or [] if isinstance(c, dict))
+    if not hit:
+        return False
+    recv = {g.get("b") for g in list(page.get("segs") or []) + list(page.get("fsegs") or []) if g.get("out")}
+    return a in recv
+
+
+# 设备外那段的大白话：技术词换成普通说法（通用词表，不认具体固件）；只换词，不编内容
+GLOSS = [(r"(?i)(?<![a-z])TTS(?![a-z])", "语音合成"), (r"(?i)(?<![a-z])(?:STT|ASR)(?![a-z])", "语音识别"), (r"(?i)(?<![a-z])LLM(?![a-z])", "大模型"),
+         (r"(?i)(?<![a-z])OTA(?![a-z])", "升级"),
+         ("信令", "通知"), ("首包", "第一包"), ("首句", "第一句"), ("首帧", "第一帧"), ("末包", "最后一包"), ("文本", "文字"),
+         ("回传", "传回设备"), ("下发", "发到设备"), ("上行", "上传"), ("下行", "下载"), ("回复音频", "回复语音"), ("音频", "声音")]
+# 拿"服务器负责什么"（识别时的 outside_note）去对段名时不算数的两个字：太常见，到处都有
+_STOP2 = {"回复", "语音", "服务", "务器", "设备", "声音", "音频", "消息", "数据", "一个", "第一", "网络", "云端", "结果", "开始"}
+
+
+def _note_items(note):
+    note = re.sub(r"^(?:服务器|云端|服务端)[：:]\s*", "", str(note or "").strip())
+    return [x.strip() for x in re.split(r"[、，,；;]|和|及", note) if x.strip()]
+
+
+def gloss(text):
+    t = str(text or "")
+    for a, b in GLOSS:
+        t = re.sub(a, b, t)
+    return t
+
+
+def plain_cloud(name, end_name, note, split=False):
+    """设备外那一段在等什么（报告结论版"等云端（……）"括号里那句）：
+    - 在等服务器的下一条消息（split_recv）：写"再发一条消息，收到后才{终点}"；
+    - 段名里说到了"服务器负责什么"里的某几件（比如段名有"识别"、负责的有"语音识别"）：只写那几件；
+    - 都没说到：用这段自己的名字换成大白话（TTS → 语音合成、首包 → 第一包、下发 → 发到设备……）。
+    没有段名就退回"服务器负责什么"整句（老写法）。"""
+    if split and end_name:
+        return f"再发一条消息，收到后才{end_name}"
+    nm = gloss(str(name or "").strip())
+    if not nm:
+        return "、".join(_note_items(note))
+    hit = [x for x in _note_items(note) if any(x[i:i + 2] in nm and x[i:i + 2] not in _STOP2 for i in range(len(x) - 1))]
+    if hit:
+        return "、".join(hit)
+    t = re.sub(r"^(?:等|服务器|云端|服务端)+", "", nm).strip()
+    return t or nm
+
+
+def _line_trigger(line, segments, pn, main_keys):
+    """一条顺带的线是被什么带起来的：从要测的这条线分出去的第一段在设备外（收到服务器的消息才走）→ 跟服务器消息走；
+    在设备上 → 跟设备自己走（比如设备状态一变就走）。"""
+    br = next((k for k in line.get("segments") or [] if k not in main_keys), None)
+    if br is None:
+        return ""
+    g = segments.get(br) or {}
+    return "跟服务器消息走" if g.get("side") == "outside" else "跟设备自己走"
+
+
+def name_lines(lines, segments, steps, side_names, main_keys, face_end="", face_dropped=False):
+    """顺带的线按实际量到的点起名、太像的分开（10-26 用户：「换表情」「换上表情」只差一个字，其实是两件事）：
+    - 大模型写的那条顺带的线有点没插上（face_dropped：识别时这条线的点比实际插上的多）、剩下的最后一个点又不是用户能感觉到的
+      那一下（没标 felt）：原来想量的终点被去掉了，线名、终点按实际量到的点写，不再沿用识别时起的（比如"换表情"，实际量到的是
+      "切到说话状态"）；点都插上了、或老存档没有这些信息的不改；
+    - 几条线名字或终点名太像（names_too_close）：顺带的线后面写上被什么带起来的（跟设备自己走 / 跟服务器消息走），
+      还分不开就写从哪一步分出去。返回 {旧名: 新名}。"""
+    sp = {x.get("p"): x for x in steps}
+    pn = {x.get("p"): x.get("n") for x in steps}
+    for l in lines:  # 大模型自己写的那条顺带的线：终点名在识别结果里（网页按它写），线里只存了线名
+        if l["name"] in side_names and not l.get("sl") and face_end and l.get("end") == l["name"]:
+            l["_end"] = face_end
+    end_of = lambda l: l.get("_end") or l.get("end")
+    ren = {}
+    for l in lines:
+        if l["name"] not in side_names or not l.get("segments"):
+            continue
+        last = l["segments"][-1].split("-", 1)[-1]
+        if face_dropped and not l.get("sl") and last in sp and not sp[last].get("felt") and pn.get(last) and pn[last] != end_of(l):
+            new = f"到{pn[last]}"
+            if new not in {x["name"] for x in lines}:
+                ren[l["name"]] = new
+                l.update(name=new, end=pn[last], actual=True, was=end_of(l) or "")
+                l.pop("_end", None)
+    taken = {x["name"] for x in lines}
+    sides = [l for l in lines if l["name"] in side_names or l["name"] in ren.values()]
+
+    def trig(l):
+        t = _line_trigger(l, segments, pn, main_keys)
+        twin = [o for o in sides if o is not l and _line_trigger(o, segments, pn, main_keys) == t
+                and (names_too_close(l["name"], o["name"]) or names_too_close(end_of(l), end_of(o)))]
+        if t and twin:  # 和它像的那条也是同样被带起来的：依次试从哪一步分出去、终点在哪个文件、哪一行，取第一个分得开的
+            def keys(x):
+                br = next((k for k in x["segments"] if k not in main_keys), "")
+                a = br.split("-", 1)[0] if br else ""
+                e = sp.get(x["segments"][-1].split("-", 1)[-1]) or {}
+                f = e.get("f") or Path(e.get("path") or "").name
+                return [f"从「{pn[a]}」分出去" if pn.get(a) else "", f"在 {f} 里" if f else "", f"{f} 第 {e.get('l')} 行" if f and e.get("l") else ""]
+            mine = keys(l)
+            for i, c in enumerate(mine):
+                if c and all(keys(o)[i] != c for o in twin):
+                    return c
+            return ""
+        return t
+    tags = {}
+    for l in sides:
+        if any(o is not l and (names_too_close(l["name"], o["name"]) or names_too_close(end_of(l), end_of(o))) for o in lines):
+            tags[id(l)] = trig(l)
+    for l in sides:
+        t = tags.get(id(l))
+        if not t:
+            continue
+        old, new = l["name"], f"{_strip_note(l['name'])}（{t}）"
+        if new in taken:
+            continue
+        taken.add(new)
+        ren[next((k for k, v in ren.items() if v == old), old)] = new
+        l.update(name=new, end=f"{_strip_note(end_of(l) or '')}（{t}）", actual=True)
+    for l in lines:
+        l.pop("_end", None)
+    return ren
+
+
+def _strip_note(s):
+    return re.sub(r"（[^）]*）$", "", str(s or "")).strip()
+
+
 def real_scenario(page, standard, values=None):
     """真找完的步骤（结果页数据）+ 标准 → 判快慢用的场景。没有标准就只有段和线、没有范围。"""
     steps = page.get("steps") or []
@@ -208,6 +346,7 @@ def real_scenario(page, standard, values=None):
             sides[k] = [by[x] for x in _path_keys(main, items[0][0]) if x in by] + items
     side = [x for items in sides.values() for x in items]
     segments = {}
+    pn0 = {x["p"]: x["n"] for x in steps}
     extra = [(g["a"], g["b"], g) for g in page.get("xsegs") or []]  # 不在哪条线上的段（你自己加的步骤）：只记用时
     main, extra, mend = _measure_end(page, steps, main, extra)
     for a, b, g in main + side + extra:
@@ -219,9 +358,13 @@ def real_scenario(page, standard, values=None):
             ch = _chain(standard, mp[a], mp[b])
             if ch:
                 rng, slow, basis = _sum_range(standard, ch)
-        segments[k] = {"name": g.get("t") or k, "what": g.get("t") or "", "owner": g.get("who", ""),
-                       "side": "outside" if g.get("out") else "device", "from": a, "to": b,
-                       "range": rng, "slow": slow, "basis": basis, **({"to_any": g["any"]} if g.get("any") else {})}
+        split = not g.get("out") and split_recv(page, steps, a, b)  # 在等服务器的下一条消息：算设备外（10-26 "到换上表情 属于设备"）
+        out_ = bool(g.get("out")) or split
+        segments[k] = {"name": g.get("t") or k, "what": g.get("t") or "", "owner": "网络、服务器" if split else g.get("who", ""),
+                       "side": "outside" if out_ else "device", "from": a, "to": b,
+                       "range": rng, "slow": slow, "basis": basis, **({"to_any": g["any"]} if g.get("any") else {}),
+                       **({"split": True} if split else {}),
+                       **({"plain": plain_cloud(g.get("t"), pn0.get(b), page.get("server"), split)} if out_ else {})}
 
     def std_line(a, b):
         if not standard or a not in mp or b not in mp:
@@ -294,6 +437,17 @@ def real_scenario(page, standard, values=None):
                 problems.append({**p, "rule": {**r, "first": names[r["first"]], "second": names[r["second"]]}})
         elif t := _translate(r, back, values or {}):
             problems.append({**p, "rule": t})
+    # 顺带的线按实际量到的点起名、太像的分开；改了名的线，体验标准、先后规则跟着改
+    main_keys = {f"{a}-{b}" for a, b, _ in main}
+    side_nodes = {n for x in page.get("sides") or [] for n in x.get("nodes") or []}
+    face0 = [n for n in (page.get("branch") or {}).get("nodes") or [] if n not in side_nodes]
+    face1 = [x["p"] for x in steps if x.get("line") == "face" and x["p"] not in side_nodes]
+    ren = name_lines(lines, segments, steps, side_names, main_keys, str((page.get("sideAsk") or {}).get("q") or ""),
+                     face_dropped=len(face1) < len(face0))
+    if ren:
+        exps = [{**e, "line": ren.get(e.get("line"), e.get("line"))} for e in exps]
+        problems = [{**p, "rule": {**p["rule"], **{k: ren.get(p["rule"][k], p["rule"][k]) for k in ("first", "second") if k in p["rule"]}}}
+                    if p.get("rule", {}).get("type") == "line_order" else p for p in problems]
     start = main[0][0] if main else None
     sname = next((x["n"] for x in steps if x["p"] == start), steps[0]["n"] if steps else "起点")
     return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": start, "name": sname},

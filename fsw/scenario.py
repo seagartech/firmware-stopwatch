@@ -13,6 +13,9 @@ how（可选，怎么读到它，比如"读设备当前状态，转成整数"）
 附加值只能是读已有的变量或函数返回值，不能改逻辑；没记上的，这条规则就不用（不判，不会误报）。
 """
 
+import re
+
+
 FORMAT = "fsw-scenario/1"
 SET_FORMAT = "fsw-scenario-set/1"
 SIDES = {"device": "设备里", "outside": "设备外"}
@@ -230,3 +233,23 @@ def to_page(demo):
     C["probs"] = [{"k": p["key"], "t": p["name"], "c": p["level"], "rounds": res["problems"].get(p["key"], [])}
                   for p in s.get("problems", [])]
     return {"S": S, "C": C}
+
+
+def _core_name(s):
+    """线名、终点名比像不像时去掉的套话：这条、到、括号里的补充。"""
+    s = re.sub(r"（[^）]*）|\([^)]*\)", "", str(s or ""))
+    return re.sub(r"这条$|^到", "", s.strip()).strip()
+
+
+def names_too_close(x, y):
+    """两条线的名字（或终点名）太像、用户分不出：去掉套话后一样，或只差一两个字（相似度 ≥ 0.75），
+    或短的那个整个包在长的里、只多一两个字。通用规则，不认具体词。"""
+    import difflib
+    a, b = _core_name(x), _core_name(y)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if min(len(a), len(b)) >= 2 and (a in b or b in a) and abs(len(a) - len(b)) <= 2:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.75

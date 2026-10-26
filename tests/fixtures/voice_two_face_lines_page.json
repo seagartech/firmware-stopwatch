@@ -1,0 +1,380 @@
+{
+ "page": {
+  "segs": [
+   {
+    "a": "P1",
+    "b": "P4",
+    "t": "说话结束到开始上传音频",
+    "who": "固件"
+   },
+   {
+    "a": "P4",
+    "b": "P5",
+    "t": "逐包上传音频",
+    "who": "固件、网络"
+   },
+   {
+    "a": "P5",
+    "b": "P6",
+    "t": "服务器语音识别",
+    "who": "网络、服务器",
+    "out": true
+   },
+   {
+    "a": "P6",
+    "b": "P7",
+    "t": "等回复开始信令",
+    "who": "网络、服务器",
+    "out": true
+   },
+   {
+    "a": "P6",
+    "b": "P8",
+    "t": "首句文本下发",
+    "who": "网络、服务器",
+    "out": true
+   },
+   {
+    "a": "P8",
+    "b": "P9",
+    "t": "首包回复音频回传",
+    "who": "网络、服务器",
+    "out": true
+   },
+   {
+    "a": "P9",
+    "b": "P10",
+    "t": "解码并启动扬声器",
+    "who": "固件、硬件"
+   },
+   {
+    "a": "P10",
+    "b": "P11",
+    "t": "播放回复语音",
+    "who": "硬件"
+   },
+   {
+    "a": "P10",
+    "b": "P13",
+    "t": "等结束信令",
+    "who": "网络、服务器",
+    "out": true
+   },
+   {
+    "a": "P10",
+    "b": "P12",
+    "t": "等最后一包播完判定",
+    "who": "固件、硬件"
+   }
+  ],
+  "fsegs": [
+   {
+    "a": "P7",
+    "b": "P21",
+    "t": "主循环派发状态切换",
+    "who": "固件"
+   },
+   {
+    "a": "P7",
+    "b": "P14",
+    "t": "到换上表情",
+    "who": "固件",
+    "sl": "情绪表情这条"
+   }
+  ],
+  "ln": {
+   "start": "起点",
+   "talk": "一问一答这条",
+   "face": "眼睛表情这条"
+  },
+  "main": [
+   "P1",
+   "P4",
+   "P5",
+   "P6",
+   "P7",
+   "P8",
+   "P9",
+   "P10",
+   "P11",
+   "P12",
+   "P13"
+  ],
+  "branch": {
+   "from": "P7",
+   "nodes": [
+    "S1",
+    "S2",
+    "P14"
+   ]
+  },
+  "sides": [
+   {
+    "name": "情绪表情这条",
+    "end": "换上表情",
+    "from": "P7",
+    "nodes": [
+     "P14"
+    ],
+    "cand": "K14",
+    "why": "每轮回复基本都会带情绪，这块板子眼睛会立刻换形状，是用户直接看得见的结果，可以和回复语音一起测。"
+   }
+  ],
+  "server": "服务器：语音识别、生成回复",
+  "category": "语音对话",
+  "plain": {
+   "start": "说完话",
+   "sound": "听到第一声回复",
+   "done": "听懂了你的话",
+   "len": "回答说了多少字"
+  },
+  "measure": "说话结束 → 回复放完",
+  "mainTitle": "一问一答这条：说话结束 → 回复放完",
+  "roundEnd": "P13",
+  "dash": [
+   2,
+   3,
+   5
+  ],
+  "mapWhat": "全程：从设备最早察觉人做完那件事，到用户感觉到的最后一个结果",
+  "steps": [
+   {
+    "p": "P1",
+    "n": "说话结束",
+    "f": "afe_audio_engine.cc",
+    "path": "main/audio/engines/afe_audio_engine.cc",
+    "l": 482,
+    "line": "start",
+    "sure": "高",
+    "code": "is_speaking_ = false;",
+    "where": "before",
+    "once": "once",
+    "func": "AfeAudioEngine::HandleVoiceResult",
+    "struct_ok": true,
+    "chk": []
+   },
+   {
+    "p": "P4",
+    "n": "开始上传音频",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 242,
+    "line": "talk",
+    "sure": "高",
+    "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+    "where": "before",
+    "once": "first",
+    "func": "Application::Run",
+    "struct_ok": true,
+    "chk": [
+     {
+      "level": "tip",
+      "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+     }
+    ],
+    "follow": true
+   },
+   {
+    "p": "P5",
+    "n": "上传最后一个包",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 242,
+    "line": "talk",
+    "sure": "中",
+    "code": "if (protocol_ && !protocol_->SendAudio(std::move(packet))) {",
+    "where": "before",
+    "once": "last",
+    "func": "Application::Run",
+    "struct_ok": true,
+    "chk": [
+     {
+      "level": "tip",
+      "text": "第 242 行「if (protocol_ && !protocol_->SendAudio(std::move(packet))) {」的动作写在 if 条件里，点只能放在这一行前面，记到的是调用之前那一刻"
+     }
+    ],
+    "follow": true
+   },
+   {
+    "p": "P6",
+    "n": "收到识别结果",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 666,
+    "line": "talk",
+    "sure": "中",
+    "code": "display->AddTextGlyphs(glyphs, bpp);",
+    "where": "before",
+    "once": "once",
+    "func": "Application::InitializeProtocol（OnIncomingJson 回调内 Schedule 的 lambda）",
+    "struct_ok": true,
+    "chk": []
+   },
+   {
+    "p": "P7",
+    "n": "收到TTS开始",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 627,
+    "line": "talk",
+    "sure": "高",
+    "code": "SetDeviceState(kDeviceStateSpeaking);",
+    "where": "before",
+    "once": "once",
+    "func": "Application::InitializeProtocol",
+    "struct_ok": true,
+    "chk": [
+     {
+      "level": "tip",
+      "text": "「等回复开始信令」这一段从「收到识别结果」到「收到TTS开始」：两头写在同一个函数 InitializeProtocol 里，但「收到识别结果」在第 665 行交给 Schedule 的 lambda 里，「收到TTS开始」在第 625 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+     }
+    ]
+   },
+   {
+    "p": "P8",
+    "n": "收到首句文本",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 651,
+    "line": "talk",
+    "sure": "中",
+    "code": "display->SetChatMessage(\"assistant\", message.c_str());",
+    "where": "before",
+    "once": "first",
+    "func": "Application::InitializeProtocol",
+    "struct_ok": true,
+    "chk": [
+     {
+      "level": "tip",
+      "text": "「首句文本下发」这一段从「收到识别结果」到「收到首句文本」：两头写在同一个函数 InitializeProtocol 里，但「收到识别结果」在第 665 行交给 Schedule 的 lambda 里，「收到首句文本」在第 649 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+     }
+    ]
+   },
+   {
+    "p": "P9",
+    "n": "回复音频入解码",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 556,
+    "line": "talk",
+    "sure": "高",
+    "code": "audio_service_.PushPacketToDecodeQueue(std::move(packet));",
+    "where": "before",
+    "once": "first",
+    "func": "Application::InitializeProtocol",
+    "struct_ok": true,
+    "chk": [
+     {
+      "level": "tip",
+      "text": "「首包回复音频回传」这一段从「收到首句文本」到「回复音频入解码」：两头写在同一个函数 InitializeProtocol 里，但「收到首句文本」在第 649 行交给 Schedule 的 lambda 里，「回复音频入解码」在第 554 行交给 OnIncomingAudio 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+     }
+    ]
+   },
+   {
+    "p": "P10",
+    "n": "开始出声",
+    "f": "audio_service.cc",
+    "path": "main/audio/audio_service.cc",
+    "l": 351,
+    "line": "talk",
+    "sure": "高",
+    "code": "codec_->OutputData(task.pcm);",
+    "where": "before",
+    "once": "first",
+    "func": "AudioService::AudioOutputTask",
+    "struct_ok": true,
+    "chk": [],
+    "felt": "first",
+    "kind": "声音",
+    "out": true
+   },
+   {
+    "p": "P11",
+    "n": "最后一段出声",
+    "f": "audio_service.cc",
+    "path": "main/audio/audio_service.cc",
+    "l": 351,
+    "line": "talk",
+    "sure": "高",
+    "code": "codec_->OutputData(task.pcm);",
+    "where": "before",
+    "once": "last",
+    "func": "AudioService::AudioOutputTask",
+    "struct_ok": true,
+    "chk": [],
+    "felt": "last",
+    "kind": "声音"
+   },
+   {
+    "p": "P12",
+    "n": "回复放完",
+    "f": "audio_service.cc",
+    "path": "main/audio/audio_service.cc",
+    "l": 374,
+    "line": "talk",
+    "sure": "高",
+    "code": "callbacks_.on_playback_drained();",
+    "where": "before",
+    "once": "every",
+    "func": "AudioService::AudioOutputTask",
+    "struct_ok": true,
+    "chk": [],
+    "whole": true
+   },
+   {
+    "p": "P13",
+    "n": "收到TTS结束",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 635,
+    "line": "talk",
+    "sure": "中",
+    "code": "SetDeviceState(kDeviceStateListening);",
+    "where": "before",
+    "once": "once",
+    "func": "Application::InitializeProtocol（OnIncomingJson 回调内 Schedule 的 lambda）",
+    "struct_ok": true,
+    "chk": []
+   },
+   {
+    "p": "P21",
+    "n": "说出状态已生效",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 1047,
+    "line": "face",
+    "sure": "高",
+    "code": "display->SetStatus(Lang::Strings::SPEAKING);",
+    "where": "before",
+    "once": "once",
+    "func": "Application::HandleStateChangedEvent",
+    "struct_ok": true,
+    "chk": []
+   },
+   {
+    "p": "P14",
+    "n": "换上表情",
+    "f": "application.cc",
+    "path": "main/application.cc",
+    "l": 674,
+    "line": "face",
+    "sure": "中",
+    "code": "display->SetEmotion(emotion_str.c_str());",
+    "where": "before",
+    "once": "once",
+    "func": "",
+    "struct_ok": true,
+    "chk": [
+     {
+      "level": "tip",
+      "text": "「到换上表情」这一段从「收到TTS开始」到「换上表情」：两头写在同一个函数 InitializeProtocol 里，但「收到TTS开始」在第 625 行交给 Schedule 的 lambda 里，「换上表情」在第 673 行交给 Schedule 的 lambda 里，两处分别在被调度或回调时执行，执行时机不同，两点的先后和间隔不一定是这一段真正的用时，请核对"
+     }
+    ],
+    "opt": true,
+    "felt": "first",
+    "kind": "画面"
+   }
+  ]
+ },
+ "values": null
+}

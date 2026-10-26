@@ -92,6 +92,6 @@ def test_chart_numbers_are_the_segment_medians_and_early_uses_per_round_lead():
     nums = re.findall(r'<span class="r num">([\d.]+) 秒</span>', h)
     # 和「分段用时」表里一样；编号先给主线，两条线共用的段只列一次，顺带那条开头共用的几段画成一块"同上"（10-26）
     assert nums == ["0.28", "0.75", "0.40"], nums
-    assert "同上 ①–②" in h
+    assert "同上 ①" not in h and ("和上面一样" in h or "同上" in h)  # 10-26 用户：圈号看不懂，写成"和上面一样，走到「某一步」"
     assert "早 0.36 秒" in h and "早 0.38" not in h
     assert "另含极短段" in h

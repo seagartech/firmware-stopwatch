@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from fsw import candidates as cands_mod, structure
+from fsw.scenario import names_too_close
 from fsw.llm import LLMError, redact
 
 PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是不写代码的硬件负责人。
@@ -54,7 +55,7 @@ PICK_PROMPT = """你是"固件码表"工具里的固件分析助手。用户是�
  "missing": "起点或终点找不到时说清是哪一头、为什么；都找到就空着",
  "start": {{"name": "起点的短名字，6 个字以内，比如：说话结束、读到卡号", "note": "起点之前设备看不见的那段，没有就空", "late": "true / false（人做完到起点之间是否隔着上传、服务器或手机处理；只差几十毫秒的写 false）"}},
  "main": {{"name": "要测的这条线的名字，比如：播放这条、开锁这条", "end": "终点的短名字，6 个字以内，比如：开始播放、门锁打开"}},
- "side": null 或 {{"name": "顺带发现的线，比如：表情这条", "end": "比如：换上表情", "found": "发现了什么，一句话", "why": "为什么推荐也测，一句话"}},
+ "side": null 或 {{"name": "顺带发现的线，比如：表情这条", "end": "比如：换上表情（写这条线最后那个计时点真正做的事）", "found": "发现了什么，一句话", "why": "为什么推荐也测，一句话"}},
  "steps": [
   {{"id": "P1", "chain_step": 1, "name": "中文名，8 个字以内，比如：收到识别结果、读到卡号", "file": "相对源码根目录的路径", "line": 123,
     "func": "函数名", "where": "before / after（见插点写法）", "once": "once / first / last（见上）",
@@ -279,6 +280,7 @@ SIDE_REVIEW = """码表在源码里还找到下面这些分支：收到某种消
 {items}
 要测的这条线上的计时点：{points}
 逐条判断，不要再读源码：连续使用时一轮里通常会走到、用户能感觉到（看到或听到）、值得和要测的这条线一起测的，keep 写 true；只在出错、升级、提醒、第一次连接时才走，或用户感觉不到的，写 false。
+已经有的线：{existing}。留下的那条 name、end 要和它们一眼分得开（不要只差一两个字），写清是什么带起来的（比如收到服务器发的哪种消息），end 写这一支那句代码真正做的事。
 只输出一个 ```json 代码块：
 ```json
 {{"review": [{{"id": "候选编号，比如 K3", "keep": true, "name": "这条线的名字，比如：表情这条", "end": "终点短名字，6 个字以内，比如：换上表情", "from": "它在要测的这条线上哪个计时点之后发生，写计时点编号", "kind": "声音 / 画面 / 灯光 / 动作 / 其他", "why": "留或不留的理由，一句话"}}]}}
@@ -1304,6 +1306,15 @@ def side_candidates(r):
     return out[:SIDE_MAX]
 
 
+def existing_lines(r):
+    """问留不留顺带的分支时，告诉大模型已经有哪几条线（名字、终点），免得起个只差一个字的名字。"""
+    out = []
+    for x in (r.get("main"), r.get("side")):
+        if isinstance(x, dict) and (x.get("name") or x.get("end")):
+            out.append(f"{x.get('name') or ''}（终点：{x.get('end') or ''}）")
+    return "、".join(out) or "无"
+
+
 def review_items(cands):
     return "\n".join(f"- {c['id']}：{Path(c['file']).name}:{c['line']} `{c.get('code') or ''}`（{c.get('where') or ''}）" for c in cands)
 
@@ -1319,7 +1330,8 @@ def apply_side_review(root, r, cands, text):
     used = {(x.get("file"), x.get("line")) for x in steps}
     nums = [int(m.group(1)) for x in steps for m in [re.fullmatch(r"P(\d+)", str(x.get("id")))] if m]
     nxt = max(nums, default=0) + 1
-    out, names = [], {str((r.get("side") or {}).get("name") or "")}
+    out, names = [], {str((r.get("side") or {}).get("name") or "")} - {""}
+    ends = {str((r.get("side") or {}).get("end") or ""), str((r.get("main") or {}).get("end") or "")} - {""}
     for c in cands:
         x = got.get(str(c["id"])) or {}
         keep = x.get("keep") in (True, "true", "是") if x else None
@@ -1330,9 +1342,14 @@ def apply_side_review(root, r, cands, text):
             continue  # 不留、或大模型自己那条顺带的线已经量了这一支
         end = rec["end"][:8] or "顺带的一步"
         name = rec["name"] or f"{end}这条"
+        # 和已有的线名字或终点名太像（只差一两个字）：用户分不出是两件事。这一支是收到某种服务器消息才走的（side_candidates），
+        # 名字后面写上「跟服务器消息走」；报告里按每条线怎么被带起来的再分一次（standards.name_lines）
+        if any(names_too_close(name, o) for o in names) or any(names_too_close(end, o) for o in ends):
+            name = f"{name}（跟服务器消息走）"
         while name in names:
             name += "（另一条）"
         names.add(name)
+        ends.add(end)
         fr = str(x.get("from") or "")
         fr = fr if fr in main_ids else (main_ids[0] if main_ids else None)
         if fr is None:
@@ -1350,6 +1367,12 @@ def apply_side_review(root, r, cands, text):
         used.add((c["file"], c["line"]))
     r["side_review"] = out
     structure.check(root, steps, r.get("segments"), r.get("side_segments"), r.get("chain"), strict=bool(r.get("strict")))
+    # 补的这一段从"收到某条服务器消息"那一步量到另一个回调（收到另一条消息才执行）：中间是在等服务器，不算固件（10-26 到换上表情）
+    recv = {g.get("to") for g in list(r.get("segments") or []) + list(r.get("side_segments") or []) if isinstance(g, dict) and g.get("outside")}
+    by = {x.get("id"): x for x in steps}
+    for g in r.get("side_segments") or []:
+        if g.get("sl") and not g.get("outside") and g.get("from") in recv and any(c.get("split") for c in (by.get(g.get("to")) or {}).get("chk") or []):
+            g.update(who="网络、服务器", outside=True)
     return out
 
 
@@ -1359,7 +1382,7 @@ def to_page(r, what):
     steps = [{"p": s["id"], "n": s["name"], "f": Path(s["file"]).name or s["file"], "path": s["file"], "l": s["line"],
               "line": LINE_OF[s["line_of"]], "why": s["why"], "sure": s["sure"], "code": s["code"], "loc_ok": s["loc_ok"],
               "where": s["where"], "once": s["once"], "func": s["func"],
-              "struct_ok": s.get("struct_ok", True), "chk": [{"level": c["level"], "text": c["text"]} for c in s.get("chk") or []],
+              "struct_ok": s.get("struct_ok", True), "chk": [{"level": c["level"], "text": c["text"], **({"split": True} if c.get("split") else {})} for c in s.get("chk") or []],
               **({"note": s["doubt"]} if s["doubt"] else {}), **({} if s.get("always", True) else {"opt": True}),
               **({"felt": s["felt"], "kind": s.get("kind") or ""} if s.get("felt") else {}),
               **({"whole": True} if s.get("every_why") else {}),
@@ -1581,7 +1604,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
             t = time.time()
             pts = "、".join(f"{x['id']} {x['name']}" for x in r["steps"] if x.get("line_of") in ("start", "main"))
             try:
-                ans = llm.followup(SIDE_REVIEW.format(items=review_items(sc), points=pts))
+                ans = llm.followup(SIDE_REVIEW.format(items=review_items(sc), points=pts, existing=existing_lines(r)))
             except LLMError:
                 ans = None  # 问不到只是少几条顺带的线，不算识别失败
             took_retries("pick")
