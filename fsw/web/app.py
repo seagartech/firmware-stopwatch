@@ -8,6 +8,7 @@ import os
 import json
 import re
 import shutil
+import sys
 import threading
 import time
 import traceback
@@ -2475,6 +2476,17 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                                         flow=flow, on_progress=progress)
             except Exception as e:  # 码表自己出错也要说清楚，不能一直转圈
                 r = {"ok": False, "kind": "other", "message": f"找关键步骤时码表出错了：{e}", "found": job["found"]}
+            if not r.get("ok"):  # 失败（含追问后还不对）：大模型原话、问题清单留底（去掉密钥），日志写一行；原来这里直接丢掉
+                try:
+                    c = cfg()
+                    f = idf.save_failed(body.project_dir, r, keys=(c.claude_api_key, c.deepseek_api_key), what=body.what, provider=provider)
+                except Exception as e:  # noqa: BLE001 留底失败不影响把失败原因告诉用户
+                    f = None
+                    print(f"[识别] 失败留底没存上：{type(e).__name__}", file=sys.stderr, flush=True)
+                if f:
+                    job["failed_log"] = str(f)
+                print(f"[识别] 失败（{r.get('kind')}，{r.get('stage') or '-'}）：{idf.redact(re.sub('<br>', ' ', str(r.get('message') or '')), 300)}"
+                      + (f"；原话和问题清单存在 {f}" if f else ""), file=sys.stderr, flush=True)
             r.pop("reply", None)
             r.pop("chain_reply", None)
             ident["flow"] = r.pop("flow", None) if not r.get("ok") else None  # 第二次失败：重试时带上理清的流程

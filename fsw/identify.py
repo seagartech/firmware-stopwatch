@@ -11,6 +11,7 @@
 import hashlib
 import json
 import re
+import unicodedata
 import sys
 import time
 from pathlib import Path
@@ -100,7 +101,7 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
 3. 运行时走哪种模式（比如聆听、工作模式）、哪种协议或通道：两样分别找到运行时真正决定它的那一行代码（不是变量的默认初始值），再查 sdkconfig、sdkconfig.defaults* 或 Kconfig 的取值，写进 mode 和 mode.protocol；几支判断里选其一的，写最前面那个 if 那一行；定不下来的写进 doubts。
 4. 每一步写文件、行号、这一行的原文、所在的函数名、走的是哪一支（哪个条件成立才走）、一轮里只执行一次还是反复执行（逐帧、逐包、轮询），以及它为什么排在上一步后面；和上一步谁先谁后说不准的，after 写"不确定"。
 5. 排顺序前，先读触发它的那一行代码或协议文档：消息或事件什么时候到、在哪种模式下才走，不能按名字猜。交给队列、Schedule、回调之后才执行的，按真正执行的时刻排。依据只能是代码、协议文档或注释，没有就写"不确定"。
-6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口，也不写之后转发、处理这个通知的地方），role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
+6. 链里必须有：设备往外发数据的第一包和最后一包（有上传的话）、收到的第一个结果、最后一个结果，在对应步骤的 role 里标出来（字段名就叫 role，值只用上传首包、上传末包、首个结果、最后结果、输出、全部放完这六个词，不用英文、不换说法）。逐包反复执行的同一句发送，可以同时标上传首包、上传末包（指这一句一轮里第一次和最后一次执行），下一步用 first、last 区分，不用猜哪一包是最后一包；首包、末包只标在一步上（真正发出数据的那一句；外层一句和它调用的那一句算同一次发送）。首个结果、最后结果这类收到某种消息或某个条件成立才发生的步骤，写认出是它之后那一支里的语句（比如处理这种消息的那一支里的第一句），不写通用的消息分发入口，也不写 else if、else 那一行。"最后"一类优先用整段真正结束的那一句，不用逐包、逐帧执行的那一行。真正把输出送出去的那一句（比如把声音写进扬声器、驱动执行器）单独列一步，role 标输出：首段、末段输出用它的第一次和最后一次执行，不用入队那句代替。代码里有输出或播放队列放空、动作完成这类"全部放完"信号的，单独列一步，写判断出放完的那一支里的语句（不写检查是否放完的入口，也不写之后转发、处理这个通知的地方），role 标全部放完；最后结果标在它和结束消息里更晚的那一步，说不准先后就两步都标；找不到这种信号，在 doubts 里写明"没有全部放完的信号"和找过哪里。链写到最后一个结果为止，下一轮的事不写。
 7. 只在第一轮才走的步骤（比如唤醒、建立连接、打开音频通道），以及注册回调、初始化这类不在这一轮运行时执行的代码，不进链。
 {hint}{cands}
 ## 最后输出
@@ -110,7 +111,7 @@ CHAIN_PROMPT = """你是"固件码表"工具里的固件分析助手。这一步
  "mode": {{"what": "运行时走哪种模式；不用选的写：无", "file": "决定模式的那一行所在文件", "line": 123, "code": "那一行的原文", "config": "相关配置和取值",
    "protocol": {{"what": "哪种协议或通道；只有一种的写：无", "file": "决定它的那一行所在文件", "line": 123, "code": "那一行的原文"}}}},
  "detect": {{"kind": "第一步用的是哪种输入结束检测，比如：静音检测翻转、读卡完成、按键松开", "found": true, "looked": "找不到时写找过哪里"}},
- "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "相对源码根目录的路径", "line": 123, "code": "这一行的原文", "func": "这一行所在的函数名", "role": "上传首包 / 上传末包 / 首个结果 / 最后结果 / 输出 / 全部放完，可写几个，用、隔开；其余空", "branch": "走哪一支或哪个条件成立才走，没有就空", "repeat": "once / repeat", "after": "为什么排在上一步后面：哪段代码、文档或注释；没有就写 不确定（第 1 步空着）"}}],
+ "chain": [{{"n": 1, "what": "这一步设备做了什么", "file": "相对源码根目录的路径", "line": 123, "code": "这一行的原文", "func": "这一行所在的函数名", "role": "只能从这六个词里选、原样写中文：上传首包、上传末包、首个结果、最后结果、输出、全部放完；可写几个，用、隔开；不是这几步的空着", "branch": "走哪一支或哪个条件成立才走，没有就空", "repeat": "once / repeat", "after": "为什么排在上一步后面：哪段代码、文档或注释；没有就写 不确定（第 1 步空着）"}}],
  "doubts": ["拿不准的地方"]}}
 ```
 行号必须是你亲自打开文件核对过的，code 照抄那一行。
@@ -295,6 +296,46 @@ def _fail(kind, message, **extra):
     return {"ok": False, "kind": kind, "message": message, **extra}
 
 
+
+_KEYLIKE = re.compile(r"(?i)((?:api[_-]?key|secret|token)[\"']?\s*[=:]\s*[\"']?)[A-Za-z0-9_\-\.]{12,}")
+
+
+def _scrub(x, keys=()):
+    """留底前去掉密钥：sk- 开头的、api_key=… 这类，和设置里存的那几个密钥原文。"""
+    if isinstance(x, str):
+        for k in keys:
+            if k and len(k) >= 8:
+                x = x.replace(k, "***")
+        return _KEYLIKE.sub(r"\1***", redact(x, 10 ** 9))  # 和报错留底同一套（sk- 开头的、Authorization 头），再加 api_key=… 这类
+    if isinstance(x, dict):
+        return {k: _scrub(v, keys) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_scrub(v, keys) for v in x]
+    return x
+
+
+FAILED_KEEP = ("kind", "message", "stage", "problems", "chain_reply", "chain_reply_first", "reply", "reply_first", "followups",
+               "retries", "error", "seconds", "calls", "found", "provider", "what")
+
+
+def save_failed(project_dir, r, keys=(), what="", provider=""):
+    """识别失败（含追问后还不对）：大模型原话和问题清单存到项目的 identify/failed-<时间>.json（去掉密钥），返回路径。
+    原来失败时回答直接丢掉，事后看不出它到底写了什么（10-27 8790 理清流程失败）。"""
+    if not project_dir or r.get("ok"):
+        return None
+    d = Path(project_dir) / "identify"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"failed-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    n = 2
+    while f.exists():
+        f = d / f"failed-{time.strftime('%Y%m%d-%H%M%S')}-{n}.json"
+        n += 1
+    rec = {k: r[k] for k in FAILED_KEEP if k in r}
+    rec.update(at=time.strftime("%Y-%m-%d %H:%M:%S"), **({"what": what} if what else {}), **({"provider": provider} if provider else {}))
+    f.write_text(json.dumps(_scrub(rec, keys), ensure_ascii=False, indent=1), encoding="utf-8")
+    return f
+
+
 def _rel(root, file):
     """大模型有时写绝对路径：换成相对源码根目录的。"""
     f = str(file or "").strip()
@@ -374,6 +415,46 @@ def _where_code(root, file, line, code):
 
 
 UPLOAD_ROLES = ("上传首包", "上传末包")
+# 链里每一步标的角色：大模型的写法不稳（10-27 8790：位置全对，四个角色一个都没认出来、也没有全部放完，09:09 同一份源码却成功了）。
+# role / roles 都认；列表、字符串、逗号顿号分隔都行；英文别名、常见中文同义词按语义对到标准的几个；大小写、空格、连字符、全角标点不计较。
+ROLE_ALIASES = {
+    "上传首包": ("上传首包", "首包上传", "上传第一包", "第一包上传", "发送首包", "首包发送", "发送第一包", "第一包发送",
+             "firstupload", "uploadfirst", "uploadfirstchunk", "firstuploadchunk", "uploadfirstpacket", "firstuploadpacket",
+             "uploadfirstframe", "firstuploadframe", "firstchunk", "firstpacket", "uploadstart", "startupload"),
+    "上传末包": ("上传末包", "末包上传", "上传最后一包", "最后一包上传", "发送末包", "末包发送", "发送最后一包", "最后一包发送", "最后一包", "末包",
+             "lastupload", "uploadlast", "uploadlastchunk", "lastuploadchunk", "uploadlastpacket", "lastuploadpacket",
+             "uploadlastframe", "lastuploadframe", "lastchunk", "lastpacket", "uploadend", "endupload", "finalupload", "uploadfinal"),
+    "首个结果": ("首个结果", "第一个结果", "首次结果", "第一次结果", "首条结果", "第一条结果", "首个回复", "第一个回复",
+             "firstresult", "resultfirst", "firstresponse", "firstreply"),
+    "最后结果": ("最后结果", "最终结果", "最后一个结果", "最后一条结果", "末个结果", "最后的结果", "最后回复", "最终回复",
+             "lastresult", "resultlast", "finalresult", "resultfinal", "lastresponse", "finalresponse", "lastreply", "finalreply"),
+    "全部放完": ("全部放完", "全部播放完", "全部播完", "全部播放完毕", "全部输出完", "播放完毕", "播放完", "播完", "放完", "放空", "排空",
+             "播放结束", "输出结束", "输出完毕", "队列放空", "队列排空",
+             "playdone", "playbackdone", "playfinished", "playbackfinished", "playcomplete", "playbackcomplete", "playend", "playbackend",
+             "allplayed", "alldone", "outputdone", "outputfinished", "drained", "drain", "queueempty"),
+    "输出": ("输出", "output", "playout", "speakerout", "audioout"),
+}
+_ROLE_KEYS = sorted(((a, r) for r, xs in ROLE_ALIASES.items() for a in xs), key=lambda x: -len(x[0]))
+
+
+def _role_text(t):
+    t = unicodedata.normalize("NFKC", str(t or "")).lower()
+    return re.sub(r"[\s_\-·]+", "", t)
+
+
+def norm_roles(c):
+    """一步的角色（role，没有就 roles、角色）→ 标准角色列表（按 上传首包…全部放完、输出 的固定顺序，不重复）。
+    长的写法先认（"全部放完"先于"放完"、"输出结束"先于"输出"），认过的字不再算。"""
+    v = next((c.get(k) for k in ("role", "roles", "角色") if c.get(k) not in (None, "", [])), None) if isinstance(c, dict) else c
+    parts = [str(x) for x in v] if isinstance(v, (list, tuple)) else [str(v or "")]
+    got = set()
+    for p in parts:
+        t = _role_text(p)
+        for a, r in _ROLE_KEYS:
+            if a in t:
+                got.add(r)
+                t = t.replace(a, "|")
+    return [r for r in ROLES + (OUTPUT, DONE) if r in got]
 _RECOGNIZED = re.compile(r"识别|转写|stt|asr|transcri|recogni", re.I)
 _SILENCE = re.compile(r"静音|语音活动|说话结束|语音结束|vad|silence|end[ _-]?of[ _-]?speech|speech[ _-]?end", re.I)
 
@@ -387,16 +468,22 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
         return None, ["回答的格式不对，码表看不懂"]
     bad, tips, roles, proj, up_steps, out_steps = [], [], set(), structure.Project(root), [], []
     repairs = []  # 码表按规则补上、改过的（只对新回答）
+
+    def ask(text):  # 不用再读源码就能改的问题：给一条追问的改法（同一段对话里追问一次，见 identify 里的 FIX_AGAIN）
+        if fixes is not None:
+            fixes.append({"bad": bad[-1], "text": text})
     cmap = {c["id"]: c for c in cands or [] if isinstance(c, dict) and c.get("id")}
     if cmap:
         data = _fill_cands(proj, data, cmap, bad, fixes)
     trigger = str(data.get("trigger") or "").strip()
     if not trigger:
         bad.append("没写选定的触发路径")
+        ask("没写选定的触发路径：在 trigger 里写清这一轮从哪种输入、走哪条路径触发（按你已经读过的代码写）")
     mode = data.get("mode") if isinstance(data.get("mode"), dict) else {}
     mwhat = str(mode.get("what") or "").strip()
     if not mwhat:
         bad.append("没写运行时走哪种模式、哪种协议")
+        ask("没写运行时走哪种模式、哪种协议：在 mode.what 里写上；定不下来在 doubts 里说明")
     elif mode.get("file") or mode.get("line"):
         n, why = _where_code(root, mode.get("file"), mode.get("line"), mode.get("code"))
         if why:
@@ -415,6 +502,7 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
                                                        "（你在 config 里已经找到的话就用那一句）"})
     elif not mwhat.lower().startswith(_NONE):
         bad.append("写了运行时走哪种模式、哪种协议，但没写真正决定它的那一行代码")
+        ask("mode 里补上真正决定模式的那一行（file、line、code 照抄文件里的原文）；没读到就在 doubts 里说明")
     doubts = [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else []
     if mwhat and not mwhat.lower().startswith(_NONE):  # 有模式要选：协议或通道也要单独写出决定它的那一行（或在 doubts 里说明）
         proto = mode.get("protocol") if isinstance(mode.get("protocol"), dict) else {}
@@ -427,13 +515,16 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
                 mode = {**mode, "protocol": {**proto, "file": _rel(root, proto.get("file")), "line": n}}
         elif not pwhat.lower().startswith(_NONE) and not any(w in d.lower() for d in doubts for w in ("协议", "通道", "protocol")):
             bad.append("没写决定协议或通道的那一行（mode.protocol；只有一种写「无」，定不下来在 doubts 里说明）")
+            ask("补上 mode.protocol：决定协议或通道的那一行；只有一种写「无」，定不下来在 doubts 里说明")
     if fresh:
         mode = _mode_line_fixes(proj, mode, fixes, repairs if apply else None)
     det = data.get("detect") if isinstance(data.get("detect"), dict) else {}
     if not str(det.get("kind") or "").strip():
         bad.append("第一步没写明用的是哪种输入结束检测")
+        ask("detect.kind 里写明第一步用的是哪种输入结束检测")
     if det.get("found") in (False, "false", "否") and not str(det.get("looked") or "").strip():
         bad.append("说找不到输入结束检测，但没写找过哪里")
+        ask("detect 说找不到输入结束检测：在 detect.looked 里写找过哪里")
     det_text = f"{det.get('kind') or ''} {det.get('looked') or ''}"
     first = next((c for c in data.get("chain") or [] if isinstance(c, dict)), None) if isinstance(data.get("chain"), list) else None
     if (fresh and first and det.get("found") not in (False, "false", "否") and _SILENCE.search(det_text)
@@ -450,13 +541,14 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
         tag = f"第 {n} 步"
         if n in seen:
             bad.append(f"{tag}的序号重复了")
+            ask(f"{tag}的序号和前面重复了：按先后重新编号 n，从 1 开始、不重复")
         seen.add(n)
         miss = [label for k, label in (("what", "做了什么"), ("file", "文件"), ("line", "行号"), ("code", "原文"), ("func", "所在的函数"))
                 if c.get(k) in (None, "")]
         rep = str(c.get("repeat") or "").strip().lower()  # 只看开头：允许后面带说明，比如「once（每次翻转）」
         rep = ("repeat" if rep.startswith(("repeat", "反复", "every")) else
                "once" if rep.startswith(("once", "一次", "只执行一次", "一轮一次", "只一次")) else "")
-        role = [r for r in ROLES + (OUTPUT, DONE) if r in str(c.get("role") or "")]
+        role = norm_roles(c)
         roles.update(role)  # 先记下角色：这一步别处有问题，也不会被误报成"没标出"
         if not rep:
             miss.append("是否反复执行")
@@ -464,6 +556,7 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
             miss.append("为什么排在上一步后面")
         if miss:
             bad.append(f"{tag}没写：{'、'.join(miss)}")
+            ask(f"{tag}补上：{'、'.join(miss)}（照你已经读到的代码写，不加新步骤）")
             continue
         line, why = _where_code(root, c.get("file"), c.get("line"), c.get("code"))
         if why:
@@ -530,10 +623,12 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
                                                    "只在那一步的 role 里补上，不加新步骤、不改别的"})
     if raw and str(category or "").strip() in NEED_DONE and DONE not in roles and not any(DONE in d for d in doubts):
         bad.append(f"事件链里没有「{DONE}」这一步（输出或播放队列放空这类信号所在的那一支）；代码里确实没有这种信号的，在 doubts 里写明\"没有{DONE}的信号\"和找过哪里")
+        ask(f"哪一步是{DONE}（播放或输出结束、队列放空），在那一步的 role 里补标{DONE}；确实没有这种信号，就在 doubts 里写明\"没有{DONE}的信号\"和找过哪里")
     if (fresh and raw and str(category or "").strip() == "语音对话"
             and not any(_RECOGNIZED.search(f"{re.split(r'[（(]', str(c.get('what') or ''))[0]} {c.get('code') or ''}") for c in raw)
             and not any(re.search(r"没有[^，。；]{0,10}识别", str(d)) for d in doubts)):  # 只看这一步说的主句（括号里顺带提到的不算）
         bad.append("语音类的链里没有「收到识别出的文字」这一步（设备收到识别结果的那一支）；协议里确实没有这种消息的，在 doubts 里写明\"没有识别文字的消息\"和找过哪里")
+        ask("链里要有设备收到识别出的文字那一步：已经在链里的，what 写明是收到识别结果；还没写的，按你读过的代码补上那一步；协议里确实没有这种消息，就在 doubts 里写明\"没有识别文字的消息\"和找过哪里")
     flow = {"trigger": trigger, "upload": upload, "mode": mode, "detect": det, "chain": chain,
             "doubts": [str(d) for d in data.get("doubts") or [] if d] if isinstance(data.get("doubts"), list) else [],
             "tips": tips, **({"repairs": repairs} if repairs else {})}  # 码表判断不了、放行的地方（比如 lambda 里写的函数名），只提醒
@@ -1493,6 +1588,8 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
         state["last"] = desc
         report()
 
+    raw = {}  # 这一步大模型的原话（失败时一起交出去留底，见 save_failed）
+
     def failed(e, stage):
         tail = (f"已找到的 {len(state['found'])} 个留着，点\"重试\"接着找" if stage == "pick"
                 else "点\"重试\"再试一次") + "，也可以到设置页换一个大模型。"
@@ -1503,7 +1600,8 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
               f"这一步已用 {err['stage_seconds']} 秒，这次请求重发过 {err.get('retries', 0)} 次）", file=sys.stderr, flush=True)  # 运行日志：原始报错，已去掉密钥
         return _fail(e.kind, f"{STAGES[stage]}时出错：{e.message}<br>{tail}", found=state["found"], stage=stage, error=err, retries=retries, followups=followups,
                      seconds=round(time.time() - t0, 1), calls=calls,
-                     **({"flow": flow} if flow else {}), **({"chain_reply": chain_reply} if chain_reply else {}))
+                     **({"flow": flow} if flow else {}), **({"chain_reply": chain_reply} if chain_reply else {}),
+                     **({"reply": raw["pick"]} if raw.get("pick") else {}))
 
     cands = []
     if flow is None:
@@ -1528,7 +1626,8 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
         got, bad = check_chain(root, _json_block(chain_reply), category, fixes, fresh=True, cands=cands)
         soft = [f for f in fixes if f.get("soft")]  # 码表自己找到了更准的那一行：问一次，不挡
         hard = [f for f in fixes if not f.get("soft")]
-        if ((bad and len(hard) == len(bad)) or (not bad and soft)) and not any(x["stage"] == STAGES["chain"] for x in followups):
+        covered = {f["bad"] for f in hard}  # 每一处问题都有不用再读源码的改法（10-27：缺全部放完原来给不出改法，整次不追问、直接失败）
+        if ((bad and all(b in covered for b in bad)) or (not bad and soft)) and not any(x["stage"] == STAGES["chain"] for x in followups):
             # 只差抄错的原文、首包末包标了多步这类码表能指出改法的：同一段对话里追问一次，只改这几处（每一步最多追问一次）
             t = time.time()
             try:
@@ -1549,7 +1648,9 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
                     chain_reply, got, bad = again, got2, bad2
         if bad:  # 不合格就停下说明原因，不自动重试
             more = f"等 {len(bad)} 处" if len(bad) > 3 else ""
-            return _fail("bad_chain", f"理清流程这一步的结果没通过码表检查：{'；'.join(bad[:3])}{more}。点\"重试\"再理一次，也可以到设置页换一个大模型。",
+            asked = any(x.get("stage") == STAGES["chain"] and x.get("kind") == "fix" for x in followups)
+            return _fail("bad_chain", f"理清流程这一步的结果没通过码表检查{'（同一段对话里追问过一次，还是不对）' if asked else ''}，还缺："
+                                      f"{'；'.join(bad[:3])}{more}。点\"重试\"再理一次，也可以到设置页换一个大模型。",
                          found=[], stage="chain", problems=bad, chain_reply=chain_reply, retries=retries, followups=followups,
                          **({"chain_reply_first": chain_first} if chain_first else {}),
                          seconds=round(time.time() - t0, 1), calls=calls)
@@ -1565,6 +1666,7 @@ def identify(llm, root, what, chip="", known=None, on_progress=None, flow=None, 
         return failed(e, "pick")
     calls += 1
     took_retries("pick")
+    raw["pick"] = reply
     try:
         reply, reply_first = fix_format(reply, "pick")
     except LLMError as e:

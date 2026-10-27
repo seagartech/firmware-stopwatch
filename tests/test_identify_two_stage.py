@@ -641,12 +641,23 @@ def test_code_mismatch_follow_up_only_once_then_stop(door):
     assert [(x.get("kind"), x["ok"]) for x in r["followups"]] == [("fix", False)]
 
 
-def test_other_problems_mean_no_code_fix_follow_up(door):
+def test_missing_field_is_asked_in_the_same_follow_up(door):
+    # 10-27：少写了一项（比如所在的函数）不用再读源码就能补，和抄错的原文一起追问一次
     d = _mistyped()
     d["chain"][2].pop("func", None)
     m = FakeLLM(js(d), followups=[DOOR_REPLY])
     r = idf.identify(m, door, "从刷卡到开门")
+    assert r["ok"], r.get("message")
+    assert len(m.asked) == 1 and "第 3 步补上：所在的函数" in m.asked[0]
+
+
+def test_problems_needing_more_reading_mean_no_follow_up(door):
+    d = _mistyped()
+    d["chain"][2]["file"] = "main/没有这个文件.cc"  # 位置根本对不上：追问时不给读代码的工具，改不了
+    m = FakeLLM(js(d), followups=[DOOR_REPLY])
+    r = idf.identify(m, door, "从刷卡到开门")
     assert not r["ok"] and r["kind"] == "bad_chain" and not m.asked and not r["followups"]
+    assert "还缺：" in r["message"] and "重试" in r["message"]
 
 
 # ---------- 标了最后结果、全部放完的点要有一段量到它；先把输入追到真正发出去的那一句 ----------
