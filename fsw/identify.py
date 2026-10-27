@@ -459,6 +459,15 @@ _RECOGNIZED = re.compile(r"识别|转写|stt|asr|transcri|recogni", re.I)
 _SILENCE = re.compile(r"静音|语音活动|说话结束|语音结束|vad|silence|end[ _-]?of[ _-]?speech|speech[ _-]?end", re.I)
 
 
+def _ask_copy(root, d, tag, why, bad, fixes):
+    """mode、mode.protocol 只是抄的原文对不上（行号在文件里）：追问时把文件里的原文给它，不用再读源码。"""
+    n = line_no(d.get("line"))[0]
+    real = check_location(root, d.get("file"), n) if n else (None, "x")
+    if fixes is not None and "对不上" in why and not real[1] and real[0] is not None:
+        fixes.append({"bad": bad[-1], "text": f"{tag}写的是 {_rel(root, d.get('file'))} 第 {n} 行，文件里是「{real[0]}」，你写的是「{str(d.get('code')).strip()}」："
+                                              "照抄文件里这一行（行号不对就改成原文所在的行）"})
+
+
 def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, cands=None):
     """两次调用之间码表检查理清的流程（只做做得可靠的）：
     文件、行号、原文对不对得上；必填项有没有写；第一步有没有写明是哪种输入结束检测。
@@ -474,7 +483,7 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
             fixes.append({"bad": bad[-1], "text": text})
     cmap = {c["id"]: c for c in cands or [] if isinstance(c, dict) and c.get("id")}
     if cmap:
-        data = _fill_cands(proj, data, cmap, bad, fixes)
+        data = _fill_cands(proj, data, cmap, bad, fixes, tips)
     trigger = str(data.get("trigger") or "").strip()
     if not trigger:
         bad.append("没写选定的触发路径")
@@ -488,6 +497,7 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
         n, why = _where_code(root, mode.get("file"), mode.get("line"), mode.get("code"))
         if why:
             bad.append(f"决定模式和协议的那一行：{why}")
+            _ask_copy(root, mode, "mode ", why, bad, fixes)
         else:
             mode = {**mode, "file": _rel(root, mode.get("file")), "line": n}
             msrc = proj.file(mode["file"])
@@ -511,6 +521,7 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
             n, why = _where_code(root, proto.get("file"), proto.get("line"), proto.get("code"))
             if why:
                 bad.append(f"决定协议或通道的那一行：{why}")
+                _ask_copy(root, proto, "mode.protocol ", why, bad, fixes)
             else:
                 mode = {**mode, "protocol": {**proto, "file": _rel(root, proto.get("file")), "line": n}}
         elif not pwhat.lower().startswith(_NONE) and not any(w in d.lower() for d in doubts for w in ("协议", "通道", "protocol")):
@@ -532,6 +543,8 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
         # 设备自己有说话结束一类的检测（静音、语音活动检测翻转）：第 1 步就得是它，不从按键、触摸这类触发动作往下追
         bad.append("detect 里写着设备有自己的输入结束检测（静音、语音活动检测翻转），第 1 步却不是它：第 1 步要用这个检测翻转的那一行"
                    "（只用来切换显示、指示灯也算），不从按键、触摸往下追")
+        ask("detect 里写的输入结束检测（静音、语音活动检测翻转）就是第 1 步：把第 1 步改成这个检测翻转的那一行（file、line、code、func 照你已经读到的原文写），"
+            "后面的步骤接着它往下排；按键、触摸这类触发不当第 1 步")
     raw = [c for c in data.get("chain") or [] if isinstance(c, dict)] if isinstance(data.get("chain"), list) else []
     if len(raw) < 2:
         bad.append("事件链不到 2 步")
@@ -550,6 +563,8 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
                "once" if rep.startswith(("once", "一次", "只执行一次", "一轮一次", "只一次")) else "")
         role = norm_roles(c)
         roles.update(role)  # 先记下角色：这一步别处有问题，也不会被误报成"没标出"
+        if c.get("_asked"):  # 候选和自己写的位置冲突：已经问了选哪个，这一步别的不再查
+            continue
         if not rep:
             miss.append("是否反复执行")
         if i and not str(c.get("after") or "").strip():
@@ -570,6 +585,10 @@ def check_chain(root, data, category="", fixes=None, fresh=False, apply=False, c
         got = structure.check_func(src, line, c["func"]) if src is not None else None
         if got and got[0] == "fail":
             bad.append(f"{tag}：{got[1]}")
+            name, lams = structure.func_at(src, line)
+            ask(f"{tag}写的 func 是「{c['func']}」，可 {_rel(root, c['file'])} 第 {line} 行「{src.lines[line - 1].strip()[:60]}」在函数 {name}"
+                f"{' 里的一个回调（lambda）' if lams else ''}里：这一行就是你要说的那一句，就把 func 改成 {name}"
+                f"{' 里的哪个回调' if lams else ''}；你要说的是「{c['func']}」里的那一句，就把 file、line、code 改成那一句（照抄原文）")
             continue
         if got:
             tips.append(f"{tag}：{got[1]}")
@@ -641,9 +660,39 @@ CAND_ROLES = {"上传首包": ("上传",), "上传末包": ("上传",), "首个�
               OUTPUT: ("输出",), DONE: ("全部放完",)}
 
 
-def _fill_cands(proj, data, cmap, bad, fixes):
-    """写了 "cand": "K3" 的：file、line、code（缺的 func）照候选填。编号不在列表里、自己又没写位置的，算问题并告诉它怎么改。"""
+def _fill_cands(proj, data, cmap, bad, fixes, tips=None):
+    """写了 "cand": "K3" 的：照候选填 file、line、code，func 按候选那一行重新算（模型写的对得上就留着）。
+    10-27 8791：第 2 步自己写的位置（回调 lambda 里那一句）核对得上，又附了一个指向别处的候选；码表照候选整体替换、函数名却留着模型写的，
+    两边对不上，判"函数不对"、没追问就失败了。所以：
+    - 自己写的 file、line、code、func 都核对得上：以自己写的为准，候选只作参考（记一条提醒）；
+    - 自己写的不对、候选和它写的原文或函数对得上（只是行号、文件抄错）：用候选的位置，函数名按候选那一行重新算；
+    - 两边都说得通又不是同一处、码表判断不了谁对：同一段对话里问一次，让它选一个。
+    编号不在列表里、自己又没写位置的，算问题并告诉它怎么改。"""
     data = dict(data)
+    root = proj.root
+
+    def own(d):  # 自己写的位置核对得上：返回行号；对不上返回 None
+        if not (d.get("file") and d.get("line") and str(d.get("code") or "").strip()):
+            return None
+        n, why = _where_code(root, d.get("file"), d.get("line"), d.get("code"))
+        if why:
+            return None
+        if str(d.get("func") or "").strip():
+            src = proj.file(_rel(root, d["file"]))
+            got = structure.check_func(src, n, d["func"]) if src is not None else None
+            if got and got[0] == "fail":
+                return None
+        return n
+
+    def at_cand(d, c, src):
+        d = {**d, "file": c["file"], "line": c["line"], "code": src.lines[c["line"] - 1].strip() if src is not None else c["code"]}
+        if src is not None and ("func" in d or not d.get("func")):
+            f = str(d.get("func") or "").strip()
+            got = structure.check_func(src, c["line"], f) if f else ("fail", "")
+            if got and got[0] == "fail":  # 模型写的函数名说的不是候选这一行：按最终位置重新算，不混用
+                name, lams = structure.func_at(src, c["line"])
+                d["func"] = (f"{name} 里的回调（lambda）" if lams else name) if name else ""
+        return d
 
     def fill(d, tag):
         if not isinstance(d, dict) or not d.get("cand"):
@@ -657,10 +706,28 @@ def _fill_cands(proj, data, cmap, bad, fixes):
                     fixes.append({"bad": bad[-1], "text": f"{tag}写的候选「{d.get('cand')}」不在列表里：改成列表里的编号，或者自己写 file、line、code"})
             return d
         src = proj.file(c["file"])
-        d = {**d, "file": c["file"], "line": c["line"], "code": src.lines[c["line"] - 1].strip() if src is not None else c["code"]}
-        if not d.get("func") and src is not None:
-            d["func"] = structure.func_at(src, c["line"])[0] or ""
-        return d
+        if not (d.get("file") and d.get("line")):
+            return at_cand(d, c, src)
+        n = own(d)
+        rel = _rel(root, d["file"])
+        if n is not None:
+            if (rel, n) != (c["file"], c["line"]) and tips is not None:
+                tips.append(f"{tag}写了候选 {c['id']}（{c['file']} 第 {c['line']} 行），自己写的 {rel} 第 {n} 行核对得上，以自己写的为准")
+            return {**d, "file": rel, "line": n}
+        ln = line_no(d.get("line"))[0]
+        near = rel == c["file"] and ln is not None and abs(ln - c["line"]) <= 3
+        said_cand = src is not None and (_same_code(d.get("code"), src.lines[c["line"] - 1])
+                                         or (str(d.get("func") or "").strip() and structure.check_func(src, c["line"], d["func"]) is None))
+        if near or said_cand or not tag.startswith("第"):  # 只是行号、文件抄错（mode 这类没有函数可比的照旧用候选）
+            return at_cand(d, c, src)
+        real = check_location(root, d["file"], ln)[0] if ln else None
+        mine = f"{rel} 第 {ln} 行" + (f"「{real[:60]}」" if real else "")
+        theirs = f"{c['file']} 第 {c['line']} 行「{(src.lines[c['line'] - 1].strip() if src is not None else c.get('code') or '')[:60]}」"
+        bad.append(f"{tag}写的候选 {c['id']} 在 {theirs}，自己写的在 {mine}，不是同一处，码表判断不了用哪个")
+        if fixes is not None:
+            fixes.append({"bad": bad[-1], "text": f"{tag}：候选 {c['id']} 在 {theirs}，你写的在 {mine}，不是同一处，请选一个。"
+                                                  f"用候选：保留 cand，file、line、code、func 照候选那一行写；用你自己写的：去掉 cand，file、line、code、func 照文件原文写对"})
+        return {**d, "_asked": True}
 
     if isinstance(data.get("chain"), list):
         data["chain"] = [fill(c, f"第 {c.get('n') or i + 1} 步") if isinstance(c, dict) else c for i, c in enumerate(data["chain"])]
