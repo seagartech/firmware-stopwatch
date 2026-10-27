@@ -3,7 +3,7 @@
 2. 设备外各段写它自己在等什么（standards.plain_cloud），不再统一贴"服务器负责什么"整句；
 3. 报告底部按线分组，每行写占这条线的百分之几，共用段只写一次并注明还有哪几条也走；
 4. 顺带的线按实际量到的点起名；名字太像的按被什么带起来的分开；
-5. 图里和上面一样的开头写"和上面一样，走到「某一步」"，不用圈号。
+5. 图里和别的线共用的开头照原样画（真名字、秒数、同样长），分开的地方标出来，不写"同上"、不用圈号（10-27 改）。
 回归数据：一次真测（语音对话，两条表情线）的结果页 + 只留 FSW 行的原始日志（tests/fixtures/voice_two_face_lines_*）。"""
 
 import json
@@ -224,17 +224,18 @@ def test_regression_groups_by_line_and_right_denominators(tmp_path):
     assert "<b>等云端（再发一条消息，收到后才换上表情）</b>：一般 0.76 秒，占这条线 61%。这段在设备外，设备改不了。" in emo
     assert "属于设备。" not in emo.split("这段在设备外")[0]
     assert "顺带的线" in eye and "顺带的线" in emo and "顺带的线" not in m
-    assert "开头和上面一样" not in m
-    assert "开头和上面一样，走到「收到TTS开始」" in emo and "开头和上面一样，走到「收到识别结果」" in eye
+    assert "走的是同一段" not in m
+    assert "到「收到TTS开始」之前和「到说出状态已生效」走的是同一段，从那里分开" in emo
+    assert "到「收到识别结果」之前和「到开始出声」走的是同一段，从那里分开" in eye
     assert "语音识别、生成回复" not in t.split("</svg>", 1)[1]
 
 
 @node
-def test_regression_chart_says_same_as_above_in_words(tmp_path):
+def test_regression_chart_draws_shared_start_not_same_as_above(tmp_path):
     t = _run(_D(tmp_path), "timeline(D)")
     svg = t.split("</svg>", 1)[0]
-    assert "同上 ①" not in svg and "①" not in svg
-    assert "同上，到「收到识别结果」" in svg and "同上，到「收到TTS开始」" in svg
+    assert "同上" not in svg and "①" not in svg and "和上面一样" not in svg
+    assert svg.count("逐包上传声音 0.40") == 3 and svg.count("从这里分开走") == 2  # 共用那段三条线都照原样画；两条顺带的线各标一处分开
     assert "说出状态已生效 0.47 秒" in svg and "换上表情 1.25 秒" in svg
 
 
@@ -242,8 +243,119 @@ def test_regression_chart_says_same_as_above_in_words(tmp_path):
 def test_tech_version_keeps_numbers_but_no_circled_same(tmp_path):
     t = _run(_D(tmp_path, plain=False), "timeline(D)")
     assert "①" in t  # 技术细节版仍有编号
-    assert "同上 ①" not in t.split("</svg>", 1)[0]
+    assert "同上" not in t.split("</svg>", 1)[0]
 
 
 def test_actual_end_used_by_page():
     assert "l.sl||l.actual?l.end:" in JS
+
+
+# ---------- 10-27 用户看「时间花在哪」：左边线名看不全、灰柱写"同上"看不懂、三条"同上"长短不一 ----------
+# 原因：线名从 x=136 往左写（text-anchor=end），长名字写出框；每条线的段按这条线自己的中位数摊，同一段在各行长短不同；
+# 灰柱是"从起点到这条线分开的那一步"，各条线分开的那一步不同，长短本来就不同，却都写"同上"。
+# 还有一处相关的：问"要不要一起测"用的是码表补的那条顺带的线，大模型那支的点又是同一个，两条线量到同一个点、每轮一模一样。
+
+import re as _re
+
+
+def _dup_page():
+    """两条顺带的线从起点量到同一个点（「换上表情」）：一条从「切到说话态」分出去，一条从「收到识别结果」分出去。"""
+    st = lambda p, n, line, **k: {"p": p, "n": n, "f": "app.cc", "path": "main/app.cc", "l": int(p[1:]) * 10, "line": line, **k}
+    return {"steps": [st("P1", "说话结束", "talk"), st("P2", "收到识别结果", "talk"), st("P3", "切到说话态", "talk"),
+                      st("P4", "开始出声", "talk", felt="first", kind="声音", out=True), st("P5", "换上表情", "face", felt="first", kind="画面")],
+            "segs": [{"a": "P1", "b": "P2", "t": "说话音频逐包上传＋语音识别后回传文本", "who": "固件 / 网络"},
+                     {"a": "P2", "b": "P3", "t": "生成回复并下发播放指令", "who": "服务器", "out": True},
+                     {"a": "P3", "b": "P4", "t": "首包回复音频到达＋音频包排队后被解码＋解码帧等待播放并开功放", "who": "固件"}],
+            "fsegs": [{"a": "P3", "b": "P5", "t": "等服务器发第一句回复文本", "who": "网络 / 服务器", "out": True},
+                      {"a": "P2", "b": "P5", "t": "到换上表情", "who": "网络、服务器", "out": True, "sl": "表情变化这条"}],
+            "ln": {"talk": "一轮对话这段", "face": "表情变化这条"}, "main": ["P1", "P2", "P3", "P4"],
+            "branch": {"from": "P3", "nodes": ["P5"]}, "sides": [{"name": "表情变化这条", "end": "换上表情", "from": "P2", "nodes": ["P5"]}],
+            "sideAsk": {"q": "换上表情"}, "server": "语音识别、生成回复"}
+
+
+def test_two_side_lines_to_the_same_point_become_one():
+    sc = stds.real_scenario(_dup_page(), None)
+    face = [l for l in sc["lines"] if l["end"].startswith("换上表情")]
+    assert len(face) == 1 and face[0]["name"] == "表情变化这条" and "（" not in face[0]["name"]
+    assert face[0]["segments"] == ["P1-P2", "P2-P3", "P3-P5"]  # 留分得细的那条
+    assert "P2-P5" not in sc["segments"]
+
+
+def test_saved_rounds_with_more_lines_rebuild_ends_from_segments(tmp_path):
+    sc = stds.real_scenario(_dup_page(), None)
+    spec = meas.Spec.from_scenario(sc)
+    segs = {"P1-P2": 0.36, "P2-P3": 0.06, "P3-P4": 1.12, "P3-P5": 0.73, "P2-P5": 0.79}
+    (tmp_path / "raw.log").write_text("", encoding="utf-8")
+    (tmp_path / meas.ROUNDS_FILE).write_text(json.dumps({"rule": meas.ROUND_RULE, "rounds": [
+        {"n": 1, "segs": segs, "ends": [1.15, 1.15, 1.54]}]}), encoding="utf-8")  # 存的时候是三条线（两条表情线）
+    r = meas.run_rounds(tmp_path, spec)
+    assert len(r) == 1 and len(r[0]["ends"]) == len(spec.lines) == len(sc["lines"])
+    want = {l["name"]: round(sum(segs[k] for k in l["segments"]), 6) for l in sc["lines"]}
+    assert dict(zip([l["name"] for l in spec.lines], r[0]["ends"])) == want
+
+
+def test_block_short_names():
+    assert stds.short_name("首包回复音频到达＋音频包排队后被解码＋解码帧等待播放并开功放", "开始出声") == "第一包回复语音到达→开始出声"
+    assert stds.short_name("说话结束到上传首包", "上传首包") == "说话结束到上传第一包"
+    assert stds.short_name("某个很长很长很长很长很长很长的单步名字", "收到识别结果") == "到收到识别结果"
+    assert stds.real_scenario(_dup_page(), None)["segments"]["P3-P4"]["short"] == "第一包回复语音到达→开始出声"
+
+
+def _texts(svg):
+    W = float(_re.search(r'viewBox="0 0 ([\d.]+) ', svg).group(1))
+    out = []
+    for m in _re.finditer(r'<text ([^>]*)>([^<]*)</text>', svg):
+        a = dict(_re.findall(r'([\w-]+)="([^"]*)"', m.group(1)))
+        fs = float(a.get("font-size", 12))
+        w = sum(fs if ord(c) > 255 else fs * .62 for c in m.group(2))
+        x = float(a["x"])
+        lo = {"end": x - w, "middle": x - w / 2}.get(a.get("text-anchor"), x)
+        out.append((m.group(2), lo, lo + w))
+    return W, out
+
+
+def _all_inside(svg):
+    W, ts = _texts(svg)
+    return [t for t, lo, hi in ts if lo < 0 or hi > W]
+
+
+@node
+def test_line_names_fit_two_lines_and_never_leave_the_chart(tmp_path):
+    D = _D(tmp_path)
+    eye = next(l for l in D["lines"] if l["name"] == "到说出状态已生效")
+    eye["name"] = "到说出状态已生效再加上一段很长很长很长的名字看会不会被截掉（从「收到识别结果」分出去）"
+    emo = next(l for l in D["lines"] if l["name"] == "情绪表情这条")
+    emo.update(name="情绪表情这条（跟服务器消息走）", end="换上表情（跟服务器消息走）")
+    for l in D["J"]["scenario"]["lines"]:
+        if l["name"] == "情绪表情这条":
+            l.update(name=emo["name"], end=emo["end"])
+    t = _run(D, "timeline(D)")
+    svg = t.split("</svg>", 1)[0]
+    assert _all_inside(svg) == []
+    texts = [x for x, _, _ in _texts(svg)[1]]
+    assert "情绪表情这条" in texts and "跟服务器消息走" in texts  # 括号里的说明拆成第二行小字
+    assert "换上表情 1.25 秒" in texts and "从「收到识别结果」分出去" in texts
+    assert sum(1 for x in texts if x and x in eye["name"]) >= 2  # 太长的主名折成两行，不截断
+    assert "<b>情绪表情这条</b><span class=\"note\">（跟服务器消息走；顺带的线，不是上面的主数）</span>" in t
+
+
+@node
+def test_same_segment_same_place_and_length_in_every_line(tmp_path):
+    for plain in (True, False):
+        d = tmp_path / str(plain)
+        d.mkdir()
+        svg = _run(_D(d, plain=plain), "timeline(D)").split("</svg>", 1)[0]
+        assert _all_inside(svg) == []
+        lab = "逐包上传声音 0.40" if plain else "① 0.40"
+        boxes = _re.findall(r'<rect x="([\d.]+)" y="[\d.]+" width="([\d.]+)"[^>]*/><text[^>]*>' + _re.escape(lab) + "<", svg)
+        assert len(boxes) == 3 and len(set(boxes)) == 1, boxes
+        assert "同上" not in svg
+
+
+@node
+def test_old_save_without_short_names_still_draws(tmp_path):
+    D = _D(tmp_path)
+    for g in D["J"]["scenario"]["segments"].values():
+        g.pop("short", None)
+    svg = _run(D, "timeline(D)").split("</svg>", 1)[0]
+    assert "undefined" not in svg and "同上" not in svg and _all_inside(svg) == []

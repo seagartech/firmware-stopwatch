@@ -251,6 +251,22 @@ def plain_cloud(name, end_name, note, split=False):
     return t or nm
 
 
+def short_name(name, to_name=""):
+    """计时图色块里写的短名字（10-27 用户："首包回复音频到达＋音频包排队后被解码＋解码帧等待播放并开功放 1.12"太长）：
+    段名换成大白话后不长（不超过 14 个字）就照写；几步拼起来的写"第一步→这段的终点"；还长就写"到「终点」"。全名、细节写在图下面。"""
+    nm = gloss(str(name or "").strip())
+    if len(nm) <= 14:
+        return nm
+    parts = [x.strip() for x in re.split(r"[＋+]", nm) if x.strip()]
+    if len(parts) > 1 and to_name:
+        c = f"{parts[0]}→{to_name}"
+        if len(c) <= 16:
+            return c
+    if to_name:
+        return f"到{to_name}"
+    return nm[:12] + "…"
+
+
 def _line_trigger(line, segments, pn, main_keys):
     """一条顺带的线是被什么带起来的：从要测的这条线分出去的第一段在设备外（收到服务器的消息才走）→ 跟服务器消息走；
     在设备上 → 跟设备自己走（比如设备状态一变就走）。"""
@@ -344,6 +360,19 @@ def real_scenario(page, standard, values=None):
             # 只接从起点走到分叉点的那一串（主线的段里还有同时在走的，不接进来）
             by = {f"{a}-{b}": (a, b, g) for a, b, g in main}
             sides[k] = [by[x] for x in _path_keys(main, items[0][0]) if x in by] + items
+    # 两条顺带的线从同一个点量到同一个点（10-27：问"要不要一起测"用的是码表补的那条，大模型那支的点又是同一个，报告里两条
+    # 「表情变化这条」都到「换上表情」、每轮一模一样）：只留一条，留经过的点多、分得细的那条；另一条的名字记下，体验标准、先后规则跟着改
+    same, kept = {}, []
+    for k in sorted(sides, key=lambda x: -len(sides[x])):  # 点多的先留（排序稳定：一样多的留先写的那条）
+        twin = next((o for o in kept if sides[k] and sides[o][0][0] == sides[k][0][0] and sides[o][-1][1] == sides[k][-1][1]), None)
+        if twin is None:
+            kept.append(k)
+        else:
+            same[k] = twin
+    face_name = lambda k: k or ln.get("face", "顺带的那条")
+    merged = {face_name(k): face_name(v) for k, v in same.items()}
+    for k in same:
+        sides.pop(k)
     side = [x for items in sides.values() for x in items]
     segments = {}
     pn0 = {x["p"]: x["n"] for x in steps}
@@ -364,7 +393,8 @@ def real_scenario(page, standard, values=None):
                        "side": "outside" if out_ else "device", "from": a, "to": b,
                        "range": rng, "slow": slow, "basis": basis, **({"to_any": g["any"]} if g.get("any") else {}),
                        **({"split": True} if split else {}),
-                       **({"plain": plain_cloud(g.get("t"), pn0.get(b), page.get("server"), split)} if out_ else {})}
+                       **({"plain": plain_cloud(g.get("t"), pn0.get(b), page.get("server"), split)} if out_ else {}),
+                       "short": short_name(g.get("t") or "", pn0.get(b))}
 
     def std_line(a, b):
         if not standard or a not in mp or b not in mp:
@@ -444,6 +474,7 @@ def real_scenario(page, standard, values=None):
     face1 = [x["p"] for x in steps if x.get("line") == "face" and x["p"] not in side_nodes]
     ren = name_lines(lines, segments, steps, side_names, main_keys, str((page.get("sideAsk") or {}).get("q") or ""),
                      face_dropped=len(face1) < len(face0))
+    ren = {**{a: ren.get(b, b) for a, b in merged.items() if a != ren.get(b, b)}, **ren}
     if ren:
         exps = [{**e, "line": ren.get(e.get("line"), e.get("line"))} for e in exps]
         problems = [{**p, "rule": {**p["rule"], **{k: ren.get(p["rule"][k], p["rule"][k]) for k in ("first", "second") if k in p["rule"]}}}

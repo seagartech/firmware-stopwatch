@@ -832,6 +832,20 @@ def save_rounds(run_dir, rounds):
     (Path(run_dir) / ROUNDS_FILE).write_text(json.dumps({"rounds": keep, "rule": ROUND_RULE}, ensure_ascii=False), encoding="utf-8")
 
 
+def _ends_from_segs(rounds, spec):
+    out = []
+    for r in rounds:
+        segs, ends = r.get("segs") or {}, []
+        for l in spec.lines:
+            ks = [f"{a}-{b}" for a, b in l["segs"]]
+            if any(k not in segs for k in ks):
+                return None
+            vs = [segs[k] for k in ks]
+            ends.append(None if any(v is None for v in vs) else round(sum(vs), 6))
+        out.append({**r, "ends": ends})
+    return out
+
+
 def run_rounds(run_dir, spec):
     """一次测量收全的每一轮：测完时存下的（save_rounds）；老数据没存，才按原始日志重算。"""
     import json
@@ -843,7 +857,13 @@ def run_rounds(run_dir, spec):
             d = json.loads(p.read_text(encoding="utf-8"))
             saved = [{**r, "ok": True} for r in d["rounds"]]
             if d.get("rule") == ROUND_RULE:
-                return saved
+                if all(len(r.get("ends") or []) == len(spec.lines) for r in saved):
+                    return saved
+                # 线的条数和存的时候不一样（10-27：两条量到同一个点的顺带线并成了一条）：存下的各段照用，每条线的用时按它那一串段加起来
+                # （线是从起点一段接一段走到终点的）；有段没数才按原始日志重算
+                fixed = _ends_from_segs(saved, spec)
+                if fixed is not None:
+                    return fixed
         except (ValueError, KeyError, TypeError, AttributeError):
             saved = None  # 文件坏了：退回重算
     lines = (Path(run_dir) / "raw.log").read_text(encoding="utf-8", errors="replace").splitlines()

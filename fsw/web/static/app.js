@@ -210,17 +210,40 @@ function lineParts(D,l){const bad=new Set(((D.J&&D.J.segments)||[]).filter(x=>x.
   const m=ks.map(k=>Math.max(0,segMed(D,k)||0)),sum=m.reduce((t,x)=>t+x,0);
   return ks.map((k,j)=>({k,real:segMed(D,k),share:sum>0?m[j]/sum:1/ks.length,d:l.med==null?0:(sum>0?m[j]/sum:1/ks.length)*l.med}))}
 function timeline(D){
-// 和上面画过的线一样的开头（色块里、图下都用）：写成"和上面一样，走到「某一步」"，不用圈号（10-26 用户：同上 ①–④ 看不懂）
+// 共用那段走到哪一步（图下"从哪里分开"用）
 const sameEnd=(D,k)=>{const sc=(D.J&&D.J.scenario)||{},g=(sc.segments||{})[k]||{},to=g.to||String(k).split('-')[1];return (sc.point_names||{})[to]||''}
-const sameTxt=(D,k,w)=>{const n=sameEnd(D,k),a=n?`和上面一样，走到「${n}」`:'和上面一样',b=n?`同上，到「${n}」`:'同上',cw=t=>[...t].reduce((x,c)=>x+(c.charCodeAt(0)>255?11:6.5),8);
- return w>cw(a)?a:w>cw(b)?b:w>30?'同上':''}
+// 字宽估算（中文按一个字号宽，其余按 0.62 个）：线名、终点名按它定左右留多宽，不再写出框（10-27 用户：左侧标题看不全）
+const cw=(t,fs)=>[...String(t||'')].reduce((x,c)=>x+(c.charCodeAt(0)>255?fs:fs*.62),0);
+// 线名末尾括号里的说明（从哪一步分出去、跟什么走）拆出来，写成第二行小字
+const splitNm=s=>{const m=String(s||'').match(/^(.+?)（(.+)）$/);return m?[m[1].trim(),m[2].trim()]:[String(s||''),'']};
+const wrapT=(t,fs,mw)=>{const out=[];let a='';for(const c of [...String(t||'')]){if(a&&cw(a+c,fs)>mw){out.push(a);a=''}a+=c}if(a)out.push(a);return out};
+// 图下：这条线开头和别的线共用的那几段，写成"到「某一步」之前和「某条线」走的是同一段，从那里分开"（10-27 用户："同上"看不懂）
 const sameTo=(D,l,rows,i)=>{const mine=rows.filter(r=>r.li===i),own=new Set(mine.flatMap(r=>[r.k,...(r.tiny||[]).map(t=>t.k)])),ks=(l.segs||[]),pre=[];
- for(const k of ks){if(own.has(k))break;if(rows.some(r=>r.li!==i&&(r.k===k||(r.tiny||[]).some(t=>t.k===k))))pre.push(k)}
- if(!pre.length)return '';const n=sameEnd(D,pre[pre.length-1]);return n?`和上面一样，走到「${n}」`:'和上面一样'}
+ const other=k=>rows.find(r=>r.li!==i&&(r.k===k||(r.tiny||[]).some(t=>t.k===k)));
+ for(const k of ks){if(own.has(k))break;if(other(k))pre.push(k)}
+ if(!pre.length)return '';const k=pre[pre.length-1],n=sameEnd(D,k),src=other(k),sn=src?`「${splitNm(D.lines[src.li].name)[0]}」`:'上面那条';
+ return n?`到「${n}」之前和${sn}走的是同一段，从那里分开`:`开头和${sn}走的是同一段`}
   // 结论版说人话（10-26）：只画主指标那条（和顺带的线），次要的"第一下"放到"其他参考"；不用圈号，色块直接写短名字和秒数
   const PL=(typeof plainOn==='function'&&plainOn(D));if(PL){const also=new Set(((D.J.scenario||{}).lines||[]).filter(x=>x.also_first).map(x=>x.name));D={...D,lines:D.lines.filter(l=>!also.has(l.name))}}
-  const pname=k=>PL&&plainWhere(D,k)==='cloud'?'等云端':(D.S.segs[k]||{}).name||k;
-  const T=niceT(Math.max(...D.lines.map(l=>l.med).filter(x=>x!=null&&isFinite(x))));const W=900,X0=150,X1=820,sx=t=>X0+(X1-X0)*t/T,h=22,gap=64,top=60;
+  // 色块里写短名字（后台按段名算好的 short，见 standards.short_name；老存档没有就按段名、太长写"到「终点」"），全名写在图下面
+  const segOf=k=>((((D.J&&D.J.scenario)||{}).segments)||{})[k]||{};
+  const shortOf=k=>{const s=String(segOf(k).short||'').trim();if(s)return s;const nm=(D.S.segs[k]||{}).name||k,to=sameEnd(D,k);return [...nm].length<=14?nm:to?`到${to}`:[...nm].slice(0,14).join('')+'…'};
+  const pname=k=>PL&&plainWhere(D,k)==='cloud'?'等云端':shortOf(k);
+  // 编号先给主线（判快慢的那条），顺带的线和主线共用的那几段不再另编号、不另列（10-26：共用段在图下列了两遍，顺带线的段排成了主流程）
+  const ord=[D.lines.indexOf(D.main),...D.lines.map((_,i)=>i).filter(i=>D.lines[i]!==D.main)].filter(i=>i>=0);
+  // 每条线开头和先画的线共用的几段（主线先画）：这几段画在先画那条线同样的位置、同样长（同一段时间必然等长）；分开的地方标竖线
+  // （10-27 用户：三条"同上"灰柱长短不一样——原来每条线按自己的中位数摊、而且各自分开的那一步不同）
+  const partsOf={},preOf={},seenK=new Set();
+  ord.forEach(i=>{const l=D.lines[i];if(l.med==null||!isFinite(l.med)){partsOf[i]=[];preOf[i]=[];return}
+    const ps=lineParts(D,l),pre=[];while(pre.length<ps.length-1&&seenK.has(ps[pre.length].k))pre.push(ps[pre.length]);
+    partsOf[i]=ps;preOf[i]=pre;ps.forEach(p=>seenK.add(p.k))});
+  const forkName=i=>preOf[i].length?sameEnd(D,preOf[i][preOf[i].length-1].k):'';
+  const LMAX=210,lab={};
+  ord.forEach(i=>{const [nm,note]=splitNm(D.lines[i].name),fk=forkName(i),sub=note||(fk?`从「${fk}」分出去`:'');lab[i]={a:wrapT(nm,14,LMAX),b:sub?wrapT(sub,11.5,LMAX):[]}});
+  const LW=Math.max(80,...Object.values(lab).flatMap(x=>[...x.a.map(t=>cw(t,14)*1.08),...x.b.map(t=>cw(t,11.5))]));
+  const endTxt=l=>`${splitNm(l.end)[0]} ${f(l.med)} 秒`,EW=Math.max(60,...D.lines.map(l=>cw(endTxt(l),13)*1.08+16));
+  const maxL=Math.max(1,...Object.values(lab).map(x=>x.a.length+x.b.length));
+  const T=niceT(Math.max(...D.lines.map(l=>l.med).filter(x=>x!=null&&isFinite(x))));const X0=Math.ceil(LW+26),W=Math.ceil(Math.max(900,X0+430+EW+10)),X1=W-EW-10,sx=t=>X0+(X1-X0)*t/T,h=22,gap=Math.max(64,maxL*16+30),top=60;
   const H=top+D.lines.length*gap+30;
   let g='';const st=step(T);
   for(let t=0;t<=T+1e-9;t+=st){g+=`<line x1="${sx(t)}" x2="${sx(t)}" y1="30" y2="${H-30}" stroke="var(--soft)"/><text x="${sx(t)}" y="${H-10}" text-anchor="middle" font-size="12" fill="var(--muted)" class="num">${+t.toFixed(2)} 秒</text>`}
@@ -231,33 +254,39 @@ const sameTo=(D,l,rows,i)=>{const mine=rows.filter(r=>r.li===i),own=new Set(mine
   else if(D.S.exp&&D.S.exp.fair<=T)g+=`<line x1="${sx(D.S.exp.fair)}" x2="${sx(D.S.exp.fair)}" y1="30" y2="${H-30}" stroke="var(--warn)" stroke-dasharray="3 4"/><text x="${sx(D.S.exp.fair)+4}" y="40" font-size="11.5" fill="var(--warn)">${D.S.exp.label}</text>`;
   g+=`<text x="${sx(0)}" y="22" text-anchor="middle" font-size="12" fill="var(--muted)">${D.S.start}</text>`;
   // 归成阶段（10-20 用户定）：占这条线不到 5% 的段算极短，不单独画；连着的极短段并进后面那个大段，排在最后的并进前一个大段。
-  // 色块里只写编号和用时，段名、谁负责、并进了几段写在图下面；不标哪块最长、不要浮窗（10-20 用户定：图下说明全有，最快～最慢看「分段用时」）
+  // 色块里只写名字（或编号）和用时，段名全称、谁负责、并进了几段写在图下面；不标哪块最长、不要浮窗
   const rows=[],NO='①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳',numOf={};
-  // 编号先给主线（判快慢的那条），顺带的线和主线共用的那几段不再另编号、不另列（10-26：共用段在图下列了两遍，顺带线的段排成了主流程）
-  const ord=[D.lines.indexOf(D.main),...D.lines.map((_,i)=>i).filter(i=>D.lines[i]!==D.main)].filter(i=>i>=0);
-  const drawn=[];
-  ord.forEach(i=>{const l=D.lines[i],y=top+i*gap;let t0=0;
-    g+=`<text x="${X0-14}" y="${y+h/2+5}" text-anchor="end" font-size="14" font-weight="700" fill="${l.col}">${l.name}</text>`;
+  const drawn=[],pos={},blocks=[];
+  const blk=(b,y)=>{const w=sx(b.b)-sx(b.a);return `<g><rect x="${sx(b.a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${b.fill}" stroke="var(--panel)" stroke-width="1" rx="2"/>${b.lab?`<text x="${(sx(b.a)+sx(b.b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${b.fg}"${PL?'':' style="font-variant-numeric:tabular-nums"'}>${htmlEsc(b.lab)}</text>`:''}</g>`};
+  ord.forEach(i=>{const l=D.lines[i],y=top+i*gap,L=lab[i];let t0=0;
+    const y0=y+h/2-(L.a.length*16+L.b.length*14)/2+12;
+    L.a.forEach((t,j)=>{g+=`<text x="${X0-14}" y="${y0+j*16}" text-anchor="end" font-size="14" font-weight="700" fill="${l.col}">${htmlEsc(t)}</text>`});
+    L.b.forEach((t,j)=>{g+=`<text x="${X0-14}" y="${y0+L.a.length*16+j*14}" text-anchor="end" font-size="11.5" fill="var(--muted)">${htmlEsc(t)}</text>`});
     if(l.med==null||!isFinite(l.med)){g+=`<text x="${sx(0)+8}" y="${y+h/2+5}" font-size="12" fill="var(--muted)">没收到</text>`;return}
-    const parts=lineParts(D,l),pre=[];
-    if(drawn.length)while(parts.length>1&&numOf[parts[0].k])pre.push(parts.shift());  // 开头和前面画过的线共用的那几段：并成一块灰的"同上"
-    if(pre.length){const d=pre.reduce((t,p)=>t+p.d,0),w=sx(d)-sx(0),nos=pre.map(p=>numOf[p.k]);t0=d;
-      g+=`<g><rect x="${sx(0)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="var(--soft)" stroke="var(--panel)" stroke-width="1" rx="2"/>${(()=>{const lab=sameTxt(D,pre[pre.length-1].k,w);return lab?`<text x="${(sx(0)+sx(d))/2}" y="${y+h/2+4}" text-anchor="middle" font-size="11" fill="var(--muted)">${htmlEsc(lab)}</text>`:''})()}</g>`}
+    const pre=preOf[i],parts=partsOf[i].slice(pre.length).map(p=>({...p}));
+    if(pre.length){const pk=new Set(pre.map(p=>p.k)),cov=new Set();t0=pos[pre[pre.length-1].k].b;
+      // 共用的几段：照先画那条线的样子再画一遍（同样的位置、长短、颜色和字），不写"同上"
+      blocks.filter(b=>b.keys.every(k=>pk.has(k))).forEach(b=>{b.keys.forEach(k=>cov.add(k));g+=blk(b,y)});
+      pre.filter(p=>!cov.has(p.k)).forEach(p=>{g+=blk({a:pos[p.k].a,b:pos[p.k].b,fill:'var(--soft)',fg:'var(--fg)',lab:''},y)});
+      const fx=sx(t0),txt='从这里分开走',tw=cw(txt,11),left=fx-tw-6>=X0;
+      g+=`<line x1="${fx}" x2="${fx}" y1="${y-12}" y2="${y+h+4}" stroke="${l.col}" stroke-width="2"/><text x="${left?fx-4:fx+4}" y="${y-4}" text-anchor="${left?'end':'start'}" font-size="11" fill="${l.col}">${txt}</text>`}
+    // 剩下的段按各自中位数的比例摊到"分开的地方 → 这条线的中位数"
+    const rest=Math.max(0,l.med-t0),rs=parts.reduce((t,p)=>t+Math.max(0,p.real||0),0);
+    parts.forEach(p=>{p.d=rest>0?(rs>0?Math.max(0,p.real||0)/rs:1/parts.length)*rest:Math.max(0,p.real||0)});
+    {let t=t0;parts.forEach(p=>{if(!pos[p.k])pos[p.k]={a:t,b:t+p.d};t+=p.d})}
     drawn.push(i);
     const st=stages(parts);
     st.forEach((x,j)=>{const a=t0,b=t0+x.d;t0=b;const last=j===st.length-1,k=x.parts[0].k,shared=x.parts.some(p=>D.use[p.k]>1),seen=numOf[k],no=seen||NO[rows.length]||String(rows.length+1),w=sx(b)-sx(a);
       x.parts.forEach(p=>{numOf[p.k]=numOf[p.k]||no});
       const c=last?l.col:shared?'var(--soft)':l.soft,fg=last?'#fff':'var(--fg)';
       const th=x.parts.find(p=>(D.allSegs.find(s=>s.k===p.k)||{}).thin),ths=th&&D.allSegs.find(s=>s.k===th.k);
-      // 块里、图下写的秒数是这一段自己的中位数，和「分段用时」同一个数（10-26 核对：按比例摊到整条线后写成 0.29 / 0.30，表里是 0.28）；
-      // 并进来的极短段单独写名字和秒数，不加进这个数里。色块长短仍按比例画到整条线的中位数
+      // 块里、图下写的秒数是这一段自己的中位数，和「分段用时」同一个数（10-26 核对）；并进来的极短段单独写名字和秒数，不加进这个数里
       const own=x.parts[0].real,tiny=x.parts.slice(1).map(p=>({k:p.k,name:D.S.segs[p.k].name,v:p.real}));
       if(!seen)rows.push({k,no,li:i,name:D.S.segs[k].name+(ths?`（数据不足：${ths.count}/${ths.of} 轮）`:''),d:own,share:l.med>0&&own!=null?own/l.med:x.share,owner:D.S.segs[k].owner||'',inc:x.parts.length-1,tiny,shared});
-      g+=`<g><rect x="${sx(a)}" y="${y}" width="${Math.max(2,w)}" height="${h}" fill="${c}" stroke="var(--panel)" stroke-width="1" rx="2"/>`;
-      if(PL){const nm=pname(k),lab=w>nm.length*12+44?`${nm} ${f(own)}`:w>36?f(own):'';if(lab)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${htmlEsc(lab)}</text>`}
-      else if(w>48)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}" style="font-variant-numeric:tabular-nums">${no} ${f(own)}</text>`;
-      else if(w>16)g+=`<text x="${(sx(a)+sx(b))/2}" y="${y+h/2+5}" text-anchor="middle" font-size="12" fill="${fg}">${no}</text>`;g+='</g>'});
-    g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${l.end} ${f(l.med)} 秒</text>`;});
+      // 短名字放不下就写这段走到哪一步（比如 收到识别结果 0.36）
+      let lb='';if(PL){const nm=pname(k),to=plainWhere(D,k)==='cloud'?'':sameEnd(D,k);lb=w>cw(nm,12)+44?`${nm} ${f(own)}`:to&&w>cw(to,12)+44?`${to} ${f(own)}`:w>36?f(own):''}else lb=w>48?`${no} ${f(own)}`:w>16?no:'';
+      const bk={keys:x.parts.map(p=>p.k),a,b,fill:c,fg,lab:lb};blocks.push(bk);g+=blk(bk,y)});
+    g+=`<circle cx="${sx(t0)}" cy="${y+h/2}" r="6" fill="${l.col}"/><text x="${sx(t0)+10}" y="${y+h/2+5}" font-size="13" font-weight="700" fill="${l.col}" class="num halo">${htmlEsc(endTxt(l))}</text>`;});
   const L0=D.lines[0],L1=D.lines[1];
   // "早多少秒"用后台按每轮算的差的中位数（judge lead），和逐轮一致；没有才用两条线中位数相减（10-26 核对：图上 0.38、逐轮中位 0.36）
   const LD=D.J&&D.J.lead&&D.J.lead.first===L0.name&&L1&&D.J.lead.second===L1.name?D.J.lead.med:null;
@@ -278,7 +307,8 @@ const sameTo=(D,l,rows,i)=>{const mine=rows.filter(r=>r.li===i),own=new Set(mine
    // 几条线共用的段只写一次（写在第一次画到它的那条线下面），注明还有哪几条也走；和上面画过的线一样的开头只写一句
    const M=D.main,grp=drawn.map(i=>{const l=D.lines[i],mine=rows.filter(r=>r.li===i).map(r=>({...r,also:D.lines.filter((o,j)=>j!==i&&drawn.includes(j)&&(o.segs||[]).includes(r.k)).map(o=>o.name)}));
      const tn=tnOf(mine.flatMap(r=>r.tiny.map(t=>({...t,where:plainWhere(D,t.k)})))),pre=sameTo(D,l,rows,i),side=!M||l.name!==M.name;
-     return `<li style="margin-top:6px"><b>${htmlEsc(l.name)}</b>${side?'<span class="note">（顺带的线，不是上面的主数）</span>':''}：一般 ${f(l.med)} 秒到「${htmlEsc(l.end)}」${pre?`；开头${htmlEsc(pre)}`:''}
+     const [nm,note]=splitNm(l.name),why=[note,side?'顺带的线，不是上面的主数':''].filter(Boolean).join('；');
+     return `<li style="margin-top:6px"><b>${htmlEsc(nm)}</b>${why?`<span class="note">（${htmlEsc(why)}）</span>`:''}：一般 ${f(l.med)} 秒到「${htmlEsc(splitNm(l.end)[0])}」${pre?`；${htmlEsc(pre)}`:''}
       ${mine.length?`<ul class="plainlst" style="margin:2px 0 0;padding-left:18px;line-height:1.7;font-size:14px">${mine.map(r=>one(r,'这条线')).join('')}</ul>`:''}${tn?`<div class="note">${tn}</div>`:''}</li>`});
    return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="时间花在哪">${g}</svg></div>
   <ul ${UL}>${grp.join('')}</ul><p class="note" style="margin:6px 0 0">${tail}</p>`}
