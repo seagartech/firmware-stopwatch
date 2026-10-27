@@ -472,7 +472,7 @@ function dev(D){const modern=typeof ReportLayout!=='undefined'&&D.J&&D.J.scenari
   const outside=s=>{const j=D.J&&D.J.segments.find(x=>x.k===s.k);return j&&j.outside};
   return `<div class="stack readable-report tech-report">${expDone()}<div><div class="titlerow"><h1>技术细节</h1>${vsTag()}</div><p class="sub">给研发：每段在代码哪里、慢在哪、怎么改。单位秒。${realFlash()?'':'这里只演示样子。'}</p></div>
   ${modern?`<section class="panel" id="sec-technical-steps"><h2>分段用时</h2>${checksBox(D.J)}<details><summary>数据来源与计时边界</summary>${qualityLine(D.J.quality,D.J)+startLagLine(D.S.startShort,D.J.start_lag,startGap(D.J))+mergedLine(D.J.merged)}${(D.J.scenario.line_notes||[]).map(t=>`<p>${htmlEsc(t)}</p>`).join('')}</details>${ReportLayout.panel(D.J,'technical')}</section>`:`<section class="panel scroll"><h2>分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段</th><th class="loc">代码位置</th><th class="own">谁负责</th><th class="r">一般<br>（中位数）</th><th class="r">最差</th>${PV?`<th class="r">上次<br><span class="note">${htmlEsc(String(PV.measured_at||'').replace(/^\d{4}-/,''))}</span></th>`:''}<th>判断</th></tr></thead><tbody>${groups}</tbody></table>
-  <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>`}${recOnlyBox(D)}
+  <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>`}${modern?`<details class="panel"><summary>只记录、不判快慢：完整统计</summary>${recOnlyBox(D)}</details>`:recOnlyBox(D)}
   ${bad.length?`<section class="panel scroll"><h2>有问题的轮</h2><table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}<th>慢在哪段</th></tr></thead><tbody>${bad.map(r=>{const c=why(r);return `<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${e==null?'—':f(e)}</td>`).join('')}<td ${SANS}>${c?`${htmlEsc(c.name)}：${f(c.v)} 秒（一般 ${f(c.med)}）`:'<span class="note">没有哪一段特别慢，各段都慢一点</span>'}</td></tr>`}).join('')}</tbody></table>${one?`<p class="note" style="margin:8px 0 0">这几轮都慢在「${htmlEsc(one.name)}」${outside(one)?'，这段在设备外':''}。</p>`:''}</section>`:''}${modern?`<section class="panel"><h2>逐次测量点位图</h2>${ReportLayout.roundsOverview(ReportLayout.model(D.J))}<details><summary>完整过程的逐次点位图</summary>${ReportLayout.roundsOverview(ReportLayout.model(D.J),{complete:true})}</details></section>${ReportLayout.extra(D.J)}`:''}${fixDev(D)}
   <section class="panel"><h2>原始日志</h2><p style="margin:0 0 6px"><span class="code">${T.log}</span></p><p class="note" style="margin:0 0 8px">设备调试口原样输出，没有删改；码表插的计时点行以 FSW 开头。报告里的数都从它算。</p><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
@@ -985,6 +985,23 @@ function reportPage(D){
   <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
+// Keep existing advice choices and links, but do not turn an empty action list into an all-clear.
+function readableActions(D,m){
+  const FX=activeFixes(D),ds=decisions(D).filter(x=>x.lv!==3);
+  const rows=ds.map(x=>{
+    const l=x.k==='main'?m.main:String(x.k).startsWith('line:')?m.visibleLines.find(l=>l.name===String(x.k).slice(5)):null;
+    // Result comparisons are already displayed above. Keep their recommendation entry, if present.
+    const n=cardOf(FX,x);
+    if((x.k==='main'||String(x.k).startsWith('line:'))&&x.lv===2&&n<0)return '';
+    return `<li><b>${l?ReportLayout.esc(l.endName):x.t}</b>：${l?ReportLayout.esc(ReportLayout.referenceText(m,l)):x.d}${n>=0?' '+recLine(FX[n])+' '+jump('fix-'+n,'查看处理选项'):''}${x.src?jump('sec-'+x.src[0],'查看依据'):''}</li>`;
+  }).join('');
+  return rows?`<ul class="decide readable-actions">${rows}</ul>`:'';
+}
+function readableSources(D){
+  const seen=new Set(),out=[];
+  (D.J.lines||[]).forEach(l=>{const e=l.exp_std||{};if(e.source&&!seen.has(e.source)){seen.add(e.source);out.push(srcHtml(e.source));}});
+  return `<details class="reference-sources"><summary>参考依据、适用范围与统计说明</summary><p>中位数用来看一般情况；平均值用于来源明确要求平均的比较。单次超过参考值的次数只补充说明波动。来源没有明确匹配统计口径时，不给整体达标结论。</p><p>程序计时的起终点与参考要求可能有差距，比较结果不等于完成标准验收。</p>${out.length?out.map(v=>`<p>${v}</p>`).join(''):'<p>这次没有可用的参考来源。</p>'}</details>`;
+}
 // Shared presentation for live and exported reports. The API remains the source of all values.
 function readableReport(D){
   const R=ReportLayout,m=R.model(D.J,'general'),names=new Set(m.visibleLines.filter(l=>!l.contentDependent).map(l=>l.name));
@@ -995,13 +1012,13 @@ function readableReport(D){
   const warning=missing.map(l=>`<p>想观察的「${R.esc(human(l.was))}」没有直接测到；这次不能给出它的完成时间。详细记录保留在技术细节中。</p>`).join('');
   const checks=(D.J.checks||[]).filter(c=>c.kind==='bad'||c.kind==='bad_line'||c.kind==='thin'||c.kind==='thin_line');
   const complete=m.visibleLines.filter(l=>l.contentDependent),refs=m.visibleLines.filter(l=>!l.contentDependent&&main&&l.index!==main.index);
-  return `<div class="stack readable-report">${expDone()}<header class="report-hero"><div class="eyebrow">本次测量 · ${D.n} 次${D.S.real?'真实记录':'模拟演示'}</div><div class="titlerow"><h1>${main?`到「${R.esc(main.endName)}」<br>一般 <strong>${R.esc(f(stat.med))} 秒</strong>`:'本次测量还没有完整结果'} </h1>${vsTag()}</div><p>${main?'从「'+R.esc(main.startName)+'」开始算。':''}</p><div class="hero-facts"><span>平均 <b>${R.esc(f(avg))} 秒</b></span><span>最慢 <b>${R.esc(f(stat&&stat.max))} 秒</b></span><span><b>${vals.length}/${D.n}</b> 次有记录</span></div><p class="small-note">这里记录的是程序走到各步的时刻。人实际看到、听到或动作完成的时间，需要另行核对。</p></header>
+  return `<div class="stack readable-report">${expDone()}<header class="report-hero"><div class="eyebrow">本次测量 · ${D.n} 次${D.S.real?'真实记录':'模拟演示'}</div><div class="titlerow"><h1>${main?`程序记录到「${R.esc(main.endName)}」<br>一般 <strong>${R.esc(f(stat.med))} 秒</strong>`:'本次测量还没有完整结果'} </h1>${vsTag()}</div><p>${main?'从程序记录到「'+R.esc(main.startName)+'」时开始算。':''}</p><div class="hero-facts"><span>平均 <b>${R.esc(f(avg))} 秒</b></span><span>最慢 <b>${R.esc(f(stat&&stat.max))} 秒</b></span><span><b>${vals.length}/${D.n}</b> 次有记录</span></div><p class="small-note">这里记录的是程序走到各步的时刻。人实际看到、听到或动作完成的时间，需要另行核对。</p></header>
   ${warning?`<div class="measurement-note"><b>这次还没测到什么</b>${warning}</div>`:''}${checks.length?`<div class="errbox"><b>数据有 ${checks.length} 处需要留意</b><p>部分步骤没有测全或先后异常。相关结果不作为完整结论，具体原因见技术细节。</p></div>`:''}${D.n<10?'<p class="note">测量次数不足 10 次，适合检查流程，判断稳定性还需要更多记录。</p>':''}
-  <section class="panel"><h2>结论和建议</h2>${decideList(P)}<details><summary>这些数字怎么看</summary><p>“一般”是把有效用时从短到长排列后的中间水平，也叫中位数。平均值是所有有效用时相加再除以次数。</p><p>各段分别统计，不能把各段中位数相加当成总等待时间。</p></details></section>
+  <section class="panel"><h2>结论和建议</h2>${R.findings(m,D.S.real?(ADV&&ADV.status):'done')}${readableActions(P,m)}<details><summary>这些数字怎么看</summary><p>“一般”是把有效用时从短到长排列后的中间水平，也叫中位数。平均值是所有有效用时相加再除以次数。</p><p>各段分别统计，不能把各段中位数相加当成总等待时间。</p></details></section>
   <section class="panel" id="sec-tl"><h2>时间花在哪</h2><p class="intro">先看各种结果要等多久，再看每一步花了多久。</p>${R.panel(D.J,'general')}</section>
-  ${(refs.length||complete.length)?`<section class="panel"><h2>其他参考</h2>${refs.map(l=>`<p>${R.esc(l.endName)}：一般 <b>${R.fmt(l.stat.med)}</b>，最慢 ${R.fmt(l.stat.max)}。</p>`).join('')}${complete.map(l=>`<p>完整过程到「${R.esc(l.endName)}」：一般 <b>${R.fmt(l.stat.med)}</b>，最慢 ${R.fmt(l.stat.max)}。${l.stat.verdict==='看回答长短'?'用时受这次处理的内容多少影响，只记录，不判快慢。':''}</p>`).join('')}${complete.length?`<details><summary>查看完整过程的逐次点位图</summary>${R.roundsOverview(m,{complete:true})}</details>`:''}</section>`:''}
+  ${(refs.length||complete.length)?`<section class="panel"><h2>其他参考</h2>${refs.length?`<p>其他结果（${refs.map(l=>R.esc(l.endName)).join('、')}）已在上方概览展示。<a href="#sec-rounds">查看逐次点位图，比较波动</a>。</p>`:''}${complete.map(l=>`<p>完整过程到「${R.esc(l.endName)}」：一般 <b>${R.fmt(l.stat.med)}</b>，最慢 ${R.fmt(l.stat.max)}。${l.stat.verdict==='看回答长短'?'用时受这次处理的内容多少影响，只记录，不判快慢。':''}</p>`).join('')}${complete.length?`<details><summary>查看完整过程的逐次点位图</summary>${R.roundsOverview(m,{complete:true})}</details>`:''}</section>`:''}
   <section class="stack" id="sec-advice"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note">沿用 ${htmlEsc(ADV.at)} 写的建议，文中秒数是那次的，这次数值见本报告。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():(activeFixes(P).length?fixA(P):'<div class="panel"><p>按本次判定，没有可展示的修改方案。</p><p class="note">未列出方案不等于已经优化，也不替代上面的数据判断。</p></div>')}</section>
-  <h2 style="margin:12px 0 -6px">依据</h2><section class="panel" id="sec-tiers"><h2>用时和标准</h2>${tiers(V)}${stdNote(V)}</section>${R.recordOnly(D.J,D.S.recOnly)}
+  <h2 style="margin:12px 0 -6px">依据</h2><section class="panel" id="sec-tiers"><h2>用时和标准</h2>${R.comparison(m)}${readableSources(V)}</section>${R.recordOnly(D.J,D.S.recOnly)}
   <section class="panel" id="sec-rounds"><h2>${D.n} 次测量记录</h2>${R.roundsOverview(m)}<details><summary>查看每次的具体数值</summary>${R.valuesTable(D.J,'lines','general')}</details></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 

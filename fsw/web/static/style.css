@@ -514,3 +514,22 @@ table.segtab td .code{white-space:normal}
 .readable-report .panel{padding:20px 14px}
 .readable-report .report-hero{padding:22px 18px}
 }
+
+/* Findings stay visible; detailed statistics remain available without repeating the overview. */
+.readable-report .report-findings p{margin:10px 0;line-height:1.8}
+.readable-report .report-findings a,.readable-report .reference-sources summary{color:#16796e}
+.readable-report .issue-list{list-style:none;padding:0;margin:7px 0 0}
+.readable-report .issue-list li+li{margin-top:10px}
+.readable-report .issue-list b,.readable-report .issue-list span{display:block;overflow-wrap:anywhere}
+.readable-report .reference-item{padding:16px 0;border-bottom:1px solid #e3ebe6}
+.readable-report .reference-item:first-child{padding-top:0}
+.readable-report .reference-item:last-child{border-bottom:0}
+.readable-report .reference-item h3{margin:0 0 8px}
+.readable-report .reference-item dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0}
+.readable-report .reference-item dt{color:#617680;font-size:12px;margin-bottom:6px}
+.readable-report .reference-item dd{margin:0;font-size:14px;overflow-wrap:anywhere}
+.readable-report .reference-sources{margin-top:12px}
+.readable-report .readable-actions{margin-top:16px}
+@media(max-width:620px){.readable-report .reference-item dl{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.readable-report [id]{scroll-margin-top:76px}

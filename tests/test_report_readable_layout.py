@@ -117,3 +117,54 @@ console.log(JSON.stringify([first,parts['[data-role="round-content"]'].innerHTML
 ''')
     assert '首尾实测 0.90 秒' in out[0] and '第 2 次' in out[0]
     assert '首尾实测 0.50 秒' in out[1] and '第 2 次' in out[1]
+
+
+def test_mean_reference_uses_raw_rounds_not_median_or_passing_proportion():
+    out=render("data.lines[0].exp_std={fair:1,source:'平均 ≤1 秒'};data.lines[0].med=.2;data.rounds[0].ends[0]=.2;data.rounds[1].ends[0]=2.2;const m=C.model(data);console.log(JSON.stringify([C.referenceInfo(m,m.lines[0]),C.referenceText(m,m.lines[0]),C.comparison(m)]));")
+    assert out[0]['avg']==pytest.approx(1.2)
+    assert out[0]['over']==1
+    assert '平均 1.20 秒，超过 1.00 秒' in out[1]
+    assert '1/2 次（50%）' in out[2] and '不是标准通过率' in out[2]
+
+
+@pytest.mark.parametrize('source', ['每次响应不超过 1 秒', '第 75 百分位不超过 1 秒', '不应使用平均值判断', ''])
+def test_unknown_statistical_basis_does_not_invent_an_average_requirement(source):
+    out=render('data.lines[0].exp_std={fair:1,source:'+json.dumps(source)+'};const m=C.model(data);console.log(JSON.stringify(C.referenceText(m,m.lines[0])));')
+    assert '统计口径尚未明确匹配' in out and '本次平均' not in out
+
+
+@pytest.mark.parametrize('flag', ['bad', 'thin'])
+def test_incomplete_or_bad_records_do_not_produce_a_reference_verdict(flag):
+    out=render("data.lines[0].exp_std={fair:1,statistic:'mean'};data.lines[0]["+json.dumps(flag)+"]=true;const m=C.model(data);console.log(JSON.stringify(C.referenceText(m,m.lines[0])));")
+    assert '暂不比较快慢' in out
+
+
+def test_common_anomaly_is_visible_before_disclosure_and_round_is_not_hardcoded():
+    out=render("data.segments[1].spiky=true;data.segments[1].spiky_rounds=[17];data.rounds[1].n=17;const m=C.model(data);console.log(JSON.stringify([C.sharedHtml(m,C.sharedPrefix(m)),C.roundsOverview(m)]));")
+    assert out[0].index('第 17 次') < out[0].index('<details')
+    assert '读取卡片 → 校验通过' in out[0] and '最慢 0.30 秒' in out[0]
+    assert 'data-abnormal-round="17"' in out[1]
+
+
+def test_findings_distinguish_advice_status_from_measurement_quality():
+    out=render("const m=C.model(data);console.log(JSON.stringify(['failed','running','done',null].map(s=>C.findings(m,s))));")
+    assert '尚未就绪' in out[0] and '正在生成' in out[1] and '分析已完成' in out[2] and '尚未生成' in out[3]
+    assert all('没有需要你处理' not in s and '不等于所有功能都已验证' in s for s in out)
+
+
+def test_reference_and_anomaly_views_preserve_raw_payload_and_technical_names():
+    out=render("data.scenario.point_names.ready='语音活动上报';const before=JSON.stringify(data),g=C.model(data,'general'),t=C.model(data);C.findings(g,'failed');C.comparison(g);console.log(JSON.stringify([JSON.stringify(data)===before,g.names.ready,t.names.ready,C.recordOnly(data,{lines:['提示'],segments:[],parallel:[]})]));")
+    assert out[:3]==[True,'程序发出说话状态通知','语音活动上报']
+    assert '<details><summary>查看完整过程及独立步骤的全部统计</summary>' in out[3]
+    assert '0.35 秒' in out[3]
+
+
+def test_result_alert_and_advice_entry_survive_without_an_all_clear_fallback():
+    source=(STATIC/'app.js').read_text()
+    function=source[source.index('function readableActions('):source.index('function readableSources(')]
+    stubs="const activeFixes=()=>[{title:'方案'}],cardOf=(f,x)=>x.k==='line:开锁'?0:-1,recLine=()=> '已有建议',jump=(id,label)=>'<a href=\"#'+id+'\">'+label+'</a>';"
+    code="const ReportLayout=C;"+stubs+"const decisions=()=>[{k:'main',lv:0,t:'过慢',d:'旧判断',src:['tiers','标准']},{k:'line:开锁',lv:1,t:'开锁',src:['tiers','标准']},{k:'problem',lv:4,t:'动作异常',d:'仍需处理',src:['rounds','记录']}];"+function+"const m=C.model(data);console.log(JSON.stringify(readableActions({},m)));"
+    out=render(code)
+    assert '亮绿灯' in out and '动作异常' in out and '仍需处理' in out
+    assert '已有建议' in out and '#fix-0' in out and '#sec-tiers' in out
+    assert '没有需要' not in out
