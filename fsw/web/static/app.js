@@ -48,7 +48,7 @@ function advBox(){if(!ADV||ADV.status==='done')return '';
  return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(String(ADV.read).replace(/^(Read|Grep|Glob|LS|Bash)\s*:?\s*/,''))}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
 const repKey=()=>(realFlash()&&FSWJ&&FSWJ.status==='done'?'real':'demo:'+scene)+':'+okRounds().length;
 async function fetchReport(){const key=repKey(),u=key.startsWith('real')?'/api/report':'/api/report?demo='+encodeURIComponent(scene);
- try{const r=await fetch(u);JREP=r.ok?{...(await r.json()),_key:key}:{_key:key,_none:true}}catch(e){JREP={_key:key,_none:true}}if(page==='report')render()}
+ try{const r=await fetch(u),j=await r.json();JREP=r.ok?{...j,_key:key}:{_key:key,_none:true,_error:j.detail||'报告数据无法核对，暂不生成结论'}}catch(e){JREP={_key:key,_none:true,_error:'报告数据读取失败，暂不生成结论'}}if(page==='report')render()}
 // 长短取决于内容的线（比如到回答全部放完：回答多少字决定多长）不判快慢，也不进图和结论：拉开刻度、看着像不稳定（10-18 用户定）。
 // 码表按数据判（每轮差很多才算），门"开到位"这类每轮差不多的照常保留；原始数据还在调试日志里
 function lenByContent(J){const sc0=J.scenario,bad=new Set((J.lines||[]).filter(x=>x.bad).map(x=>x.name)),
@@ -299,7 +299,7 @@ const sameTo=(D,l,rows,i)=>{const mine=rows.filter(r=>r.li===i),own=new Set(mine
    const tnOf=tiny=>{const ts=tiny.reduce((t,x)=>t+Math.max(0,x.v||0),0);return !tiny.length?'':ts<0.05&&tiny.every(x=>x.where==='dev')?'设备内部还有几步，加起来不到 0.05 秒，可忽略。':`另有几步很短，加起来约 ${f(ts)} 秒（${tiny.map(x=>htmlEsc(x.name)).join('、')}）。`};
    const one=(r,of)=>`<li><span class="nm"><b>${htmlEsc(plainWhere(D,r.k)==='cloud'?cloudLbl(r.k):r.name)}</b>：一般 ${f(r.d)} 秒，占${of} ${Math.round(r.share*100)}%。${say(r)}${r.also&&r.also.length?`<span class="note">（${r.also.map(n=>`「${htmlEsc(n)}」`).join('、')}也走这一段）</span>`:''}</span></li>`;
    const UL='class="plainlst" style="margin:8px 0 0;padding-left:20px;line-height:1.7;font-size:14px"';
-   const tail=`图里的数是 ${D.n} 次里的一般情况（中位数）；各段加起来和总数可能差几十毫秒，是正常的。`;
+   const tail=`图里的数是 ${D.n} 次里的一般情况（中位数）；各段与整条线分别取中位数，分段中位数相加不一定等于整条线的中位数。`;
    if(drawn.length<2){const li=rows.map(r=>one(r,'')).join(''),tn=tnOf(tiny);
     return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%" role="img" aria-label="时间花在哪">${g}</svg></div>
   <ul ${UL}>${li}</ul><p class="note" style="margin:6px 0 0">${tn}${tail}</p>`}
@@ -973,6 +973,7 @@ function recOnlyBox(D){const R=D.S.recOnly,J=D.J;if(!R||!J||!(R.lines.length||R.
  return `<section class="panel scroll" id="sec-rec"><h2>只记录、不判快慢</h2><table class="num segtab"><thead><tr><th class="segn">线 / 段</th><th class="own">谁负责</th><th class="r">一般<br>（中位数）</th><th class="r">最快</th><th class="r">最慢</th><th class="r">有数的轮</th></tr></thead><tbody>${rows}</tbody></table>
  <p class="note" style="margin:8px 0 0">${R.lines.length?'线：长短主要看这次回答说了多少字，不判快慢，也不画进上面的图、不进结论；':''}数照样从原始日志算，单位秒。</p></section>`}
 function reportPage(D){
+  if(JREP&&JREP._key===repKey()&&JREP._error)return `<div class="errbox"><b>报告暂时不能生成</b><p>${htmlEsc(JREP._error)}</p></div>`;
   if(mode==='dev')return dev(D);
   return `<div class="stack">${expDone()}<div><div class="titlerow">${titleHtml(D)}${vsTag()}</div><p class="sub">${subline(D)}</p>${D.S.real&&JREP?checksBox(JREP):''}${D.S.real&&JREP?`<details class="fold"><summary>数据怎么来的、起点怎么算</summary>${qualityLine(JREP.quality,JREP)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged)}</details>`:''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
   <section class="panel"><h2>${(typeof plainOn==='function'&&plainOn(D))?'结论和建议':'要你拍板'}</h2>${decideList(D)}</section>
@@ -1680,7 +1681,7 @@ function morphKids(a,b){const x=[...a.childNodes],y=[...b.childNodes];
 function morphHTML(el,html){const t=document.createElement(el.tagName);t.innerHTML=html;morphKids(el,t)}
 function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   if(page==='report'&&(!JREP||JREP._key!==repKey()))fetchReport();
-  if(page==='report'&&JREP&&JREP._key===repKey()&&repKey().startsWith('real')&&!ADV&&D0ok())advStart();
+  if(page==='report'&&JREP&&JREP._key===repKey()&&repKey().startsWith('real')&&!JREP._none&&!ADV&&D0ok())advStart();
   const D=build(page==='report'&&JREP&&JREP._key===repKey()&&!JREP._none?repScene():SCENES[scene]);
   document.getElementById('nav-home').toggleAttribute('aria-current',page==='home');document.getElementById('nav-set').toggleAttribute('aria-current',page==='settings');
   flowAdvance();morphHTML(document.getElementById('flowbar'),runView()?'':flowBar());bgPill();

@@ -127,10 +127,28 @@ def merge_overruns(scenario, rounds):
     """"记最后一次"的中间点越过了下一步（比如"最后一包录音发出"：服务器回了听写之后设备还会再发几包），
     这一步后面那段就会变成负数、前面那段多算：只要有一轮这样，就把前后两段合成一段（从前一步直接到下一步），写明为什么。
     返回 (合并后的场景, 合并后的每一轮, 合并说明)；没有要合并的原样返回。"""
+    from fsw.measure import _path
+    from fsw.scenario import ScenarioError
+
+    def validate(sc):
+        for line in sc["lines"]:
+            try:
+                pairs = [(sc["segments"][k]["from"], sc["segments"][k]["to"]) for k in line["segments"]]
+                path = _path(pairs)
+                if path and line.get("start_point") and path[0][0] != line["start_point"]:
+                    raise ScenarioError("线路起点已改变")
+                if path and line.get("end_point") and path[-1][1] != line["end_point"]:
+                    raise ScenarioError("线路终点已改变")
+            except (KeyError, ScenarioError) as e:
+                raise ScenarioError(f"「{line['name']}」分段没有接成同一条线路，不能生成报告：{e}") from e
+
+    validate(scenario)
     segs = scenario.get("segments") or {}
     last = set(scenario.get("last_points") or []) - {(scenario.get("start") or {}).get("point")}
     notes = []
     for k2, g2 in list(segs.items()):
+        if k2 not in segs:
+            continue
         a = g2["from"]
         k1 = next((k for k, g in segs.items() if g["to"] == a and k != k2), None)
         if a not in last or not k1 or not any((r["segs"].get(k2) or 0) < 0 for r in rounds):
@@ -138,7 +156,18 @@ def merge_overruns(scenario, rounds):
         g1 = segs[k1]
         pn = scenario.get("point_names") or {}
         # 段的编号是"起点-终点"写法的（比如 P1-P2）跟着改成新的起止；名字用"前一步到下一步"，原来两段的名字放进合并说明
-        nk = f"{g1['from']}-{g2['to']}" if k1 == f"{g1['from']}-{a}" else k1
+        # Replace only adjacent pairs on a line; an offshoot still needs the old prefix.
+        replacements = []
+        for line in scenario["lines"]:
+            ks = line["segments"]
+            replacements.append([i for i in range(len(ks) - 1) if ks[i:i + 2] == [k1, k2]])
+        if not any(replacements):
+            continue
+        retained = set(scenario.get("parallel") or [])
+        for line, hits in zip(scenario["lines"], replacements):
+            covered = {i for h in hits for i in (h, h + 1)}
+            retained.update(k for i, k in enumerate(line["segments"]) if i not in covered)
+        nk = f"{g1['from']}-{g2['to']}" if k1 == f"{g1['from']}-{a}" or k1 in retained else k1
         name = f"{pn[g1['from']]}到{pn[g2['to']]}" if g1["from"] in pn and g2["to"] in pn else f"{g1['name']}、{g2['name']}"
         merged = {**{x: v for x, v in g1.items() if x not in ("range", "slow")}, "to": g2["to"], "name": name}  # 合理范围不再用（10-19）
         # 谁负责：两段的合起来（10-26 核对：上传 + 服务器听写合成一段，只写了前一段的「固件、网络」，服务器那份没了）；
@@ -148,15 +177,45 @@ def merge_overruns(scenario, rounds):
             merged["owner"] = "、".join(dict.fromkeys(own))
         if "side" in g1 or "side" in g2:
             merged["side"] = "outside" if g1.get("side") == g2.get("side") == "outside" else "device"
-        segs = {(nk if k == k1 else k): (merged if k == k1 else g) for k, g in segs.items() if k != k2}
-        rounds = [{**r, "segs": {**{k: v for k, v in r["segs"].items() if k not in (k1, k2)},
-                                 nk: None if r["segs"].get(k1) is None or r["segs"].get(k2) is None
-                                 else round(r["segs"][k1] + r["segs"][k2], 6)}} for r in rounds]
-        lines = [{**l, "segments": [nk if k == k1 else k for k in l["segments"] if k != k2]} for l in scenario["lines"]]
+        kept = {k: g for k, g in segs.items() if k not in (k1, k2) or k in retained}
+        # Keep stable order for tables while retaining independently used old segments.
+        segs = {}
+        for k, g in scenario["segments"].items():
+            if k == k1:
+                segs[nk] = merged
+            if k in kept:
+                segs[k] = g
+        lines = []
+        for line, hits in zip(scenario["lines"], replacements):
+            ks, i = [], 0
+            while i < len(line["segments"]):
+                if i in hits:
+                    ks.append(nk)
+                    i += 2
+                else:
+                    ks.append(line["segments"][i])
+                    i += 1
+            lines.append({**line, "segments": ks})
+        updated = []
+        for r in rounds:
+            values = {k: v for k, v in r["segs"].items() if k not in (k1, k2) or k in retained}
+            values[nk] = (None if r["segs"].get(k1) is None or r["segs"].get(k2) is None
+                          else round(r["segs"][k1] + r["segs"][k2], 6))
+            ends = list(r.get("ends") or [None] * len(lines))
+            for i, hits in enumerate(replacements):
+                if hits:
+                    vs = [values.get(k) for k in lines[i]["segments"]]
+                    # The adjacent-pair rewrite preserves the same start/end. A freshly
+                    # measured direct span remains valid if an internal optional point is absent.
+                    if vs and None not in vs:
+                        ends[i] = round(sum(vs), 6)
+            updated.append({**r, "segs": values, "ends": ends})
+        rounds = updated
         notes.append({"segment": nk, "point": a, "names": [g1["name"], g2["name"]],
                       "why": f"「{(scenario.get('point_names') or {}).get(a, a)}」这一步在下一步之后还在发生（有的轮比下一步还晚），"
                              f"分不出两段各占多少，合成一段算"})
         scenario = {**scenario, "segments": segs, "lines": lines}
+    validate(scenario)
     return scenario, rounds, notes
 
 
@@ -178,7 +237,7 @@ def judge(scenario, rounds, prev=None):
     first = next((l for l in lines_def if l.get("first")), None)
     playing = set(lines_def[-1]["segments"]) - set(first["segments"]) if first else set()
     seg_st, thin = {}, set()
-    checks = []
+    checks = [{"kind": "line_changed", "why": note} for note in scenario.get("line_notes") or []]
     for k, g in segs_def.items():
         vals = [r["segs"][k] for r in rounds if r["segs"].get(k) is not None]
         if not vals:

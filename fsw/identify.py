@@ -1228,7 +1228,8 @@ def side_for_one_impl(root, steps, chain, segments):
             a = next((x for x in base if structure._kind(x) == k), None) or next((x for x in base if structure._kind(x) != "last"), base[0])
             g = next((g for g in model if g.get("to") == q.get("id")), None)
             added.append({"from": a.get("id"), "to": q.get("id"), "name": (g or {}).get("name") or f"{a.get('name')}到{q.get('name')}",
-                          "who": (g or {}).get("who") or "", "outside": bool((g or {}).get("outside")), "added": True})
+                          "who": (g or {}).get("who") or "", "outside": bool((g or {}).get("outside")), "added": True,
+                          "sl": f"到{q.get('name')}"})
         notes.append(f"第 {n} 步在 {cls}::{name} 里，这只是几种实现中的一种（另有 {'、'.join(others[:3])}），换一种时走不到："
                      f"它的点改成顺带那条线，从第 {caller} 步调用 {name} 的那一句量起；主线用第 {caller} 步")
     return added, notes
@@ -1554,20 +1555,39 @@ def to_page(r, what):
              for s in r["steps"]]  # follow：跟着起点记（见 follow_start_points）  # whole：一轮里报好几次，取最后那次（全部放完）
     ids = {s["p"] for s in steps}
     start, main, side = r.get("start") or {}, r.get("main") or {}, r.get("side")
+    # Bind the model's side line to its original terminal before filtering removed points.
+    # An implementation observation has its own line, including when replaying old results.
+    side_segments = [dict(g) for g in r.get("side_segments") or []]
+    original = [g for g in side_segments if not g.get("sl") and not g.get("added")]
+    terminals = {g.get("to") for g in original} - {g.get("from") for g in original}
+    route_notes = []
+    if side and len(terminals) == 1 and not terminals <= ids:
+        route_notes.append(f"「{side.get('name') or '原顺带线路'}」的终点「{side.get('end') or '原终点'}」已移除，本次没有测到该结果，其他观测段不代替它。")
+        side = None
+    by_id = {s["id"]: s for s in r["steps"]}
+    auto_sides = []
+    for g in side_segments:
+        if not g.get("added") or g.get("to") not in ids:
+            continue
+        point = by_id[g["to"]]
+        g["sl"] = g.get("sl") or f"到{point['name']}"
+        auto_sides.append({"name": g["sl"], "end": point["name"], "from": g["from"], "point": g["to"], "why": "独立观测，不代替其他线路的终点"})
     side_steps = [s["p"] for s in steps if s["line"] == "face"]
     extra = [x for x in r.get("sides") or [] if x.get("point") in ids]  # 码表从候选里补、大模型说留的顺带的线
+    extra += [x for x in auto_sides if x["point"] not in {e["point"] for e in extra}]
     if not [p for p in side_steps if p not in {x["point"] for x in extra}]:
         side = None
     if side is None and extra:  # 大模型自己没写顺带的线：问"要不要一起测"用补上的第一条
-        side = {"name": extra[0]["name"], "end": extra[0]["end"], "found": f"收到这种消息后会{extra[0]['end']}", "why": extra[0].get("why") or ""}
+        side = {"name": extra[0]["name"], "end": extra[0]["end"], "from": extra[0]["from"], "point": extra[0]["point"], "found": f"收到这种消息后会{extra[0]['end']}", "why": extra[0].get("why") or ""}
     if not side_steps:
         side = None
     main_ids = [s["p"] for s in steps if s["line"] != "face"]
     segs = _segs(r.get("segments"), ids)
     sname, mname, mend = start.get("name") or "起点", main.get("name") or "要测的这条", main.get("end") or "终点"
-    branch_from = r.get("side_from") if r.get("side_from") in main_ids else (main_ids[0] if main_ids else None)
+    branch_from = (side or {}).get("from") or r.get("side_from")
+    branch_from = branch_from if branch_from in main_ids else (main_ids[0] if main_ids else None)
     page = {
-        "steps": steps, "segs": segs, "fsegs": _segs(r.get("side_segments"), ids) if side else [],
+        "steps": steps, "segs": segs, "fsegs": _segs(side_segments, ids) if side else [],
         "ln": {"start": "起点", "talk": mname, "face": (side or {}).get("name") or "顺带的那条"},
         "main": main_ids, "branch": {"from": branch_from, "nodes": side_steps},
         "dash": [i for i, (a, b) in enumerate(zip(main_ids, main_ids[1:]))
@@ -1580,6 +1600,7 @@ def to_page(r, what):
         "sideAsk": None, "sideTitle": "", "sideLbl": "",
         "sides": [{"name": x["name"], "end": x["end"], "from": x["from"], "nodes": [x["point"]], "cand": x.get("cand"), "why": x.get("why") or ""} for x in extra],
         "sideReview": [{k: v for k, v in x.items() if k in ("id", "keep", "name", "end", "why", "file", "line", "point")} for x in r.get("side_review") or []],
+        "lineNotes": route_notes,
     }
     if side:
         k, send = len(side_steps), side.get("end") or "顺带的那一步"

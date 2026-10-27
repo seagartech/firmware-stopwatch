@@ -399,6 +399,13 @@ def code_ctx(job):
 def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg_builder=None, installer_factory=None,
                config_dir=None, cc_status=None, port_finder=None, device=None, wait_step=1.0, opener=None, tool_check=None):
     app = FastAPI(title="固件码表")
+    from fsw.scenario import ScenarioError
+    from fastapi.responses import JSONResponse
+
+    @app.exception_handler(ScenarioError)
+    async def invalid_line(request, exc):
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
     # 编译前自检：cmake、ninja、idf.py、esptool 找不找得到（只按位置找文件）。换了假的找编译工具（测试）又没给自检时不查这台电脑
     tool_check = tool_check or (check_tools if idf_finder is None else (lambda idf_path: {"ok": True, "missing": [], "found": {}}))
     demos = load_demos()

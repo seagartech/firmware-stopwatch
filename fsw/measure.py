@@ -55,7 +55,7 @@ class Spec:
     @classmethod
     def from_scenario(cls, s):
         segs = {k: [g["from"], g["to"]] for k, g in s["segments"].items()}
-        lines = [{"name": l["name"], "segs": [segs[k] for k in l["segments"]], **({"first": True} if l.get("first") else {})}
+        lines = [{"name": l["name"], "segs": _path([segs[k] for k in l["segments"]]), **({"first": True} if l.get("first") else {})}
                  for l in s["lines"]]
         names = dict(s.get("point_names") or {})
         names.setdefault(s["start"]["point"], s["start"]["name"])
@@ -110,14 +110,15 @@ def _rule(rule, t, vals, segs, ends):
 def _path(segs):
     """一条线从起点走到终点（最后一段的终点）经过的那几段。线里还有从同一个点分出去的段（比如从首段出声分出
     "扬声器连续播放回复""判定播放队列放空""回到聆听" 三段，各量各的）：它们同时在走，不能加起来，只算通到终点的那一串
-    （10-25 真测：三段都加进"到回到聆听"，多算了 0.19 秒）。从终点往回接不到起点（线没接好）就照旧按全部段算。"""
+    （10-25 真测：三段都加进"到回到聆听"，多算了 0.19 秒）。接不到起点就报错，不把断开的段相加。"""
     if not segs:
         return segs
     start, x, path = segs[0][0], segs[-1][1], []
     while x != start:
         prev = next((g for g in reversed(segs) if g[1] == x and g not in path), None)
         if prev is None:
-            return segs
+            from fsw.scenario import ScenarioError
+            raise ScenarioError("分段的终点和下一段起点接不上")
         path.insert(0, prev)
         x = prev[0]
     return path
@@ -837,7 +838,7 @@ def _ends_from_segs(rounds, spec):
     for r in rounds:
         segs, ends = r.get("segs") or {}, []
         for l in spec.lines:
-            ks = [f"{a}-{b}" for a, b in l["segs"]]
+            ks = [f"{a}-{b}" for a, b in _path(l["segs"])]
             if any(k not in segs for k in ks):
                 return None
             vs = [segs[k] for k in ks]
@@ -857,10 +858,8 @@ def run_rounds(run_dir, spec):
             d = json.loads(p.read_text(encoding="utf-8"))
             saved = [{**r, "ok": True} for r in d["rounds"]]
             if d.get("rule") == ROUND_RULE:
-                if all(len(r.get("ends") or []) == len(spec.lines) for r in saved):
-                    return saved
-                # 线的条数和存的时候不一样（10-27：两条量到同一个点的顺带线并成了一条）：存下的各段照用，每条线的用时按它那一串段加起来
-                # （线是从起点一段接一段走到终点的）；有段没数才按原始日志重算
+                # Line count alone does not identify a route. Rebuild each total from
+                # its current connected path, or replay raw events if a segment is absent.
                 fixed = _ends_from_segs(saved, spec)
                 if fixed is not None:
                     return fixed
@@ -870,8 +869,10 @@ def run_rounds(run_dir, spec):
     got = [r for r in collect(lines, spec) if r["ok"]]
     # 老规则存的：按现在的规则重算（10-26：老规则把清零后的尾巴算进下一轮，出了负数）；重算少了轮（认不出试一次带过来的那一轮）
     # 而老的那份和现在的线对得上，才还用老的
-    if saved and len(got) < len(saved) and all(len(r.get("ends") or []) == len(spec.lines) for r in saved):
-        return saved
+    if saved and len(got) < len(saved):
+        fixed = _ends_from_segs(saved, spec)
+        if fixed is not None:
+            return fixed
     return got
 
 

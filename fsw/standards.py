@@ -277,7 +277,7 @@ def _line_trigger(line, segments, pn, main_keys):
     return "跟服务器消息走" if g.get("side") == "outside" else "跟设备自己走"
 
 
-def name_lines(lines, segments, steps, side_names, main_keys, face_end="", face_dropped=False):
+def name_lines(lines, segments, steps, side_names, main_keys, face_end="", face_dropped=False, face_from=None):
     """顺带的线按实际量到的点起名、太像的分开（10-26 用户：「换表情」「换上表情」只差一个字，其实是两件事）：
     - 大模型写的那条顺带的线有点没插上（face_dropped：识别时这条线的点比实际插上的多）、剩下的最后一个点又不是用户能感觉到的
       那一下（没标 felt）：原来想量的终点被去掉了，线名、终点按实际量到的点写，不再沿用识别时起的（比如"换表情"，实际量到的是
@@ -295,7 +295,9 @@ def name_lines(lines, segments, steps, side_names, main_keys, face_end="", face_
         if l["name"] not in side_names or not l.get("segments"):
             continue
         last = l["segments"][-1].split("-", 1)[-1]
-        if face_dropped and not l.get("sl") and last in sp and not sp[last].get("felt") and pn.get(last) and pn[last] != end_of(l):
+        branch = next((segments[k]["from"] for k in l["segments"] if k not in main_keys), None)
+        stale_end = face_end and face_end not in pn.values() and face_from and branch != face_from
+        if (face_dropped or stale_end) and not l.get("sl") and last in sp and pn.get(last) and pn[last] != end_of(l):
             new = f"到{pn[last]}"
             if new not in {x["name"] for x in lines}:
                 ren[l["name"]] = new
@@ -473,7 +475,7 @@ def real_scenario(page, standard, values=None):
     face0 = [n for n in (page.get("branch") or {}).get("nodes") or [] if n not in side_nodes]
     face1 = [x["p"] for x in steps if x.get("line") == "face" and x["p"] not in side_nodes]
     ren = name_lines(lines, segments, steps, side_names, main_keys, str((page.get("sideAsk") or {}).get("q") or ""),
-                     face_dropped=len(face1) < len(face0))
+                     face_dropped=len(face1) < len(face0), face_from=(page.get("branch") or {}).get("from"))
     ren = {**{a: ren.get(b, b) for a, b in merged.items() if a != ren.get(b, b)}, **ren}
     if ren:
         exps = [{**e, "line": ren.get(e.get("line"), e.get("line"))} for e in exps]
@@ -482,7 +484,10 @@ def real_scenario(page, standard, values=None):
     start = main[0][0] if main else None
     sname = next((x["n"] for x in steps if x["p"] == start), steps[0]["n"] if steps else "起点")
     return {"format": "fsw-scenario/1", "name": "真步骤", "start": {"point": start, "name": sname},
-            "segments": segments, "lines": [{k: v for k, v in l.items() if k != "std"} for l in lines],
+            "segments": segments, "lines": [{**{k: v for k, v in l.items() if k != "std"},
+                                            "start_point": segments[l["segments"][0]]["from"] if l["segments"] else None,
+                                            "end_point": segments[l["segments"][-1]]["to"] if l["segments"] else None} for l in lines],
+            "line_notes": list(page.get("lineNotes") or []) + [f"原「{l.get('was')}」线路现只量到「{l['end']}」，不作为原结果的用时。" for l in lines if l.get("actual")],
             "experiences": exps, "problems": problems, "parallel": parallel, "standard": (standard or {}).get("name"),
             "point_names": {x["p"]: x["n"] for x in steps},
             "point_kinds": {x["p"]: x.get("kind") or "" for x in steps if x.get("felt")},
