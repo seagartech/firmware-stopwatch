@@ -43,7 +43,7 @@ async function advStart(){ADV={status:'running',read:''};fixPick=null;render();
 function advWatch(){clearInterval(advT);
  advT=setInterval(async()=>{try{const x=await (await fetch('/api/advise')).json();if(x.status!=='running'){clearInterval(advT);advT=null;fixPick=null}ADV=x;if(page==='report')render();if(EXP.state==='wait'&&pop!=='export')EXP.state='';  // 等的时候点了取消（或关掉了对话框）：不再自动导出
  if(x.status==='done'&&EXP.state==='wait'){EXP.state='saving';render();exportReport(EXP.dir)}else if(x.status==='failed'&&EXP.state==='wait'){EXP.state='';render()}}catch(e){}},1000)}
-function advBox(){if(!ADV||ADV.status==='done')return '';
+function advBox(){if(!ADV)return '<div class="panel"><p>修改建议还未生成。</p><button class="btn" data-advretry="1">生成修改建议</button></div>';if(ADV.status==='done')return '';
  if(ADV.status==='failed')return `<div class="errbox"><b>为什么、怎么改还没写出来</b><p style="margin:6px 0">${ADV.message||''}</p><div class="acts" style="margin:8px 0 0"><button class="btn pri" data-advretry="1">重试</button></div></div>`;
  return `<div class="panel"><p style="margin:0"><span class="spin"></span> AI 正在读代码和这次的数据，写"为什么、怎么改"……（调用一次大模型，一般 1～3 分钟）</p>${ADV.read?`<p class="note" style="margin:6px 0 0">最近在看：<span class="code">${htmlEsc(String(ADV.read).replace(/^(Read|Grep|Glob|LS|Bash)\s*:?\s*/,''))}</span></p>`:''}<p class="note" style="margin:6px 0 0">要改哪些问题是码表按规则从数据算出来的；AI 只写原因和方案，码表只给建议，不改代码。</p></div>`}
 const repKey=()=>(realFlash()&&FSWJ&&FSWJ.status==='done'?'real':'demo:'+scene)+':'+okRounds().length;
@@ -70,7 +70,7 @@ function repScene(){const J=JREP,S0=SCENES[scene],real=realFlash()&&FSWJ&&FSWJ.s
  const sc=lenByContent(J),st={...Object.fromEntries((IDENT.page.steps||[]).map(x=>[x.p,x])),...(sc.points||{})};
  const segs=Object.fromEntries(Object.entries(sc.segments).map(([k,g])=>[k,{name:g.name,what:g.what,owner:g.owner,code:`${g.from}→${g.to}`,v:val(k)}]));
  const P=IDENT.page,mEnd=sc.cutEnd||(P.measure||'起点 → 终点').split('→').map(x=>x.trim())[1],sShort=startLabel(P,sc),sEnd=P.sideAsk?P.sideAsk.q:'';
- const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=l.first||l.also_first||l.sl||l.actual?l.end:side?(sEnd||l.end):mEnd;const li=J.scenario.lines.findIndex(x=>x.name===l.name);
+ const lines=sc.lines.map((l,i)=>{const side=i<sc.lines.length-1,end=(sc.point_names||{})[l.end_point]||(l.first||l.also_first||l.sl||l.actual?l.end:side?(sEnd||l.end):mEnd);const li=J.scenario.lines.findIndex(x=>x.name===l.name);
   // 线的用时用后台每轮按首尾算的数（中间某段空着的轮也有，比如被打断那几轮）；按段相加会把这些轮丢掉（10-19：报告写 1.22、实际中位 1.34）
   return {name:l.name,end,phrase:(side&&!l.first?'先':'后')+end,segs:l.segments,ends0:li<0?null:J.rounds.map(r=>(r.ends||[])[li]??null)}});
  const exp=sc.experience?{fair:sc.experience.fair,source:sc.experience.source||'',label:`${sc.experience.fair} 秒：超过算体验差（${sc.experience.short||'参考值'}）`}:null;  // 图上只写短的，卡片里写全出处（决策 137）
@@ -451,7 +451,7 @@ function segVerdict(D,s){const j=D.J&&D.J.segments.find(x=>x.k===s.k);
  if(j&&j.thin)return `<span class="chip c-warn">数据不足（${j.count}/${j.of} 轮）</span>`;
  if(j?j.spiky:s.max>s.med*2.5&&s.max-s.med>.3)return '<span class="chip c-warn">偶发特别慢</span>';
  if(j&&j.verdict==='慢了')return '<span class="chip c-warn">比上次慢</span>';return OKNOTE}
-function dev(D){const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,CODE=(JREP&&JREP.code)||{},cols=PV?7:6;
+function dev(D){const modern=typeof ReportLayout!=='undefined'&&D.J&&D.J.scenario&&D.J.rounds;const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,CODE=(JREP&&JREP.code)||{},cols=PV?7:6;
   const segRow=s=>{const to=String(s.code||'').split('→')[1],C=D.S.real?CODE[to]:null;
    const loc=C?`<span class="code">${brk(C.path)}:${C.l}</span>${C.func?`<br><span class="note code">${brk(C.func)}</span>`:''}<br><button class="pill codebtn" data-code="1">展开代码</button>`:`<span class="code">${T.loc[s.k]||''}</span>`;
    return `<tr><td ${SANS}>${s.name}</td><td>${loc}</td><td class="own" ${SANS}>${s.owner}</td>${s.thin?`<td class="r wrap" colspan="${PV?3:2}" ${SANS}>数据不足（${s.count}/${s.of} 轮）<br><span class="note">${htmlEsc(s.thinWhy)}</span></td>`:`<td class="r">${fms(s.med)}</td><td class="r">${fms(s.max)}</td>${prevCell(PV,s.med,PV&&PV.segs[s.k],PV&&(PV.noise||{})[s.k])}`}<td ${SANS}>${segVerdict(D,s)}</td></tr>${codeRows(C,cols)}`};
@@ -470,10 +470,10 @@ function dev(D){const T=D.S.tech,PV=D.J&&D.J.prev&&D.J.prev.segs?D.J.prev:null,C
    c=((JL.find(x=>x.name===ln.name)||{}).round_cause||[]).find(x=>x.n===r.n);return c&&c.more>=.1?c:null};
   const ks=[...new Set(bad.map(r=>(why(r)||{}).k))],one=bad.length>1&&ks.length===1&&ks[0]?D.allSegs.find(s=>s.k===ks[0]):null;
   const outside=s=>{const j=D.J&&D.J.segments.find(x=>x.k===s.k);return j&&j.outside};
-  return `<div class="stack">${expDone()}<div><div class="titlerow"><h1>技术细节</h1>${vsTag()}</div><p class="sub">给研发：每段在代码哪里、慢在哪、怎么改。单位秒。${realFlash()?'':'这里只演示样子。'}</p></div>
-  <section class="panel scroll"><h2>分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段</th><th class="loc">代码位置</th><th class="own">谁负责</th><th class="r">一般<br>（中位数）</th><th class="r">最差</th>${PV?`<th class="r">上次<br><span class="note">${htmlEsc(String(PV.measured_at||'').replace(/^\d{4}-/,''))}</span></th>`:''}<th>判断</th></tr></thead><tbody>${groups}</tbody></table>
-  <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>${recOnlyBox(D)}
-  ${bad.length?`<section class="panel scroll"><h2>有问题的轮</h2><table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}<th>慢在哪段</th></tr></thead><tbody>${bad.map(r=>{const c=why(r);return `<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${e==null?'—':f(e)}</td>`).join('')}<td ${SANS}>${c?`${htmlEsc(c.name)}：${f(c.v)} 秒（一般 ${f(c.med)}）`:'<span class="note">没有哪一段特别慢，各段都慢一点</span>'}</td></tr>`}).join('')}</tbody></table>${one?`<p class="note" style="margin:8px 0 0">这几轮都慢在「${htmlEsc(one.name)}」${outside(one)?'，这段在设备外':''}。</p>`:''}</section>`:''}${fixDev(D)}
+  return `<div class="stack readable-report tech-report">${expDone()}<div><div class="titlerow"><h1>技术细节</h1>${vsTag()}</div><p class="sub">给研发：每段在代码哪里、慢在哪、怎么改。单位秒。${realFlash()?'':'这里只演示样子。'}</p></div>
+  ${modern?`<section class="panel" id="sec-technical-steps"><h2>分段用时</h2>${checksBox(D.J)}<details><summary>数据来源与计时边界</summary>${qualityLine(D.J.quality,D.J)+startLagLine(D.S.startShort,D.J.start_lag,startGap(D.J))+mergedLine(D.J.merged)}${(D.J.scenario.line_notes||[]).map(t=>`<p>${htmlEsc(t)}</p>`).join('')}</details>${ReportLayout.panel(D.J,'technical')}</section>`:`<section class="panel scroll"><h2>分段用时</h2><table class="num segtab"><thead><tr><th class="segn">段</th><th class="loc">代码位置</th><th class="own">谁负责</th><th class="r">一般<br>（中位数）</th><th class="r">最差</th>${PV?`<th class="r">上次<br><span class="note">${htmlEsc(String(PV.measured_at||'').replace(/^\d{4}-/,''))}</span></th>`:''}<th>判断</th></tr></thead><tbody>${groups}</tbody></table>
+  <p class="note" style="margin:8px 0 0">${ovNote}比上次慢：差同时大于 0.1 秒和上次的 10%。偶发特别慢：最差超过一般的 2.5 倍，且多出 0.3 秒以上。</p></section>`}${recOnlyBox(D)}
+  ${bad.length?`<section class="panel scroll"><h2>有问题的轮</h2><table class="num"><thead><tr><th>轮</th>${D.lines.map(l=>`<th class="r">${l.end}</th>`).join('')}<th>慢在哪段</th></tr></thead><tbody>${bad.map(r=>{const c=why(r);return `<tr class="late"><td>第 ${r.n} 轮</td>${r.ends.map(e=>`<td class="r">${e==null?'—':f(e)}</td>`).join('')}<td ${SANS}>${c?`${htmlEsc(c.name)}：${f(c.v)} 秒（一般 ${f(c.med)}）`:'<span class="note">没有哪一段特别慢，各段都慢一点</span>'}</td></tr>`}).join('')}</tbody></table>${one?`<p class="note" style="margin:8px 0 0">这几轮都慢在「${htmlEsc(one.name)}」${outside(one)?'，这段在设备外':''}。</p>`:''}</section>`:''}${modern?`<section class="panel"><h2>逐次测量点位图</h2>${ReportLayout.roundsOverview(ReportLayout.model(D.J))}<details><summary>完整过程的逐次点位图</summary>${ReportLayout.roundsOverview(ReportLayout.model(D.J),{complete:true})}</details></section>${ReportLayout.extra(D.J)}`:''}${fixDev(D)}
   <section class="panel"><h2>原始日志</h2><p style="margin:0 0 6px"><span class="code">${T.log}</span></p><p class="note" style="margin:0 0 8px">设备调试口原样输出，没有删改；码表插的计时点行以 FSW 开头。报告里的数都从它算。</p><div class="acts"><button class="pill" data-openlog="1">打开所在文件夹</button></div></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
@@ -866,7 +866,7 @@ function expStrip(h,pre){const d=document.createElement('div');d.innerHTML=h;
   d.querySelectorAll('.stale,.expdone').forEach(x=>x.remove());
   d.querySelectorAll('section').forEach(x=>{const t=(x.querySelector('h2')||{}).textContent||'';if(t.startsWith('改完以后')||t.startsWith('设备上现在是'))x.remove()});
   d.querySelectorAll('input[type=checkbox],input[type=radio]').forEach(i=>{const s=document.createElement('span');s.textContent=i.checked?'☑':'☐';s.className='ck';i.replaceWith(s)});
-  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy;else if(!b.dataset.code)b.remove()});  // 复制按钮留着，导出的报告里也能复制
+  d.querySelectorAll('button').forEach(b=>{if(b.dataset.jump){const a=document.createElement('a');a.href='#'+pre+b.dataset.jump;a.className='lnk';a.textContent=b.textContent;b.replaceWith(a)}else if(b.dataset.copy)b.dataset.copy=pre+b.dataset.copy;else if(!b.dataset.code&&b.dataset.line==null&&!b.dataset.reportTech&&!b.dataset.reportDownload)b.remove()});  // 复制按钮留着，导出的报告里也能复制
   d.querySelectorAll('[id]').forEach(x=>x.id=pre+x.id);d.querySelectorAll('.flash').forEach(x=>x.classList.remove('flash'));
   d.querySelectorAll('details').forEach(x=>x.removeAttribute('open'));return d.innerHTML}  // 导出也默认收起，点开能看（决策 98）
 // 导出存到哪、存完的提示（一直在，直到你关掉）
@@ -881,7 +881,7 @@ function autoSave(){if(page!=='report'||!repKey().startsWith('real')||!JREP||JRE
 async function exportReport(folder){
   const keep={mode,fixTodo},m=document.getElementById('main');
   mode='boss';fixTodo=false;render();const boss=m.innerHTML;mode='dev';render();const dev=m.innerHTML;mode=keep.mode;fixTodo=keep.fixTodo;render();
-  const css=await (await fetch('/static/style.css')).text();
+  const css=await (await fetch('/static/style.css')).text(),layoutScript=await (await fetch('/static/report-layout.js')).text();
   const crumb=document.getElementById('crumb').cloneNode(true);crumb.querySelectorAll('button,.mock').forEach(x=>x.remove());
   const info=crumb.textContent.replace(/^\s*›\s*/,'').trim(),parts=info.split('·').map(x=>x.trim()),what=expWhat()||parts[1]||parts[0]||'报告';
   const real=repKey().startsWith('real')&&JREP&&!JREP._none,mock=!!document.querySelector('#crumb .mock');
@@ -896,7 +896,7 @@ async function exportReport(folder){
 <div class="tabs seg" role="group" aria-label="报告版本"><button id="tb-b" aria-pressed="true" onclick="sw('b')">结论建议</button><button id="tb-d" aria-pressed="false" onclick="sw('d')">技术细节</button></div></div>
 <div id="v-boss-body">${expStrip(boss,'')}</div><div id="v-dev-body" hidden>${expStrip(dev,'d-')}</div>
 <p class="expnote">这是码表导出的报告：一个文件，断网也能打开，可以直接发给别人。数字由码表按这次的数据直接算出，不经过 AI；"为什么、怎么改"的文字是 AI 读代码写的。${log}</p></div>
-<div id="tip" hidden></div><script>${tipShow.toString()}${todoCopy.toString()}${codeTog.toString()}document.addEventListener('click',e=>{if(todoCopy(e)||codeTog(e))return;const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
+<div id="tip" hidden></div><script>${layoutScript.replace(/<\/script/gi,'<\\/script')}ReportLayout.install(()=>sw('d'));${tipShow.toString()}${todoCopy.toString()}${codeTog.toString()}document.addEventListener('click',e=>{if(todoCopy(e)||codeTog(e))return;const a=e.target.closest('a[href^="#"]');const el=a&&document.getElementById(a.getAttribute('href').slice(1));const d=el&&el.querySelector('details');if(d&&/fix-[0-9]+$/.test(el.id))d.open=true});document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);function sw(v){document.getElementById('v-boss-body').hidden=v!=='b';document.getElementById('v-dev-body').hidden=v!=='d';document.getElementById('tb-b').setAttribute('aria-pressed',v==='b');document.getElementById('tb-d').setAttribute('aria-pressed',v==='d');scrollTo(0,0)}<\/script></body></html>`;
   let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:real?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应，看看运行码表的窗口是不是关了。'}}
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
@@ -965,8 +965,8 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);if(!FX.length)return '';
 function recOnlyBox(D){const R=D.S.recOnly,J=D.J;if(!R||!J||!(R.lines.length||R.segments.length||(R.parallel||[]).length))return '';
  const sc=J.scenario||{},SG=sc.segments||{},jl=n=>(J.lines||[]).find(x=>x.name===n),js=k=>(J.segments||[]).find(x=>x.k===k);
  const cell=x=>x&&x.med!=null?`<td class="r">${f(x.med)}</td><td class="r">${f(x.min)}</td><td class="r">${f(x.max)}</td><td class="r">${x.count!=null?`${x.count}/${x.of!=null?x.of:D.n}`:''}</td>`:'<td class="r" colspan="4">没有数</td>';
- const rows=R.lines.map(n=>{const l=jl(n)||{},end=l.end||n;
-   return `<tr class="grp"><td ${SANS}><b>${l.measure?htmlEsc(n):`${htmlEsc(D.S.startShort)}到${htmlEsc(end)}`}</b></td><td ${SANS}><span class="chip c-gray">只记录、不判快慢</span></td>${cell(l)}</tr>`}).join('')
+ const rows=R.lines.map(n=>{const l=jl(n)||{},def=(sc.lines||[]).find(x=>x.name===n)||{},end=(sc.point_names||{})[def.end_point]||l.end||n;
+   return `<tr class="grp"><td ${SANS}><b>${l.measure?`完整过程：${htmlEsc(D.S.startShort)} → ${htmlEsc(end)}`:`${htmlEsc(D.S.startShort)}到${htmlEsc(end)}`}</b></td><td ${SANS}><span class="chip c-gray">只记录、不判快慢</span></td>${cell(l)}</tr>`}).join('')
   +R.segments.map(k=>{const g=SG[k]||{},x=js(k);return `<tr><td ${SANS}>${htmlEsc(g.name||k)}</td><td class="note" ${SANS}>${htmlEsc(g.owner||'')}</td>${cell(x)}</tr>`}).join('')
   +((R.parallel||[]).length?`<tr class="grp"><td colspan="6" ${SANS}><b>并行的段</b> <span class="note">和上面几条线同时在走（从中间某一步分出去），不在哪条线从起点到终点的那一串上，不画进图、不加进合计</span></td></tr>`
    +R.parallel.map(k=>{const g=SG[k]||{},x=js(k);return `<tr><td ${SANS}>${htmlEsc(g.name||k)}</td><td class="note" ${SANS}>${htmlEsc(g.owner||'')}</td>${cell(x)}</tr>`}).join(''):'');
@@ -975,6 +975,7 @@ function recOnlyBox(D){const R=D.S.recOnly,J=D.J;if(!R||!J||!(R.lines.length||R.
 function reportPage(D){
   if(JREP&&JREP._key===repKey()&&JREP._error)return `<div class="errbox"><b>报告暂时不能生成</b><p>${htmlEsc(JREP._error)}</p></div>`;
   if(mode==='dev')return dev(D);
+  if(typeof ReportLayout!=='undefined'&&D.J&&D.J.scenario&&D.J.rounds)return readableReport(D);
   return `<div class="stack">${expDone()}<div><div class="titlerow">${titleHtml(D)}${vsTag()}</div><p class="sub">${subline(D)}</p>${D.S.real&&JREP?checksBox(JREP):''}${D.S.real&&JREP?`<details class="fold"><summary>数据怎么来的、起点怎么算</summary>${qualityLine(JREP.quality,JREP)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged)}</details>`:''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
   <section class="panel"><h2>${(typeof plainOn==='function'&&plainOn(D))?'结论和建议':'要你拍板'}</h2>${decideList(D)}</section>
   <section class="panel" id="sec-tl"><h2>${(typeof plainOn==='function'&&plainOn(D))?'时间花在哪':'一次的计时图'}</h2>${timeline(D)}</section>${(typeof plainOn==='function'&&plainOn(D))?plainRefs(D):''}
@@ -982,6 +983,26 @@ function reportPage(D){
   <h2 style="margin:12px 0 -6px">依据</h2>
   <section class="panel" id="sec-tiers"><h2>${(typeof plainOn==='function'&&plainOn(D))?'用时和标准':'用时和达标率'}</h2>${tiers(D)}${stdNote(D)}</section>${recOnlyBox(D)}
   <section class="panel" id="sec-rounds"><h2>${D.n} 轮逐轮</h2>${roundsChart(D)}</section>${retestEntry()}${restoreBox(scene)}</div>`;
+}
+
+// Shared presentation for live and exported reports. The API remains the source of all values.
+function readableReport(D){
+  const R=ReportLayout,m=R.model(D.J,'general'),names=new Set(m.visibleLines.filter(l=>!l.contentDependent).map(l=>l.name));
+  const indices=D.lines.map((l,i)=>names.has(l.name)?i:-1).filter(i=>i>=0),lines=indices.map(i=>({...D.lines[i],end:R.humanName(D.lines[i].end)}));
+  const human=t=>R.humanName(t),P={...D,lines:D.lines.map(l=>({...l,end:human(l.end)})),main:{...D.main,end:human(D.main.end)}},V={...P,lines,rounds:D.rounds.map(r=>({...r,ends:indices.map(i=>r.ends[i])})),J:{...D.J,lines:D.J.lines.filter(l=>names.has(l.name)||l.measure)}};
+  const main=m.main,stat=main&&main.stat,vals=main?num(D.J.rounds.map(r=>r.ends[main.index])):[],avg=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:null;
+  const internal=m.lines.filter(l=>l.internal),missing=internal.filter(l=>l.was);
+  const warning=missing.map(l=>`<p>想观察的「${R.esc(human(l.was))}」没有直接测到；这次不能给出它的完成时间。详细记录保留在技术细节中。</p>`).join('');
+  const checks=(D.J.checks||[]).filter(c=>c.kind==='bad'||c.kind==='bad_line'||c.kind==='thin'||c.kind==='thin_line');
+  const complete=m.visibleLines.filter(l=>l.contentDependent),refs=m.visibleLines.filter(l=>!l.contentDependent&&main&&l.index!==main.index);
+  return `<div class="stack readable-report">${expDone()}<header class="report-hero"><div class="eyebrow">本次测量 · ${D.n} 次${D.S.real?'真实记录':'模拟演示'}</div><div class="titlerow"><h1>${main?`到「${R.esc(main.endName)}」<br>一般 <strong>${R.esc(f(stat.med))} 秒</strong>`:'本次测量还没有完整结果'} </h1>${vsTag()}</div><p>${main?'从「'+R.esc(main.startName)+'」开始算。':''}</p><div class="hero-facts"><span>平均 <b>${R.esc(f(avg))} 秒</b></span><span>最慢 <b>${R.esc(f(stat&&stat.max))} 秒</b></span><span><b>${vals.length}/${D.n}</b> 次有记录</span></div><p class="small-note">这里记录的是程序走到各步的时刻。人实际看到、听到或动作完成的时间，需要另行核对。</p></header>
+  ${warning?`<div class="measurement-note"><b>这次还没测到什么</b>${warning}</div>`:''}${checks.length?`<div class="errbox"><b>数据有 ${checks.length} 处需要留意</b><p>部分步骤没有测全或先后异常。相关结果不作为完整结论，具体原因见技术细节。</p></div>`:''}${D.n<10?'<p class="note">测量次数不足 10 次，适合检查流程，判断稳定性还需要更多记录。</p>':''}
+  <section class="panel"><h2>结论和建议</h2>${decideList(P)}<details><summary>这些数字怎么看</summary><p>“一般”是把有效用时从短到长排列后的中间水平，也叫中位数。平均值是所有有效用时相加再除以次数。</p><p>各段分别统计，不能把各段中位数相加当成总等待时间。</p></details></section>
+  <section class="panel" id="sec-tl"><h2>时间花在哪</h2><p class="intro">先看各种结果要等多久，再看每一步花了多久。</p>${R.panel(D.J,'general')}</section>
+  ${(refs.length||complete.length)?`<section class="panel"><h2>其他参考</h2>${refs.map(l=>`<p>${R.esc(l.endName)}：一般 <b>${R.fmt(l.stat.med)}</b>，最慢 ${R.fmt(l.stat.max)}。</p>`).join('')}${complete.map(l=>`<p>完整过程到「${R.esc(l.endName)}」：一般 <b>${R.fmt(l.stat.med)}</b>，最慢 ${R.fmt(l.stat.max)}。${l.stat.verdict==='看回答长短'?'用时受这次处理的内容多少影响，只记录，不判快慢。':''}</p>`).join('')}${complete.length?`<details><summary>查看完整过程的逐次点位图</summary>${R.roundsOverview(m,{complete:true})}</details>`:''}</section>`:''}
+  <section class="stack" id="sec-advice"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note">沿用 ${htmlEsc(ADV.at)} 写的建议，文中秒数是那次的，这次数值见本报告。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?advBox():(activeFixes(P).length?fixA(P):'<div class="panel"><p>按本次判定，没有可展示的修改方案。</p><p class="note">未列出方案不等于已经优化，也不替代上面的数据判断。</p></div>')}</section>
+  <h2 style="margin:12px 0 -6px">依据</h2><section class="panel" id="sec-tiers"><h2>用时和标准</h2>${tiers(V)}${stdNote(V)}</section>${R.recordOnly(D.J,D.S.recOnly)}
+  <section class="panel" id="sec-rounds"><h2>${D.n} 次测量记录</h2>${R.roundsOverview(m)}<details><summary>查看每次的具体数值</summary>${R.valuesTable(D.J,'lines','general')}</details></section>${retestEntry()}${restoreBox(scene)}</div>`;
 }
 
 let page='home',mode='boss',scene='',homeVar='m',hStage=0,hSay='';
@@ -1808,6 +1829,7 @@ function todoCopy(e){const b=e.target.closest&&e.target.closest('[data-copy]');i
   if(!b.dataset.html)b.dataset.html=b.innerHTML;b.innerHTML='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg>已复制';b.classList.add('done');
   clearTimeout(b._t);b._t=setTimeout(()=>{b.innerHTML=b.dataset.html;b.classList.remove('done')},2000);return true}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
+if(typeof ReportLayout!=='undefined')ReportLayout.install(()=>{mode='dev';render();window.scrollTo(0,0)});
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{
   const nd=e.target.closest('[data-need]');if(nd){if(nd.dataset.needgo&&nd.dataset.needgo!==page){if(hStage>=2)hStage=1;page=nd.dataset.needgo;render();window.scrollTo(0,0);return}const g=nd.parentElement.querySelector('.gate');if(g)g.classList.add('hit');nudge(nd.dataset.need);return}
