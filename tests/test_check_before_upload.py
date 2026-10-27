@@ -217,3 +217,19 @@ def test_local_path_and_private_word_in_history(tmp_path):
     words.write_text("某某科技\n", encoding="utf-8")
 
     assert kinds(scan(tmp_path, private_words_file=words)) == ["本机路径", "私人信息"]
+
+
+def test_github_web_committer_noreply_passes(tmp_path):
+    commit(git_repo(tmp_path), ANON, {"a.py": "x = 1\n"})
+    subprocess.run(
+        ["git", "-c", "user.name=GitHub", "-c", "user.email=noreply@github.com",
+         "commit", "--amend", "--no-edit", "-q"], cwd=tmp_path, check=True,
+    )
+    assert scan(tmp_path) == []
+
+
+def test_lookalike_github_email_is_still_blocked(tmp_path):
+    commit(git_repo(tmp_path), "person-noreply@github.com", {"a.py": "x = 1\n"})
+    findings = scan(tmp_path)
+    assert kinds(findings) == ["私人信息"]
+    assert "person-noreply@github.com" not in str(findings[0])
