@@ -266,10 +266,23 @@ def test_complete_records_have_no_gap_banner_but_missing_samples_state_the_scope
     assert '亮绿灯' not in out[1]
 
 
-def test_rebound_result_is_named_once_without_casting_doubt_on_other_results():
-    out=render("data.scenario.lines[1].actual=true;data.scenario.lines[1].was='门已完全打开';const m=C.model(data,'general');console.log(JSON.stringify([C.resultIssues(m),C.findings(m,'failed')]));")
-    assert out[0].count('门已完全打开')==1 and '无法给出这项结果的完成时间' in out[0]
-    assert '亮绿灯' not in out[0] and '没有直接测到' not in out[1]
+def test_endpoint_rename_is_not_a_missing_user_requested_result():
+    out=render("data.scenario.lines[1].actual=true;data.scenario.lines[1].was='门已完全打开';data.checks=[{kind:'line_changed',line:'开锁'}];const m=C.model(data,'general');console.log(JSON.stringify([C.resultIssues(m),C.findings(m,'failed')]));")
+    assert out[0]==''
+    assert '门已完全打开' not in out[1]
+
+
+def test_renamed_endpoint_still_reports_actual_bad_timing():
+    out=render("data.scenario.lines[1].actual=true;data.scenario.lines[1].was='门已完全打开';data.lines[1].bad=true;console.log(JSON.stringify(C.resultIssues(C.model(data,'general'))));")
+    assert '计时先后异常' in out and '门已完全打开' not in out
+
+
+def test_statistics_explanation_is_only_in_technical_report():
+    source=(STATIC/'app.js').read_text()
+    general=source.split('function readableReport(D){',1)[1].split("let page='home'",1)[0]
+    assert '这些数字怎么看' not in source
+    assert '有效记录的用时相加' not in general
+    assert '<summary>统计方法</summary>' in source
 
 
 def test_bad_line_notice_is_not_duplicated_and_segment_issue_keeps_local_scope():
@@ -283,3 +296,23 @@ def test_findings_name_actual_slow_rounds_without_generic_anxiety_text():
     out=render("data.segments[0].spiky=true;data.segments[0].spiky_rounds=[9,3];console.log(JSON.stringify(C.findings(C.model(data,'general'),'failed')));")
     assert '第 3、9 次有步骤明显偏慢' in out and '查看对应步骤' in out
     assert '需留意' not in out and '建议尚未' not in out
+
+
+def test_advice_survives_display_copy_of_main_and_uses_mean_title():
+    source=(STATIC/'app.js').read_text()
+    classifiers=source[source.index('const LV='):source.index('function decisions(D)')]
+    advice=source[source.index('function activeFixes(D)'):source.index('// 工作量怎么分')]
+    code=r'''
+const ReportLayout=C,plain=x=>x,noCode=x=>x,f=x=>String(x),roundList=x=>'';
+const D={J:data,n:2,S:{fixes:[{when:['main'],why:'示例',impact:'等待',rec:'核对',opts:[]}]},
+ lines:[{name:'提示',end:'亮绿灯',med:.35,segs:['read','verify','lamp']},{name:'开锁',end:'门开始打开',med:.6,segs:['read','verify','motor']}],
+ allSegs:data.segments,biggest:data.segments[1],verdict:()=>['已记录',''],exp:null};
+D.main={...D.lines[1]};
+data.labels=[{kind:'line',line:'开锁',level:'必须改',why:'模拟条件'}];
+'''+classifiers+'\nconst decisions=decisionsJ;\n'+advice+r'''
+console.log(JSON.stringify([decisionsJ(D),activeFixes(D)]));
+'''
+    out=render(code)
+    assert out[0][0]['k']=='main'
+    assert len(out[1])==1 and out[1][0]['lv']==0
+    assert out[1][0]['title']=='门开始打开 · 平均 0.75 秒'

@@ -155,7 +155,6 @@
     const rows=[],covered=new Set();
     m.lines.forEach(l=>{
       const valid=m.data.rounds.filter(r=>finite(r.ends[l.index])&&r.ends[l.index]>=0).length;
-      if(l.internal&&l.was){rows.push(`「${humanName(l.was)}」没有测到，无法给出这项结果的完成时间。`);covered.add(l.name);return;}
       if(l.stat.bad){rows.push(`「${l.endName}」的计时先后异常，暂不判断这项结果的快慢；请研发核对起终点记录。`);covered.add(l.name);}
       else if(l.stat.thin||!valid){rows.push(`「${l.endName}」只有 ${valid}/${m.data.rounds.length} 次有效记录，暂不判断这项结果的快慢；请研发补测。`);covered.add(l.name);}
       else if(valid<m.data.rounds.length)rows.push(`「${l.endName}」有 ${m.data.rounds.length-valid} 次未测到，平均用时按其余 ${valid} 次有效记录计算。`);
@@ -165,7 +164,7 @@
       const d=m.defs[c.k],name=d?`${m.names[d.from]||'起点'} → ${m.names[d.to]||'终点'}`:humanName(c.name||c.line||'未标明名称的记录');
       rows.push(`「${name}」${c.kind.startsWith('bad')?'计时先后异常':'记录不足'+(finite(c.count)&&finite(c.of)?`（${c.count}/${c.of} 次）`:'')}，这${c.line?'项结果':'一步'}暂不判断快慢；请研发${c.kind.startsWith('bad')?'核对计时记录':'补测'}。`);
     });
-    return rows.length?`<div class="measurement-note"><b>本次未能确认的结果</b>${[...new Set(rows)].map(t=>`<p>${esc(t)}</p>`).join('')}<button class="pill" data-report-tech="1" data-report-target="sec-technical-steps">查看对应记录</button></div>`:'';
+    return rows.length?`<div class="measurement-note"><b>影响本次判断的测量问题</b>${[...new Set(rows)].map(t=>`<p>${esc(t)}</p>`).join('')}<button class="pill" data-report-tech="1" data-report-target="sec-technical-steps">查看对应记录</button></div>`:'';
   }
   function findings(m,advice) {
     const keys=[...new Set(m.visibleLines.flatMap(l=>l.segments))];
