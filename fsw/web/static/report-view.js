@@ -294,11 +294,22 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
 }
 
  // Both audiences use the same compact controls and bounded floating-state rule.
- function compactOptions(lines,selected,buttonAttribute,selectAttribute,label){
+ function compactOptions(lines,selected,buttonAttribute){
   const E=Layout.esc;
   if(lines.length<2)return '';
-  if(lines.length<=3)return lines.map(l=>'<button aria-pressed="'+(l.index===selected)+'" '+buttonAttribute+'="'+l.index+'">'+E(l.endName)+'</button>').join('');
-  return '<select aria-label="'+E(label)+'" '+selectAttribute+'>'+lines.map(l=>'<option value="'+l.index+'" '+(l.index===selected?'selected':'')+'>'+E(l.endName)+'</option>').join('')+'</select>';
+  return lines.map(l=>'<button aria-pressed="'+(l.index===selected)+'" '+buttonAttribute+'="'+l.index+'">'+E(l.endName)+'</button>').join('');
+ }
+ function revealSelected(host){
+  const selected=host.querySelector('[aria-pressed="true"]');if(!selected||!host.clientWidth)return;
+  const item=selected.getBoundingClientRect(),box=host.getBoundingClientRect();
+  if(item.left<box.left)host.scrollLeft+=item.left-box.left;
+  else if(item.right>box.right)host.scrollLeft+=item.right-box.right;
+ }
+ function paintCompact(host,lines,selected,attribute){
+  const key=JSON.stringify(lines.map(l=>[l.index,l.endName]));
+  if(host._optionsKey!==key){host.innerHTML=compactOptions(lines,selected,attribute);host._optionsKey=key}
+  host.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.getAttribute(attribute))===selected)));
+  revealSelected(host);
  }
  function floatingActive({enabled,count,anchorTop,anchorBottom,endBottom,top,height,early=false}){
   return !!enabled&&count>0&&(early?anchorTop<=top:anchorBottom<=top+height+8)&&endBottom>top+height;
@@ -334,7 +345,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const technicalBar=document.createElement('div');technicalBar.id='tech-floating-switch';technicalBar.className='floating-switch';technicalBar.setAttribute('aria-label','技术细节结果切换');
   technicalBar.innerHTML='<strong id="tech-floating-current"></strong><div id="tech-compact-options" class="compact-options"></div>';inspection.prepend(technicalBar);
   $('tech-round-result').closest('label').classList.add('tech-round-result-control');
-  function technicalControls(){const l=technical.model.lines[state.technical];$('tech-floating-current').textContent=l?l.endName+' · 平均 '+F(l.stat.avg):'';$('tech-compact-options').innerHTML=compactOptions(technical.model.lines,state.technical,'data-tech-compact-line','data-tech-compact-select','切换技术细节结果');updateFloating()}
+  function technicalControls(){const l=technical.model.lines[state.technical];$('tech-floating-current').textContent=l?l.endName+' · 平均 '+F(l.stat.avg):'';paintCompact($('tech-compact-options'),technical.model.lines,state.technical,'data-tech-compact-line');updateFloating()}
   if(actions){actions.hidden=false;scope.querySelector('#v-tech').append(actions)}
   function view(which){
    if(!['measure','tech','advice'].includes(which))which='measure';state.tab=which;
@@ -345,20 +356,22 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   function updateFloating(){
    if(!scope.isConnected)return;const bar=$('floating-switch'),grid=$('summary-grid'),header=document.querySelector('.apphd');
    const top=header?Math.max(0,header.getBoundingClientRect().bottom):0,height=bar.getBoundingClientRect().height;
-   const bounds=scope.getBoundingClientRect();for(const b of [bar,technicalBar]){b.style.left=bounds.left+'px';b.style.width=bounds.width+'px';b.style.transform='none'}scope.style.setProperty('--report-top',top+'px');if(height)scope.style.setProperty('--switch-height',height+'px');
+   const bounds=scope.getBoundingClientRect(),widthChanged=bar.getBoundingClientRect().width!==bounds.width;for(const b of [bar,technicalBar]){b.style.left=bounds.left+'px';b.style.width=bounds.width+'px';b.style.transform='none'}scope.style.setProperty('--report-top',top+'px');if(height)scope.style.setProperty('--switch-height',height+'px');
    const active=floatingActive({enabled:!$('v-measure').hidden,count:summaryLines.length,anchorBottom:grid.getBoundingClientRect().bottom,endBottom:$('v-measure').getBoundingClientRect().bottom,top,height});
+   if(active&&(!bar.classList.contains('is-active')||widthChanged))revealSelected($('compact-options'));
    bar.classList.toggle('is-active',active);grid.classList.toggle('compact-active',active);bar.setAttribute('aria-hidden',String(!active));$('outcomes').setAttribute('aria-hidden',String(active));
    const selector=detailSteps.querySelector('.result-switcher'),techHeight=technicalBar.getBoundingClientRect().height;
    if(techHeight)scope.style.setProperty('--tech-switch-height',techHeight+'px');
    // Compact the detail selector as its top reaches the header, before statistics can be covered.
    const techActive=floatingActive({enabled:!$('v-tech').hidden,count:technical.model.lines.length,anchorTop:selector.getBoundingClientRect().top,endBottom:inspection.getBoundingClientRect().bottom,top,height:techHeight,early:true});
+   if(techActive&&(!technicalBar.classList.contains('is-active')||widthChanged))revealSelected($('tech-compact-options'));
    technicalBar.classList.toggle('is-active',techActive);technicalBar.setAttribute('aria-hidden',String(!techActive));inspection.classList.toggle('compact-active',techActive);
    $('tech-choices').setAttribute('aria-hidden',String(techActive));
   }
   function controls(i){
    const choices=summaryLines,name=x=>E(x.endName);$('summary-grid').classList.toggle('single',choices.length===1);
    $('outcomes').innerHTML=choices.map(x=>'<button aria-pressed="'+(x.index===i)+'" data-summary-line="'+x.index+'"><span>'+name(x)+'</span><strong>'+F(x.stat.avg)+'</strong></button>').join('');
-   $('compact-options').innerHTML=compactOptions(choices,i,'data-summary-line','data-summary-select','切换测量结果');
+   paintCompact($('compact-options'),choices,i,'data-summary-line');
   }
   function pick(i){
    if(!summaryLines.some(l=>l.index===i))return;selected=i;state.summary=i;const l=model.lines[i],s=l.stat;
@@ -377,7 +390,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
    if(e.target.closest('[data-report-data]'))download(JSON.stringify(payload,null,2),'measurement-data.json','application/json');
    if(e.target.closest('[data-report-save]')){if(options.onSave)options.onSave();else download('<!doctype html>'+document.documentElement.outerHTML,'固件用时报告.html','text/html');}
   });
-  scope.addEventListener('change',e=>{if(e.target.matches('[data-summary-select]'))pick(Number(e.target.value));if(e.target.matches('[data-tech-compact-select]'))technical.choose(Number(e.target.value));if(e.target.matches('[data-tech-compact-select],#tech-round-result'))technicalControls()});
+  scope.addEventListener('change',e=>{if(e.target.matches('#tech-round-result'))technicalControls()});
   bindPlot(scope);
   if(summaryLines.length)pick(selected);else{$('summary-grid').hidden=true;scope.querySelectorAll('#v-measure>.panel').forEach(el=>el.hidden=true);$('v-measure').insertAdjacentHTML('beforeend','<section class="panel"><p>'+(!payload.rounds.length?'本次没有逐次测量记录。':'本次没有可单独展示的响应用时。完整过程用时可在技术细节中查看。')+'</p><button class="pill" data-report-tab="tech">查看技术细节</button></section>')}
   technicalControls();view(state.tab||'measure');scope._reportMounted=true;scope._show=view;scope._updateFloating=updateFloating;
@@ -398,6 +411,6 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const reposition=()=>document.querySelectorAll('.product-report').forEach(scope=>scope._updateFloating?.());
   window.addEventListener('scroll',reposition,{passive:true});window.addEventListener('resize',reposition);
  }
- const api={shell,mount,update,show,install,compactOptions,floatingActive,model:(data,audience)=>facade().model(data,audience)};
+ const api={shell,mount,update,show,install,compactOptions,revealSelected,floatingActive,model:(data,audience)=>facade().model(data,audience)};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.ReportView=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

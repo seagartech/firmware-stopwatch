@@ -123,13 +123,16 @@ def test_compact_result_controls_follow_data_count_and_keep_stable_indices(count
     x=run(f"const lines=Array.from({{length:{count}}},(_,i)=>({{index:i+8,endName:'结果<'+i+'>'}}));console.log(JSON.stringify(V.compactOptions(lines,9,'data-choice','data-select','选择结果')));")
     if count < 2:
         assert x == ''
-    elif count <= 3:
+    else:
         assert x.count('<button') == count and '<select' not in x
         assert 'data-choice="9"' in x and 'aria-pressed="true"' in x
         assert '结果&lt;1&gt;' in x
-    else:
-        assert x.count('<option') == count and x.count('<select') == 1
-        assert 'value="9" selected' in x and '结果&lt;1&gt;' in x
+
+
+@pytest.mark.parametrize('left,right,expected', [(-20,50,10),(20,140,70),(10,90,30)])
+def test_selected_button_reveal_moves_only_the_horizontal_strip(left,right,expected):
+    x=run(f"const host={{clientWidth:100,scrollLeft:30,scrollTop:777,querySelector:()=>({{getBoundingClientRect:()=>({{left:{left},right:{right}}})}}),getBoundingClientRect:()=>({{left:0,right:100}})}};V.revealSelected(host);console.log(JSON.stringify([host.scrollLeft,host.scrollTop]));")
+    assert x == [expected,777]
 
 
 def test_floating_selector_only_appears_in_its_visible_controlled_range():
