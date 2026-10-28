@@ -62,7 +62,7 @@
     const lines=options.complete?m.visibleLines.filter(l=>l.contentDependent):m.visibleLines.filter(l=>!l.contentDependent),rounds=m.data.rounds;
     const values=rounds.flatMap(r=>lines.map(l=>r.ends[l.index])).filter(v=>finite(v)&&v>=0);
     if(!values.length)return '<p class="small-note">这份报告暂时没有逐次用时记录，不补造图上的数据。</p>';
-    const references=[...new Set(lines.map(l=>(l.stat.exp_std||{}).fair).filter(v=>finite(v)&&v>0))];
+    const references=m.audience==='general'?[]:[...new Set(lines.map(l=>(l.stat.exp_std||{}).fair).filter(v=>finite(v)&&v>0))];
     const bad=new Map();(m.data.labels||[]).filter(v=>v.kind==='problem'||v.kind==='spiky'||v.kind==='line').forEach(v=>(v.rounds||[]).forEach(n=>bad.set(n,[bad.get(n),v.name||v.why||'这次需要留意'].filter(Boolean).join('；'))));
     const used=new Set(lines.flatMap(l=>l.segments));
     used.forEach(k=>{const s=m.segments[k]||{};if(s.spiky)(s.spiky_rounds||[]).forEach(n=>bad.set(n,'这次有步骤明显偏慢'));});
@@ -87,7 +87,14 @@
     references.forEach(v=>{svg+=`<line x1="${x(v)}" x2="${x(v)}" y1="${top-9}" y2="${bottom}" stroke="#b08b60" stroke-width="1.5" stroke-dasharray="7 4"/>`;});
     svg+='</svg>';
     const referenceDescription=lines.filter(l=>finite((l.stat.exp_std||{}).fair)).map(l=>`${l.endName}的参考值为 ${l.stat.exp_std.fair} 秒${referenceInfo(m,l).mode==='mean'?'（用于平均值比较）':''}`).join('；');
-    return `<div class="round-overview-legend">${lines.map((l,j)=>`<span><i class="point-key ${j%2===0?'point-circle':'point-square'}" style="background:${l.color}"></i>${esc(l.endName)}${l.first?'<small>主要回应</small>':''}</span>`).join('')}<span><i class="median-key"></i>细虚线：中位数</span>${bad.size?'<span>浅橙底：记录提示需留意的轮次</span>':''}</div><div class="scroll">${svg}</div><p class="small-note">横向越靠右，等待越久；同一种点的横向位置越集中，这几次越稳定，左右跨度表示用时范围。每行是一回真实测量，缺数留空，不跨轮连线。${references.length?'长虚线：'+esc(referenceDescription)+'。单次点超过此线只说明这一回较慢，不表示整体不达标。':''}</p>`;
+    const ranges=lines.map(l=>{
+      const rows=rounds.filter(r=>finite(r.ends[l.index])&&r.ends[l.index]>=0);
+      if(!rows.length)return `<li>${esc(l.endName)}：没有有效记录。</li>`;
+      const min=Math.min(...rows.map(r=>r.ends[l.index])),max=Math.max(...rows.map(r=>r.ends[l.index]));
+      const slow=rows.filter(r=>r.ends[l.index]===max).map(r=>r.n);
+      return `<li><b>${esc(l.endName)}</b>：${rows.length} 次记录，${fmt(min)} ～ ${fmt(max)}${rows.length>1&&min!==max?'；第 '+esc(slow.join('、'))+' 次用时最长':''}。</li>`;
+    }).join('');
+    return `<div class="round-overview-legend">${lines.map((l,j)=>`<span><i class="point-key ${j%2===0?'point-circle':'point-square'}" style="background:${l.color}"></i>${esc(l.endName)}${l.first?'<small>主要回应</small>':''}</span>`).join('')}<span><i class="median-key"></i>细虚线：${m.audience==='general'?'一般水平':'中位数'}</span>${bad.size?'<span>浅橙底：记录提示需留意的轮次</span>':''}</div><div class="scroll">${svg}</div><p class="small-note">横向越靠右，等待越久；同一种点的横向位置越集中，这几次越稳定，左右跨度表示用时范围。每行是一次测量，缺数留空，不跨轮连线。${m.audience==='technical'?'悬停点位查看原始精度；按轮次在上方完整过程核对分段，代码及全部数据见下方。':''}${references.length?'长虚线：'+esc(referenceDescription)+'。单次点超过此线只说明这一回较慢，不表示整体不达标。':''}</p>${m.audience==='general'?'<ul class="plot-ranges">'+ranges+'</ul><p class="small-note">这里只描述本次记录的波动，不代表长期稳定性。</p>':''}`;
   }
   function sharedPrefix(m) {
     const lines=m.visibleLines;
@@ -154,11 +161,18 @@
       return `<article class="reference-item"><h3>${esc(l.endName)}</h3><p>${esc(referenceText(m,l))}</p><dl><div><dt>平均</dt><dd>${fmt(r.avg)}</dd></div><div><dt>一般（中位数）</dt><dd>${fmt(s.med)}</dd></div><div><dt>最慢</dt><dd>${fmt(s.max)}</dd></div><div><dt>和上次比（中位数）</dt><dd>${vs?esc((finite(vs.prev)?fmt(vs.prev)+' → '+fmt(s.med)+'，':'')+(vs.change||'已有比较')):'没有可比记录'}</dd></div></dl>${r.usable?`<p class="small-note">单次观察：${r.count} 次记录中，${r.over} 次超过 ${fmt(r.e.fair)}。未超过的有 ${r.count-r.over}/${r.count} 次（${Math.round((r.count-r.over)/r.count*100)}%）。这只是本组记录的分布，不是标准通过率。</p>`:''}</article>`;
     }).join('')}</div>`;
   }
+  function costFocus(m,keys) {
+    const valid=keys.filter(k=>{const s=m.segments[k]||{};return !s.bad&&!s.thin&&finite(s.med)&&s.med>=0;});
+    if(!valid.length)return '<p class="small-note">这部分还没有足够的有效记录，暂不判断主要用时。</p>';
+    const max=Math.max(...valid.map(k=>m.segments[k].med));
+    const largest=valid.filter(k=>m.segments[k].med===max);
+    return `<div class="cost-focus"><b>这部分用时较多的步骤</b><ul>${largest.map(k=>{const d=m.defs[k];return `<li>${esc(m.names[d.from]||'起点')} → ${esc(m.names[d.to]||'终点')}：一般 ${fmt(m.segments[k].med)}</li>`;}).join('')}</ul><p class="small-note">按各步的一般用时比较；用时较多不代表有故障，也不能据此确定原因。</p></div>`;
+  }
   function sharedHtml(m,split,prefix='') {
     if(!split.keys.length)return `<p class="shared-status small-note">${esc(split.note)}</p>`;
     const first=m.visibleLines[0],last=m.defs[split.keys[split.keys.length-1]],end=m.names[last.to]||'分开的位置';
     const issues=issueRows(m,split.keys);
-    return `<section class="shared-steps"><div class="shared-heading"><h3>共同经过的步骤</h3><span>${split.keys.length} 步 · 切换结果时不变</span></div><p class="small-note">当前展示的 ${m.visibleLines.length} 项结果，都先从「${esc(first.startName)}」经过相同的步骤，到「${esc(end)}」为止。${m.audience==='technical'?'本页还包括内部记录，共同范围可能与结论页不同。':''}</p>${issues?'<div class="shared-alert"><b>共同部分需要留意</b><ul class="issue-list">'+issues+'</ul></div>':''}<details id="${prefix}shared-fold"><summary>${issues?'查看相关分段及全部':'展开'} ${split.keys.length} 个共同步骤</summary>${m.audience==='technical'?technicalTable(m,split.keys):costHtml(m,first.index,{keys:split.keys})}</details></section>`;
+    return `<section class="shared-steps"><div class="shared-heading"><h3>共同经过的步骤</h3><span>${split.keys.length} 步 · 切换结果时不变</span></div><p class="small-note">当前展示的 ${m.visibleLines.length} 项结果，都先从「${esc(first.startName)}」经过相同的步骤，到「${esc(end)}」为止。${m.audience==='technical'?'本页还包括内部记录，共同范围可能与结论页不同。':''}</p>${m.audience==='general'?costFocus(m,split.keys):''}${issues?'<div class="shared-alert"><b>共同部分需要留意</b><ul class="issue-list">'+issues+'</ul></div>':''}<details id="${prefix}shared-fold"><summary>${issues?'查看相关分段及全部':'展开'} ${split.keys.length} 个共同步骤</summary>${m.audience==='technical'?technicalTable(m,split.keys):costHtml(m,first.index,{keys:split.keys})}</details></section>`;
   }
 
   function costHtml(m,index,options={}) {
@@ -241,7 +255,15 @@
     if(!m.data.rounds.some(r=>r.n===state.round))state.round=(m.data.rounds[0]||{}).n;
     states.set(key,state);return state;
   }
-  function tailHtml(m,split,i){return i==null?'<p>还没有可展示的分段记录。</p>':m.audience==='technical'?technicalTable(m,split.tails[i],split.keys.length):costHtml(m,i,{keys:split.tails[i],startAt:split.keys.length});}
+  function tailHtml(m,split,i){
+    if(i==null)return '<p>还没有可展示的分段记录。</p>';
+    const keys=split.tails[i];
+    if(m.audience==='technical')return technicalTable(m,keys,split.keys.length);
+    const costs=costHtml(m,i,{keys,startAt:split.keys.length});
+    if(!keys.length)return costs;
+    const issues=issueRows(m,keys);
+    return `${costFocus(m,keys)}${issues?'<ul class="issue-list">'+issues+'</ul>':''}<details><summary>查看这部分全部 ${keys.length} 步的用时</summary>${costs}</details>`;
+  }
   function tailNote(split,i){return split.keys.length?(split.tails[i].length?`接着上面的 ${split.keys.length} 个共同步骤，还需下面 ${split.tails[i].length} 步。`:'完成共同步骤，就已经到达这个结果。'):'下面是到达所选结果的全部步骤。';}
   function panel(data,audience='general') {
     const m=model(data,audience),split=sharedPrefix(m),state=selectedState(m),i=state.selected;
@@ -284,7 +306,7 @@
   }
   function install(onTech){
     document.addEventListener('click',e=>{
-      const tech=e.target.closest('[data-report-tech]');if(tech){onTech();return;}
+      const tech=e.target.closest('[data-report-tech]');if(tech){onTech(tech.dataset.reportTarget||'');return;}
       const download=e.target.closest('[data-report-download]');if(download){
         const raw=download.parentElement.querySelector('[data-role="download-data"]').textContent,url=URL.createObjectURL(new Blob([raw],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='measurement-data.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;
       }
@@ -293,7 +315,7 @@
     });
     document.addEventListener('change',e=>{const select=e.target.closest('[data-role="round-select"]'),box=select&&select.closest('.report-inspect');if(!box)return;const m=model(JSON.parse(box.querySelector('[data-role="report-data"]').textContent),box.dataset.audience);controlState(box,m).round=Number(select.value);paint(box,false);});
   }
-  const api={esc,fmt,finite,median,axis,model,pathInfo,summarySvg,roundsOverview,costHtml,roundHtml,resultOptions,resultChoices,sharedPrefix,sharedHtml,referenceInfo,referenceText,issueRows,findings,comparison,technicalTable,lineSummary,pointCatalog,humanName,panel,valuesTable,extra,recordOnly,install};
+  const api={esc,fmt,finite,median,axis,model,pathInfo,summarySvg,roundsOverview,costHtml,roundHtml,resultOptions,resultChoices,sharedPrefix,sharedHtml,referenceInfo,referenceText,issueRows,costFocus,findings,comparison,technicalTable,lineSummary,pointCatalog,humanName,panel,valuesTable,extra,recordOnly,install};
   if(typeof module!=='undefined')module.exports=api;
   root.ReportLayout=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

@@ -168,3 +168,47 @@ def test_result_alert_and_advice_entry_survive_without_an_all_clear_fallback():
     assert '亮绿灯' in out and '动作异常' in out and '仍需处理' in out
     assert '已有建议' in out and '#fix-0' in out and '#sec-tiers' in out
     assert '没有需要' not in out
+
+
+def test_role_plots_keep_identical_points_but_general_explains_observed_range():
+    out=render("data.lines[0].exp_std={fair:1,statistic:'mean'};console.log(JSON.stringify(['general','technical'].map(a=>C.roundsOverview(C.model(data,a)))));")
+    assert all(x.count('data-value=') == 4 for x in out)
+    assert '0.35 秒 ～ 0.50 秒' in out[0] and '第 2 次用时最长' in out[0]
+    assert '不代表长期稳定性' in out[0] and '长虚线：' not in out[0]
+    assert '长虚线：' in out[1] and '悬停点位查看原始精度' in out[1]
+    assert all('data-value="0.350000"' in x for x in out)
+
+
+def test_range_handles_ties_missing_and_one_record_without_inventing_stability():
+    out=render("data.rounds[0].ends=[null,-1];data.rounds[1].ends=[.5,.5];console.log(JSON.stringify(C.roundsOverview(C.model(data,'general'))));")
+    assert out.count('data-value=') == 2 and '1 次记录，0.50 秒 ～ 0.50 秒' in out
+    assert '次用时最长' not in out
+
+
+def test_focus_uses_segment_identity_and_valid_values_and_keeps_ties():
+    out=render("data.segments[0].med=.2;const m=C.model(data,'general');const a=C.costFocus(m,['read','verify']);data.segments[1].bad=true;const b=C.costFocus(C.model(data,'general'),['read','verify']);data.segments[0].thin=true;console.log(JSON.stringify([a,b,C.costFocus(C.model(data,'general'),['read','verify'])]));")
+    assert '刷卡 → 读取卡片' in out[0] and '读取卡片 → 校验通过' in out[0]
+    assert '读取卡片 → 校验通过' not in out[1]
+    assert '不能据此确定原因' in out[0] and '暂不判断' in out[2]
+
+
+def test_general_fold_keeps_all_steps_and_common_anomalies_visible():
+    out=render("data.segments[1].spiky=true;data.segments[1].spiky_rounds=[2];console.log(JSON.stringify(C.panel(data,'general')));")
+    assert out.index('第 2 次') < out.index('id="shared-fold"')
+    assert '查看这部分全部 1 步的用时' in out
+    for name in ('刷卡 → 读取卡片', '读取卡片 → 校验通过', '校验通过 → 亮绿灯'):
+        assert name in out
+
+
+def test_technical_navigation_passes_destination_to_live_and_export_hosts():
+    out=render("let callback;global.document={addEventListener(k,f){if(k==='click')callback=f}};let got;C.install(t=>got=t);callback({target:{closest(){return {dataset:{reportTarget:'sec-research-actions'}}}}});console.log(JSON.stringify(got));")
+    assert out=='sec-research-actions'
+
+
+def test_advice_and_next_step_distinguish_incomplete_analysis_and_bad_data():
+    source=(STATIC/'app.js').read_text()
+    helpers=source[source.index('function generalAdviceStatus('):source.index('function readableReport(')]
+    out=render("let ADV={status:'failed'};const activeFixes=()=>[],advBox=()=>'<button data-advretry>重试</button>',fixDev=()=>'';"+helpers+"const D={S:{real:true},J:{checks:[{kind:'bad_line'}]}};console.log(JSON.stringify([generalAdviceStatus(),technicalAdvice(D),reportNextStep(D)]));")
+    assert 'data-advretry' not in out[0] and '尚未就绪' in out[0]
+    assert 'data-advretry' in out[1] and '不直接证明根因' in out[1]
+    assert '先请研发补齐' in out[2] and 'sec-research-actions' in out[2]
