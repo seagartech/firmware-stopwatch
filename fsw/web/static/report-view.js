@@ -128,7 +128,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
  const endpoints=points=>'<div class="endpoint-pair">'+[...new Set(points)].map((p,i)=>{const c=payload.code?.[p]||{},def=m.scenario.points?.[p]||{};return '<div class="event-card"><b>'+(i?(points.length>2?'终点候选：':'终点：'):'起点：')+E(name(p))+'</b><span class="event-meaning">'+E(event(p))+' · '+E(occurrence(p))+'</span>'+binding(p)+'<p class="event-location">'+E((c.path||def.f||'未保存文件')+':'+(c.l||def.l||'?'))+(c.func?'<br>'+E(c.func):'')+'</p></div>'}).join('')+'</div>';
  function eventScope(l){return '<div class="event-scope"><div><span>起点</span><b>'+E(l.startName)+'</b><small>'+E(event(l.start_point))+'</small></div><div><span>终点</span><b>'+E(l.endName)+'</b><small>'+E(endDescription(l))+'</small></div></div>'}
 
- function table(keys,offset=0){
+ function table(keys,offset=0,expanded=false){
   const host=document.createElement('div');host.innerHTML=R.technicalTable(m,keys,offset);
   host.querySelectorAll('tr.technical-segment').forEach((tr,i)=>{
    const k=tr.dataset.segment,d=m.defs[k],s=m.segments[k]||{},th=tr.querySelector('th');
@@ -136,12 +136,13 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
    th.querySelector('.segment-boundaries')?.remove();
    const extraEnds=endsFor(k).filter(p=>p!==d.to);
    if(extraEnds.length){const catalogHost=document.createElement('div');catalogHost.innerHTML=R.pointCatalog(m);for(const p of extraEnds){const sourceRow=[...catalogHost.querySelectorAll('[data-source-point]')].find(row=>row.dataset.sourcePoint===p);const ctx=sourceRow?.nextElementSibling?.querySelector('.source-context');if(ctx)tr.nextElementSibling.querySelector('td').append(ctx)}}
-   const more=th.querySelector('details');more.classList.add('tech-fold');more.querySelector('summary').textContent='更多统计与计时位置';
+   const more=th.querySelector('details');more.classList.add('tech-fold');more.querySelector('summary').textContent='统计、计时位置与源码';
    more.insertAdjacentHTML('beforeend',endpoints([d.from,...endsFor(k)])+(endsFor(k).length>1?'<p class="fine">此段取上述终点候选中最后记录到的时刻。逐次数据未注明最终采用哪个候选。</p>':'')+'<p class="fine">原分段名称：'+E(d.name||s.name)+'；涉及模块（原报告标注）：'+E(d.owner||s.owner||'未提供')+'。</p>');
    more.querySelectorAll('.endpoint-location').forEach(x=>x.remove());
    more.querySelectorAll('dl>div').forEach(cell=>{const dt=cell.querySelector('dt'),dd=cell.querySelector('dd');if(dd?.textContent==='没有可比记录'||dt?.textContent==='参与方')cell.remove();else if(dt?.textContent==='有效次数')dt.textContent='有效样本数';else if(dt?.textContent==='90%分位')dt.textContent='P90'});
-   const body=document.createElement('div');body.className='tech-fold-body';while(more.children.length>1)body.append(more.children[1]);const code=th.querySelector('button[data-code]');if(code)body.append(code);more.append(body);
-   const detailRow=document.createElement('tr');detailRow.className='segment-detail-row';const detailCell=document.createElement('td');detailCell.colSpan=5;detailCell.append(more);detailRow.append(detailCell);tr.after(detailRow);
+   const body=document.createElement('div');body.className='tech-fold-body';while(more.children.length>1)body.append(more.children[1]);th.querySelector('button[data-code]')?.remove();const source=tr.nextElementSibling;while(source?.firstElementChild?.firstChild)body.append(source.firstElementChild.firstChild);source?.remove();more.append(body);
+   if(expanded){const section=document.createElement('section');section.className='segment-facts segment-more';section.append(body);more.replaceWith(section)}
+   const detailRow=document.createElement('tr');detailRow.className='segment-detail-row';const detailCell=document.createElement('td');detailCell.colSpan=5;detailCell.append(expanded?th.querySelector('.segment-facts'):more);detailRow.append(detailCell);tr.after(detailRow);
    const status=tr.lastElementChild;
    const notices=[];
    if(s.bad)notices.push('计时顺序异常'+(s.bad_rounds?.length?'：第 '+s.bad_rounds.join('、')+' 次':''));if(s.thin)notices.push('有效记录 '+(s.count??'未提供')+'/'+(s.of??payload.rounds.length)+' 次');if(s.spiky)notices.push('偏慢：第 '+(s.spiky_rounds||[]).join('、')+' 次');
@@ -172,7 +173,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const host=document.createElement('div');host.innerHTML=table(split.keys.length?split.keys:(m.lines[selected]?.segments||[]));
   const template=host.querySelector('table');if(!template)return '<div id="tech-tail-title" hidden></div><table class="technical-table"><tbody id="tech-tail"></tbody></table>';
   template.classList.add('grouped-segments');template.setAttribute('aria-label','当前结果的分段用时');template.querySelector('tbody').remove();
-  if(split.keys.length)template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5"><button class="shared-toggle" aria-expanded="'+!!state.commonOpen+'" aria-controls="tech-common-rows">共用步骤 · '+split.keys.length+' 步<span aria-hidden="true">⌄</span></button></th></tr></tbody><tbody id="tech-common-rows"'+(state.commonOpen?'':' hidden')+'>'+stageRows(split.keys)+'</tbody>');
+  if(split.keys.length)template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5">共用步骤 · '+split.keys.length+' 步</th></tr></tbody><tbody id="tech-common-rows">'+stageRows(split.keys)+'</tbody>');
   template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5" id="tech-tail-title"></th></tr></tbody><tbody id="tech-tail"></tbody>');
   return host.innerHTML;
  }
@@ -189,7 +190,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const env=payload.measurement_environment;
   const envRows=(env?.rows||[]).filter(([k,v])=>k&&v!==null&&v!==undefined&&String(v).trim());
   const envDetails=(env?.details||[]).filter(([k,v])=>k&&v!==null&&v!==undefined&&String(v).trim());
-  const environment=envRows.length?'<section class="source-section"><h4>'+E(env.title||'测量环境')+'</h4>'+(env.note?'<p class="environment-origin">'+E(env.note)+'</p>':'')+fields(envRows)+(envDetails.length?fold('来源与固件标识',fields(envDetails)):'')+'</section>':'';
+  const environment=envRows.length?'<section class="source-section"><h4>'+E(env.title||'测量环境')+'</h4>'+(env.note?'<p class="environment-origin">'+E(env.note)+'</p>':'')+fields(envRows)+(envDetails.length?'<h4>来源与固件标识</h4>'+fields(envDetails):'')+'</section>':'';
   const starts=[...new Set(m.lines.map(l=>l.start_point))];
   const lineEnd=l=>{const ps=endsFor(l.segments.at(-1));return ps.length>1?'<div class="scope-result"><h4>'+E(l.endName)+'</h4><p class="small-note">以以下事件中最后记录到的时刻结束计时：</p>'+ps.map(p=>timingEntry(p,name(p))).join('')+'<p class="small-note">逐次数据只保存用时，未注明每次最终采用哪个事件。</p></div>':timingEntry(l.end_point,l.endName)};
   const boundaries=starts.length===1?'<h4>所有结果的计时起点</h4>'+timingEntry(starts[0],name(starts[0]))+'<h4>各项结果的计时终点</h4>'+m.lines.map(lineEnd).join(''):m.lines.map(l=>'<div class="scope-result"><h4>'+E(l.endName)+'</h4>'+timingEntry(l.start_point,'起点：'+l.startName)+lineEnd(l)+'</div>').join('');
@@ -238,7 +239,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   return summary+source;
  }
  function rawTable(kind){const host=document.createElement('div');host.innerHTML=R.valuesTable(payload,kind);const cols=host.querySelectorAll('thead th');cols.forEach((th,i)=>{if(!i){th.textContent='测试轮次';return}th.textContent=kind==='segments'?boundary(Object.keys(m.defs)[i-1]):m.lines[i-1].endName});return host.innerHTML;}
- function catalog(){const host=document.createElement('div');host.innerHTML=R.pointCatalog(m);host.querySelectorAll('[data-source-point]').forEach(row=>{const label=document.createElement('small');label.className='actual-event-range';label.textContent=event(row.dataset.sourcePoint);row.querySelector('th').append(label)});return host.innerHTML;}
+ function catalog(){const host=document.createElement('div');host.innerHTML=R.pointCatalog(m);host.querySelectorAll('[data-source-point]').forEach(row=>{const label=document.createElement('small');label.className='actual-event-range';label.textContent=event(row.dataset.sourcePoint);row.querySelector('th').append(label)});host.querySelectorAll('[data-code]').forEach(button=>button.remove());host.querySelectorAll('.coderow').forEach(row=>row.hidden=false);return host.innerHTML;}
  const covered=new Set(m.lines.flatMap(l=>l.segments)),independent=Object.keys(m.defs).filter(k=>!covered.has(k));
  const adjustment=(payload.checks||[]).filter(c=>c.kind==='line_changed').map(c=>'<li>'+E(c.why)+'</li>').join('')+(payload.merged||[]).map(x=>'<li>'+E(x.why)+'。</li>').join('');
  const legacy=m.lines.map(l=>'<h4>'+E(l.endName)+'</h4><p>'+E(l.stat.combo||l.stat.verdict||'未判')+'</p>').join('');
@@ -246,7 +247,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
  panel('d-sec-technical-steps','阶段与分段用时','<div class="result-switcher"><div><p class="fine">选择要核对的结果</p><h3 id="tech-selected-title"></h3><div id="tech-selected-scope"></div></div><div id="tech-choices" class="tech-choices"></div></div><div id="tech-total"></div>'+
  groupedSegments())+
  '<details class="panel process-fold" id="tech-round"'+(state.processOpen?' open':'')+'><summary>单次完整过程</summary><div class="process-body"><div class="tech-round-controls"><label>查看结果 <select id="tech-round-result" aria-label="单次过程的结果">'+m.lines.map(l=>'<option value="'+l.index+'">'+E(l.endName)+'</option>').join('')+'</select></label><label>测试轮次 <select id="tech-round-select" aria-label="技术细节测量轮次">'+payload.rounds.map(r=>'<option value="'+E(r.n)+'">第 '+E(r.n)+' 次</option>').join('')+'</select></label></div><p id="tech-round-line" class="small-note"></p><div id="tech-round-content"></div></div></details>'+
- panel('tech-evidence','补充资料',(independent.length?'<details class="tech-fold" id="tech-independent"><summary>其他已测分段 · '+independent.length+' 项</summary><div class="tech-fold-body"><p class="small-note">这些分段不在所选结果的连续路径中，单独保留，不加入总用时。</p>'+table(independent)+'</div></details>':'')+fold('全部计时位置与源码上下文',catalog())+fold('全部结果用时（秒）',rawTable('lines'))+fold('全部分段用时（秒）',rawTable('segments'))+fold('原始日志',payload.raw_log?'<p class="code">'+E(payload.raw_log)+'</p><p>本报告保留日志路径，日志文件未嵌入。</p>':'<p>这份数据未附原始日志文件或路径。逐轮数值与源码摘录保存在完整数据中。</p>')+(adjustment?fold('计时范围调整记录','<ul>'+adjustment+'</ul>'):'')+fold('阶段划分依据','<p>阶段只合并同一路径上连续的步骤。下面保留各阶段采用的代码位置；每个阶段包含的步骤见上方分段表。</p><ul>'+Object.values(phaseMeta.boundaries||{}).map(b=>'<li>'+E(b.label)+'：'+E(b.evidence||'未保存划分依据')+'</li>').join('')+'</ul>')+fold('原报告的判定记录','<p>以下保留原报告对本组数据的判定；其中体验判断采用中位数。这里只供追溯，与上方平均用时的比较分开。</p>'+legacy)+ '<p class="fine">页面底部可下载全部数据或保存报告。重新测试、还原固件需在码表主界面操作。</p>');
+ panel('tech-evidence','补充资料',(independent.length?'<details class="tech-fold" id="tech-independent"><summary>其他已测分段 · '+independent.length+' 项</summary><div class="tech-fold-body"><p class="small-note">这些分段不在所选结果的连续路径中，单独保留，不加入总用时。</p>'+table(independent,0,true)+'</div></details>':'')+fold('全部计时位置与源码上下文',catalog())+fold('全部结果用时（秒）',rawTable('lines'))+fold('全部分段用时（秒）',rawTable('segments'))+fold('原始日志',payload.raw_log?'<p class="code">'+E(payload.raw_log)+'</p><p>本报告保留日志路径，日志文件未嵌入。</p>':'<p>这份数据未附原始日志文件或路径。逐轮数值与源码摘录保存在完整数据中。</p>')+(adjustment?fold('计时范围调整记录','<ul>'+adjustment+'</ul>'):'')+fold('阶段划分依据','<p>阶段只合并同一路径上连续的步骤。下面保留各阶段采用的代码位置；每个阶段包含的步骤见上方分段表。</p><ul>'+Object.values(phaseMeta.boundaries||{}).map(b=>'<li>'+E(b.label)+'：'+E(b.evidence||'未保存划分依据')+'</li>').join('')+'</ul>')+fold('原报告的判定记录','<p>以下保留原报告对本组数据的判定；其中体验判断采用中位数。这里只供追溯，与上方平均用时的比较分开。</p>'+legacy)+ '<p class="fine">页面底部可下载全部数据或保存报告。重新测试、还原固件需在码表主界面操作。</p>');
  function preciseTime(v,unitFrom=v){
   if(!Number.isFinite(v))return '未记录';
   const factor=Math.abs(unitFrom)>0&&Math.abs(unitFrom)<1?1000:1;
@@ -303,7 +304,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   scope.querySelector('#'+'tech-tail').innerHTML=stageRows(split.tails[i]||l.segments,split.keys.length);
   drawRound();
  }
- root.addEventListener('click',e=>{const b=e.target.closest('[data-tech-line]'),go=e.target.closest('[data-tech-round]'),shared=e.target.closest('.shared-toggle');if(b)choose(Number(b.dataset.techLine));if(go)toggleObservation(go);if(shared){state.commonOpen=shared.getAttribute('aria-expanded')!=='true';shared.setAttribute('aria-expanded',String(state.commonOpen));scope.querySelector('#tech-common-rows').hidden=!state.commonOpen;}});
+ root.addEventListener('click',e=>{const b=e.target.closest('[data-tech-line]'),go=e.target.closest('[data-tech-round]');if(b)choose(Number(b.dataset.techLine));if(go)toggleObservation(go);});
  root.addEventListener('toggle',e=>{if(e.target.id==='tech-round')state.processOpen=e.target.open},true);
  scope.querySelector('#'+'tech-round-result').addEventListener('change',e=>choose(Number(e.target.value)));
  scope.querySelector('#'+'tech-round-select').addEventListener('change',e=>{round=Number(e.target.value);state.round=round;drawRound()});
@@ -349,7 +350,6 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
     technical:Number(scope.querySelector('[data-tech-line][aria-pressed="true"]')?.dataset.techLine),
     round:Number(scope.querySelector('#tech-round-select')?.value),
     processOpen:scope.querySelector('#tech-round')?.open,
-    commonOpen:scope.querySelector('.shared-toggle')?.getAttribute('aria-expanded')==='true',
     open:[...scope.querySelectorAll('[data-tech-round][aria-expanded="true"]')].map(b=>Number(b.dataset.techRound))};
   }
   states.set(key,state);
