@@ -1013,15 +1013,15 @@ function readableSources(D){
 // Shared presentation for live and exported reports. The API remains the source of all values.
 function generalAdviceStatus(){
   const state=ADV&&ADV.status;
-  const text=state==='running'?'正在分析原因和可选方案，测量结果可以先看。':state==='failed'?'本次原因和修改方案尚未就绪，可交给研发查看分析状态。':'还没有生成原因分析和修改方案。';
-  return `<div class="panel"><p>${text}</p><p class="note">测量能指出等待发生在哪一步，但不能单凭耗时确定原因；没有方案也不代表没有问题。</p><button class="pill" data-report-tech="1" data-report-target="sec-technical-advice">查看研发分析状态</button></div>`;
+  const text=state==='running'?'正在分析原因和可选方案，测量结果可以先看。':state==='failed'?'原因分析未完成，请研发查看分析状态。':'尚未生成原因分析和修改方案。';
+  return `<div class="panel"><p>${text}</p><button class="pill" data-report-tech="1" data-report-target="sec-technical-advice">查看研发分析状态</button></div>`;
 }
 function technicalAdvice(D){
-  return `<section class="stack" id="sec-technical-advice"><h2>原因分析与修改方案</h2><p class="note">分段用时是观察证据，不直接证明根因。核对代码、日志和建议依据后，再安排修改及复测。</p>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():''}${fixDev(D)}${(!D.S.real||ADV&&ADV.status==='done')&&!activeFixes(D).length?'<p class="note">本次没有可展示的修改方案；不代表已排除问题。</p>':''}</section>`;
+  return `<section class="stack" id="sec-technical-advice"><h2>原因分析与修改方案</h2><p class="note">分段用时是观察证据，不直接证明根因。核对代码、日志和建议依据后，再安排修改及复测。</p>${D.S.real&&(!ADV||ADV.status!=='done')?advBox():''}${fixDev(D)}${(!D.S.real||ADV&&ADV.status==='done')&&!activeFixes(D).length?'<p class="note">本次未生成修改方案。</p>':''}</section>`;
 }
 function reportNextStep(D){
   const quality=(D.J.checks||[]).some(c=>['bad','bad_line','thin','thin_line'].includes(c.kind));
-  const text=quality?'先请研发补齐或核对异常记录，再决定是否修改；改后按同样条件复测。':D.S.real&&(!ADV||ADV.status!=='done')?'先请研发结合记录核对原因和可选方案，再决定改什么；改后按同样条件复测。':'结合上面的影响和方案决定是否修改；如果修改，请研发按同样条件复测，比较等待时间和波动。';
+  const text=quality?'先请研发补齐或核对异常记录，再决定是否修改；改后按同样条件复测。':D.S.real&&(!ADV||ADV.status!=='done')?'确定修改方案并完成修改后，请研发按相同条件复测。':'结合上面的影响和方案决定是否修改；如果修改，请研发按同样条件复测，比较等待时间和波动。';
   return `<section class="panel" id="sec-next-step"><h2>改完以后</h2><p>${text}</p><button class="pill" data-report-tech="1" data-report-target="sec-research-actions">查看研发复测与还原入口</button></section>`;
 }
 function readableReport(D){
@@ -1029,16 +1029,13 @@ function readableReport(D){
   const indices=D.lines.map((l,i)=>names.has(l.name)?i:-1).filter(i=>i>=0),lines=indices.map(i=>({...D.lines[i],end:R.humanName(D.lines[i].end)}));
   const human=t=>R.humanName(t),P={...D,lines:D.lines.map(l=>({...l,end:human(l.end)})),main:{...D.main,end:human(D.main.end)}},V={...P,lines,rounds:D.rounds.map(r=>({...r,ends:indices.map(i=>r.ends[i])})),J:{...D.J,lines:D.J.lines.filter(l=>names.has(l.name)||l.measure)}};
   const main=m.main,stat=main&&main.stat,vals=main?D.J.rounds.map(r=>r.ends[main.index]).filter(v=>R.finite(v)&&v>=0):[],avg=main?stat.avg:null;
-  const internal=m.lines.filter(l=>l.internal),missing=internal.filter(l=>l.was);
-  const warning=missing.map(l=>`<p>想观察的「${R.esc(human(l.was))}」没有直接测到；这次不能给出它的完成时间。详细记录保留在技术细节中。</p>`).join('');
-  const checks=(D.J.checks||[]).filter(c=>c.kind==='bad'||c.kind==='bad_line'||c.kind==='thin'||c.kind==='thin_line');
   const complete=m.visibleLines.filter(l=>l.contentDependent),refs=m.visibleLines.filter(l=>!l.contentDependent&&main&&l.index!==main.index);
-  return `<div class="stack readable-report">${expDone()}<header class="report-hero"><div class="eyebrow">本次测量 · ${D.n} 次${D.S.real?'真实记录':'模拟演示'}</div><div class="titlerow"><h1>${main?`等到「${R.esc(main.endName)}」<br>平均 <strong>${R.esc(R.fmt(avg))}</strong>`:'本次测量还没有完整结果'} </h1>${vsTag()}</div><p>${main?'从「'+R.esc(main.startName)+'」开始计算本次等待。':''}</p><div class="hero-facts"><span>最慢 <b>${R.esc(f(stat&&stat.max))} 秒</b></span><span><b>${vals.length}/${D.n}</b> 次有记录</span></div><p class="small-note">测量范围：以上用时截至程序记录到该事件；是否已经实际显示、发声或完成动作，需要另行核对。</p></header>
-  ${warning?`<div class="measurement-note"><b>这次还没测到什么</b>${warning}</div>`:''}${checks.length?`<div class="errbox"><b>数据有 ${checks.length} 处需要留意</b><p>部分步骤没有测全或先后异常。相关结果不作为完整结论，具体原因见技术细节。</p></div>`:''}${D.n<10?'<p class="note">测量次数不足 10 次，适合检查流程，判断稳定性还需要更多记录。</p>':''}
-  <section class="panel"><h2>结论和建议</h2>${R.findings(m,D.S.real?(ADV&&ADV.status):'done')}${readableActions(P,m)}<details><summary>这些数字怎么看</summary><p>两版均以平均用时为主：有效记录的用时相加，再除以有效次数；慢的记录不会因为偏慢而剔除。中位数等补充统计保留在技术细节。</p><p>总等待直接取每次起终点实测的平均值。分段缺数或记录批次不同时，不把分段平均值相加当作总等待。</p></details></section>
+  return `<div class="stack readable-report">${expDone()}<header class="report-hero"><div class="eyebrow">本次测量 · ${D.n} 次${D.S.real?'真实记录':'模拟演示'}</div><div class="titlerow"><h1>${main?`「${R.esc(main.endName)}」用时<br>平均 <strong>${R.esc(R.fmt(avg))}</strong>`:'本次测量还没有完整结果'} </h1>${vsTag()}</div><p>${main?'按程序记录，从「'+R.esc(main.startName)+'」计时。':''}</p><div class="hero-facts"><span>最慢 <b>${R.esc(f(stat&&stat.max))} 秒</b></span></div></header>
+  ${R.resultIssues(m)}
+  <section class="panel"><h2>结论和建议</h2>${R.findings(m,D.S.real?(ADV&&ADV.status):'done')}${readableActions(P,m)}<details><summary>这些数字怎么看</summary><p>两版均以平均用时为主：有效记录的用时相加，再除以有效次数；慢的记录不会因为偏慢而剔除。中位数等补充统计保留在技术细节。</p><p>总等待直接取每次起终点实测的平均值。分段缺数或记录批次不同时，不把分段平均值相加当作总等待。显示数值经过四舍五入。</p></details></section>
   <section class="panel" id="sec-tl"><h2>时间花在哪</h2><p class="intro">先看结果要等多久，再看用时较多或波动明显的步骤。全部分段可展开。</p>${R.panel(D.J,'general')}</section>
   ${(refs.length||complete.length)?`<section class="panel"><h2>其他结果与完整过程</h2>${refs.length?`<p>其他结果（${refs.map(l=>R.esc(l.endName)).join('、')}）已在上方概览展示。<a href="#sec-rounds">查看逐次点位图，比较波动</a>。</p>`:''}${complete.map(l=>`<p>完整过程到「${R.esc(l.endName)}」：平均 <b>${R.fmt(l.stat.avg)}</b>，最慢 ${R.fmt(l.stat.max)}。${l.stat.verdict==='看回答长短'?'用时受这次处理的内容多少影响，只记录，不判快慢。':''}</p>`).join('')}${complete.length?`<details><summary>查看完整过程的逐次点位图</summary>${R.roundsOverview(m,{complete:true})}</details>`:''}</section>`:''}
-  <section class="stack" id="sec-advice"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note">沿用 ${htmlEsc(ADV.at)} 写的建议，文中秒数是那次的，这次数值见本报告。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?generalAdviceStatus():(activeFixes(P).length?fixA(P):'<div class="panel"><p>按本次判定，没有可展示的修改方案。</p><p class="note">未列出方案不等于已经优化，也不替代上面的数据判断。</p></div>')}</section>
+  <section class="stack" id="sec-advice"><h2 style="margin:8px 0 -6px">为什么、怎么改</h2>${D.S.real&&ADV&&ADV.status==='done'&&ADV.called===false&&ADV.at?`<p class="note">沿用 ${htmlEsc(ADV.at)} 写的建议，文中秒数是那次的，这次数值见本报告。</p>`:''}${D.S.real&&(!ADV||ADV.status!=='done')?generalAdviceStatus():(activeFixes(P).length?fixA(P):'<div class="panel"><p>本次未列出修改方案。</p></div>')}</section>
   <h2 style="margin:12px 0 -6px">依据</h2><section class="panel" id="sec-tiers"><h2>用时和标准</h2>${R.comparison(m)}${readableSources(V)}</section>${R.recordOnly(D.J,D.S.recOnly)}
   <section class="panel" id="sec-rounds"><h2>${D.n} 次测量记录</h2>${R.roundsOverview(m)}<details><summary>查看每次的具体数值</summary>${R.valuesTable(D.J,'lines','general')}</details></section>${reportNextStep(D)}</div>`;
 }

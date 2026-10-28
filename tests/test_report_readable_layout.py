@@ -102,7 +102,7 @@ def test_record_only_explanation_keeps_all_values_without_internal_owner_columns
     out=render("console.log(JSON.stringify(C.recordOnly(data,{lines:['提示'],segments:['read'],parallel:['motor']})));")
     for value in ('0.42 秒','0.50 秒','0.15 秒','0.35 秒'):
         assert value in out
-    assert '只记录、不判快慢' in out and '同时发生' in out and '谁负责' not in out
+    assert '只记录、不判快慢' in out and '独立步骤' in out and '谁负责' not in out
 
 
 def test_exported_controls_restore_saved_result_and_round_before_first_interaction():
@@ -126,7 +126,7 @@ def test_mean_reference_uses_raw_rounds_not_median_or_passing_proportion():
     assert out[0]['avg']==pytest.approx(1.2)
     assert out[0]['over']==1
     assert '平均 1.20 秒，超过 1.00 秒' in out[1]
-    assert '1/2 次（50%）' in out[2] and '不是标准通过率' in out[2]
+    assert '1/2 次（50%）' in out[2] and '单次观察' in out[2] and '达标率' not in out[2]
 
 
 @pytest.mark.parametrize('source', ['每次响应不超过 1 秒', '第 75 百分位不超过 1 秒', '不应使用平均值判断', ''])
@@ -148,10 +148,10 @@ def test_common_anomaly_is_visible_before_disclosure_and_round_is_not_hardcoded(
     assert 'data-abnormal-round="17"' in out[1]
 
 
-def test_findings_distinguish_advice_status_from_measurement_quality():
+def test_findings_do_not_repeat_advice_status_or_add_normal_state_disclaimers():
     out=render("const m=C.model(data);console.log(JSON.stringify(['failed','running','done',null].map(s=>C.findings(m,s))));")
-    assert '尚未就绪' in out[0] and '正在生成' in out[1] and '分析已完成' in out[2] and '尚未生成' in out[3]
-    assert all('没有需要你处理' not in s and '不等于所有功能都已验证' in s for s in out)
+    assert len(set(out))==1
+    assert all('修改建议' not in s and '需要留意' not in s and '不等于' not in s for s in out)
 
 
 def test_reference_and_anomaly_views_preserve_raw_payload_and_technical_names():
@@ -176,7 +176,7 @@ def test_role_plots_keep_identical_points_but_general_explains_observed_range():
     out=render("data.lines[0].exp_std={fair:1,statistic:'mean'};console.log(JSON.stringify(['general','technical'].map(a=>C.roundsOverview(C.model(data,a)))));")
     assert all(x.count('data-value=') == 4 for x in out)
     assert '0.35 秒 ～ 0.50 秒' in out[0] and '第 2 次用时最长' in out[0]
-    assert '不代表长期稳定性' in out[0] and '长虚线：' not in out[0]
+    assert '不代表长期稳定性' not in out[0] and '长虚线：' not in out[0]
     assert '长虚线：' in out[1] and '悬停点位查看原始精度' in out[1]
     assert all('data-value="0.350000"' in x for x in out)
 
@@ -191,7 +191,7 @@ def test_focus_uses_segment_identity_and_valid_values_and_keeps_ties():
     out=render("data.rounds.forEach(r=>r.segs.read=r.segs.verify);const m=C.model(data,'general');const a=C.costFocus(m,['read','verify']);data.segments[1].bad=true;const b=C.costFocus(C.model(data,'general'),['read','verify']);data.segments[0].thin=true;console.log(JSON.stringify([a,b,C.costFocus(C.model(data,'general'),['read','verify'])]));")
     assert '刷卡 → 读取卡片' in out[0] and '读取卡片 → 校验通过' in out[0]
     assert '读取卡片 → 校验通过' not in out[1]
-    assert '不能据此确定原因' in out[0] and '暂不判断' in out[2]
+    assert '不能据此确定原因' not in out[0] and '暂不判断' in out[2]
 
 
 def test_general_fold_keeps_all_steps_and_common_anomalies_visible():
@@ -211,7 +211,7 @@ def test_advice_and_next_step_distinguish_incomplete_analysis_and_bad_data():
     source=(STATIC/'app.js').read_text()
     helpers=source[source.index('function generalAdviceStatus('):source.index('function readableReport(')]
     out=render("let ADV={status:'failed'};const activeFixes=()=>[],advBox=()=>'<button data-advretry>重试</button>',fixDev=()=>'';"+helpers+"const D={S:{real:true},J:{checks:[{kind:'bad_line'}]}};console.log(JSON.stringify([generalAdviceStatus(),technicalAdvice(D),reportNextStep(D)]));")
-    assert 'data-advretry' not in out[0] and '尚未就绪' in out[0]
+    assert 'data-advretry' not in out[0] and '原因分析未完成' in out[0]
     assert 'data-advretry' in out[1] and '不直接证明根因' in out[1]
     assert '先请研发补齐' in out[2] and 'sec-research-actions' in out[2]
 
@@ -220,7 +220,7 @@ def test_result_total_uses_endpoint_statistic_not_sum_of_segment_medians():
     out=render("data.lines[0].med=.9;const m=C.model(data,'general');console.log(JSON.stringify([C.resultHeading(m,0),C.resultScope(m,0),C.panel(data,'general')]));")
     assert out[0]=='亮绿灯｜完整等待 · 平均 0.42 秒'
     assert out[1]=='总用时范围：「刷卡」→「亮绿灯」。'
-    assert '单步平均 0.03 秒' in out[2] and '同批记录' in out[2]
+    assert '单步平均 0.03 秒' in out[2] and '横条表示每一步的平均用时' in out[2]
 
 
 def test_total_label_handles_content_dependent_bad_thin_and_missing_data():
@@ -257,3 +257,29 @@ def test_action_summary_uses_mean_and_primary_reference_is_not_repeated():
     code="const ReportLayout=C,activeFixes=()=>[],cardOf=()=>-1,recLine=()=>'',jump=()=>'';const decisions=()=>[{k:'main',lv:0,t:'主线',d:'旧中位数'},{k:'spiky',seg:'read',lv:1,t:'读取偏慢',d:'平时0.1'}];"+function+"console.log(JSON.stringify(readableActions({},C.model(data))));"
     out=render(code)
     assert '平均 0.15 秒' in out and '平时0.1' not in out and '旧中位数' not in out
+
+
+def test_complete_records_have_no_gap_banner_but_missing_samples_state_the_scope():
+    out=render("const a=C.resultIssues(C.model(data,'general'));data.rounds[0].ends[1]=null;const b=C.resultIssues(C.model(data,'general'));console.log(JSON.stringify([a,b]));")
+    assert out[0]==''
+    assert '「门开始打开」有 1 次未测到，平均用时按其余 1 次有效记录计算' in out[1]
+    assert '亮绿灯' not in out[1]
+
+
+def test_rebound_result_is_named_once_without_casting_doubt_on_other_results():
+    out=render("data.scenario.lines[1].actual=true;data.scenario.lines[1].was='门已完全打开';const m=C.model(data,'general');console.log(JSON.stringify([C.resultIssues(m),C.findings(m,'failed')]));")
+    assert out[0].count('门已完全打开')==1 and '无法给出这项结果的完成时间' in out[0]
+    assert '亮绿灯' not in out[0] and '没有直接测到' not in out[1]
+
+
+def test_bad_line_notice_is_not_duplicated_and_segment_issue_keeps_local_scope():
+    out=render("data.lines[0].bad=true;data.checks=[{kind:'bad_line',line:'提示'},{kind:'thin',k:'motor',count:1,of:2}];console.log(JSON.stringify(C.resultIssues(C.model(data,'general'))));")
+    assert out.count('亮绿灯')==1 and '计时先后异常' in out
+    assert '校验通过 → 门开始打开' in out and '记录不足（1/2 次）' in out
+    assert '这一步暂不判断快慢' in out and '请研发补测' in out
+
+
+def test_findings_name_actual_slow_rounds_without_generic_anxiety_text():
+    out=render("data.segments[0].spiky=true;data.segments[0].spiky_rounds=[9,3];console.log(JSON.stringify(C.findings(C.model(data,'general'),'failed')));")
+    assert '第 3、9 次有步骤明显偏慢' in out and '查看对应步骤' in out
+    assert '需留意' not in out and '建议尚未' not in out

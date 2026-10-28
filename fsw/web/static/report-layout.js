@@ -63,9 +63,9 @@
   function roundsOverview(m,options={}) {
     const lines=options.complete?m.visibleLines.filter(l=>l.contentDependent):m.visibleLines.filter(l=>!l.contentDependent),rounds=m.data.rounds;
     const values=rounds.flatMap(r=>lines.map(l=>r.ends[l.index])).filter(v=>finite(v)&&v>=0);
-    if(!values.length)return '<p class="small-note">这份报告暂时没有逐次用时记录，不补造图上的数据。</p>';
+    if(!values.length)return '<p class="small-note">没有逐次用时记录。</p>';
     const references=m.audience==='general'?[]:[...new Set(lines.map(l=>(l.stat.exp_std||{}).fair).filter(v=>finite(v)&&v>0))];
-    const bad=new Map();(m.data.labels||[]).filter(v=>v.kind==='problem'||v.kind==='spiky'||v.kind==='line').forEach(v=>(v.rounds||[]).forEach(n=>bad.set(n,[bad.get(n),v.name||v.why||'这次需要留意'].filter(Boolean).join('；'))));
+    const bad=new Map();(m.data.labels||[]).filter(v=>v.kind==='problem'||v.kind==='spiky'||v.kind==='line').forEach(v=>(v.rounds||[]).forEach(n=>bad.set(n,[bad.get(n),v.name||v.why||'这次有异常记录'].filter(Boolean).join('；'))));
     const used=new Set(lines.flatMap(l=>l.segments));
     used.forEach(k=>{const s=m.segments[k]||{};if(s.spiky)(s.spiky_rounds||[]).forEach(n=>bad.set(n,'这次有步骤明显偏慢'));});
     const a=axis(Math.max(...values,...references)),left=82,top=45,width=620,rowHeight=26,bottom=top+rounds.length*rowHeight;
@@ -96,7 +96,7 @@
       const slow=rows.filter(r=>r.ends[l.index]===max).map(r=>r.n);
       return `<li><b>${esc(l.endName)}</b>：${rows.length} 次记录，${fmt(min)} ～ ${fmt(max)}${rows.length>1&&min!==max?'；第 '+esc(slow.join('、'))+' 次用时最长':''}。</li>`;
     }).join('');
-    return `<div class="round-overview-legend">${lines.map((l,j)=>`<span><i class="point-key ${j%2===0?'point-circle':'point-square'}" style="background:${l.color}"></i>${esc(l.endName)}${l.first?'<small>主要回应</small>':''}</span>`).join('')}<span><i class="median-key"></i>细虚线：平均用时</span>${bad.size?'<span>浅橙底：记录提示需留意的轮次</span>':''}</div><div class="scroll">${svg}</div><p class="small-note">横向越靠右，等待越久；同一种点的横向位置越集中，这几次越稳定，左右跨度表示用时范围。每行是一次测量，缺数留空，不跨轮连线。${m.audience==='technical'?'悬停点位查看原始精度；按轮次在上方完整过程核对分段，代码及全部数据见下方。':''}${references.length?'长虚线：'+esc(referenceDescription)+'。单次点超过此线只说明这一回较慢，不表示整体不达标。':''}</p>${m.audience==='general'?'<ul class="plot-ranges">'+ranges+'</ul><p class="small-note">这里只描述本次记录的波动，不代表长期稳定性。</p>':''}`;
+    return `<div class="round-overview-legend">${lines.map((l,j)=>`<span><i class="point-key ${j%2===0?'point-circle':'point-square'}" style="background:${l.color}"></i>${esc(l.endName)}${l.first?'<small>主要回应</small>':''}</span>`).join('')}<span><i class="median-key"></i>细虚线：平均用时</span>${bad.size?'<span>浅橙底：有较长用时或异常记录的轮次</span>':''}</div><div class="scroll">${svg}</div><p class="small-note">每行是一次测量；越靠右，用时越长；同一种点越集中，本次用时波动越小。${m.audience==='technical'?'悬停点位查看原始精度；按轮次在上方完整过程核对分段，代码及全部数据见下方。':''}${references.length?'长虚线：'+esc(referenceDescription)+'。单次点超过此线只说明这一回较慢，不表示整体不达标。':''}</p>${m.audience==='general'?'<ul class="plot-ranges">'+ranges+'</ul>':''}`;
   }
   function sharedPrefix(m) {
     const lines=m.visibleLines;
@@ -138,7 +138,7 @@
     const r=referenceInfo(m,l);
     if(l.stat.bad||l.stat.thin)return '记录有异常或不足，暂不比较快慢。';
     if(l.contentDependent)return '用时受处理内容多少影响，只记录，不判快慢。';
-    if(!r.usable)return '没有适用的用时参考，暂不按标准判快慢。';
+    if(!r.usable)return '暂无适用的快慢参考。';
     if(r.mode==='mean')return `按来源的平均值口径，本次${compact?'':'平均 '+fmt(r.avg)+'，'}${r.avg<=r.e.fair?'未超过':'超过'} ${fmt(r.e.fair)} 的参考值。`;
     return `本报告引用的参考值为 ${fmt(r.e.fair)}；统计口径尚未明确匹配，不作整体达标结论。`;
   }
@@ -150,17 +150,34 @@
       return `<li><b>${esc(title)}</b><span>${esc(detail)}${ns&&ns.length?'；第 '+esc(ns.join('、'))+' 次':''}</span></li>`;
     }).join('');
   }
+  // Surface only observed gaps; name their scope rather than casting doubt on the whole report.
+  function resultIssues(m){
+    const rows=[],covered=new Set();
+    m.lines.forEach(l=>{
+      const valid=m.data.rounds.filter(r=>finite(r.ends[l.index])&&r.ends[l.index]>=0).length;
+      if(l.internal&&l.was){rows.push(`「${humanName(l.was)}」没有测到，无法给出这项结果的完成时间。`);covered.add(l.name);return;}
+      if(l.stat.bad){rows.push(`「${l.endName}」的计时先后异常，暂不判断这项结果的快慢；请研发核对起终点记录。`);covered.add(l.name);}
+      else if(l.stat.thin||!valid){rows.push(`「${l.endName}」只有 ${valid}/${m.data.rounds.length} 次有效记录，暂不判断这项结果的快慢；请研发补测。`);covered.add(l.name);}
+      else if(valid<m.data.rounds.length)rows.push(`「${l.endName}」有 ${m.data.rounds.length-valid} 次未测到，平均用时按其余 ${valid} 次有效记录计算。`);
+    });
+    (m.data.checks||[]).filter(c=>['bad','thin','bad_line','thin_line'].includes(c.kind)).forEach(c=>{
+      if(c.line&&covered.has(c.line))return;
+      const d=m.defs[c.k],name=d?`${m.names[d.from]||'起点'} → ${m.names[d.to]||'终点'}`:humanName(c.name||c.line||'未标明名称的记录');
+      rows.push(`「${name}」${c.kind.startsWith('bad')?'计时先后异常':'记录不足'+(finite(c.count)&&finite(c.of)?`（${c.count}/${c.of} 次）`:'')}，这${c.line?'项结果':'一步'}暂不判断快慢；请研发${c.kind.startsWith('bad')?'核对计时记录':'补测'}。`);
+    });
+    return rows.length?`<div class="measurement-note"><b>本次未能确认的结果</b>${[...new Set(rows)].map(t=>`<p>${esc(t)}</p>`).join('')}<button class="pill" data-report-tech="1" data-report-target="sec-technical-steps">查看对应记录</button></div>`:'';
+  }
   function findings(m,advice) {
-    const keys=[...new Set(m.visibleLines.flatMap(l=>l.segments))],issues=issueRows(m,keys);
-    const missing=m.lines.filter(l=>l.internal&&l.was).length;
-    const quality=(m.data.checks||[]).some(c=>['bad','bad_line','thin','thin_line'].includes(c.kind));
-    const msg=advice==='done'?'建议分析已完成，具体方案和依据见下方。':advice==='running'?'修改建议正在生成，测量结果已可查看。':advice==='failed'?'修改建议尚未就绪，具体状态见下方。':'尚未生成修改建议。';
-    return `<div class="report-findings"><p><b>参考判断：</b>${m.main?esc(referenceText(m,m.main,true)):'还没有可比较的完整结果。'}</p><p><b>需要留意：</b>${issues?'有步骤出现波动或记录异常，见下方用时拆解。':quality?'部分记录有异常或不足，不能据此认定整体正常。':'按现有分段检查，未标出明显波动；这不等于所有功能都已验证。'}${missing?'另有 '+missing+' 项原定结果没有直接测到。':''}</p><p><b>修改建议：</b>${esc(msg)} <a href="#sec-advice">查看建议状态</a></p>${issues?'<a href="#sec-tl">查看需要留意的步骤 ↓</a>':''}</div>`;
+    const keys=[...new Set(m.visibleLines.flatMap(l=>l.segments))];
+    const slow=keys.filter(k=>(m.segments[k]||{}).spiky);
+    const ns=[...new Set(slow.flatMap(k=>m.segments[k].spiky_rounds||[]))].sort((a,b)=>a-b);
+    const observation=ns.length?'第 '+ns.join('、')+' 次有步骤明显偏慢。':slow.length?slow.map(k=>{const d=m.defs[k];return `「${m.names[d.from]} → ${m.names[d.to]}」`;}).join('、')+'出现较长用时。':'';
+    return `<div class="report-findings"><p><b>参考判断：</b>${m.main?esc(referenceText(m,m.main,true)):'没有完整的结果记录。'}</p>${observation?`<p><b>本次波动：</b>${esc(observation)} <a href="#sec-tl">查看对应步骤</a></p>`:''}</div>`;
   }
   function comparison(m) {
     return `<div class="reference-list">${m.visibleLines.filter(l=>!l.contentDependent).map(l=>{
       const r=referenceInfo(m,l),s=l.stat,vs=s.vs;
-      return `<article class="reference-item"><h3>${esc(l.endName)}</h3><p>${esc(referenceText(m,l))}</p>${r.usable?`<p class="small-note">单次观察：${r.count} 次记录中，${r.over} 次超过 ${fmt(r.e.fair)}。未超过的有 ${r.count-r.over}/${r.count} 次（${Math.round((r.count-r.over)/r.count*100)}%）。这只是本组记录的分布，不是标准通过率。</p>`:''}${vs?`<details><summary>历史比较（原记录采用中位数）</summary><p>${esc((finite(vs.prev)?fmt(vs.prev)+' → '+fmt(s.med)+'，':'')+(vs.change||'已有比较'))}</p><p class="small-note">未保存上次平均值，不与本次平均用时混比。</p></details>`:'<p class="small-note">没有上次的可比记录。</p>'}</article>`;
+      return `<article class="reference-item"><h3>${esc(l.endName)}</h3><p>${esc(referenceText(m,l))}</p>${r.usable?`<p class="small-note">单次观察：${r.count} 次记录中，${r.over} 次超过 ${fmt(r.e.fair)}。未超过的有 ${r.count-r.over}/${r.count} 次（${Math.round((r.count-r.over)/r.count*100)}%）。</p>`:''}${vs?`<details><summary>历史比较（原记录采用中位数）</summary><p>${esc((finite(vs.prev)?fmt(vs.prev)+' → '+fmt(s.med)+'，':'')+(vs.change||'已有比较'))}</p><p class="small-note">未保存上次平均值，不与本次平均用时混比。</p></details>`:''}</article>`;
     }).join('')}</div>`;
   }
   function costFocus(m,keys) {
@@ -169,13 +186,13 @@
     const max=Math.max(...valid.map(k=>m.segments[k].avg));
     const largest=valid.filter(k=>m.segments[k].avg===max&&!m.segments[k].spiky);
     if(!largest.length)return ''; // The anomaly summary already shows these same steps and values.
-    return `<div class="cost-focus"><b>平均用时较长的步骤</b><ul>${largest.map(k=>{const d=m.defs[k];return `<li>${esc(m.names[d.from]||'起点')} → ${esc(m.names[d.to]||'终点')}：<strong>单步平均 ${fmt(m.segments[k].avg)}</strong></li>`;}).join('')}</ul><p class="small-note">用时较长不能据此确定原因。</p></div>`;
+    return `<div class="cost-focus"><b>平均用时较长的步骤</b><ul>${largest.map(k=>{const d=m.defs[k];return `<li>${esc(m.names[d.from]||'起点')} → ${esc(m.names[d.to]||'终点')}：<strong>单步平均 ${fmt(m.segments[k].avg)}</strong></li>`;}).join('')}</ul></div>`;
   }
   function sharedHtml(m,split,prefix='') {
     if(!split.keys.length)return `<p class="shared-status small-note">${esc(split.note)}</p>`;
     const first=m.visibleLines[0],last=m.defs[split.keys[split.keys.length-1]],end=m.names[last.to]||'分开的位置';
     const issues=issueRows(m,split.keys);
-    return `<section class="shared-steps"><div class="shared-heading"><h3>共同经过的步骤</h3><span>${split.keys.length} 步 · 切换结果时不变</span></div><p class="small-note">当前展示的 ${m.visibleLines.length} 项结果，都先从「${esc(first.startName)}」经过相同的步骤，到「${esc(end)}」为止。${m.audience==='technical'?'本页还包括内部记录，共同范围可能与结论页不同。':''}</p>${m.audience==='general'?costFocus(m,split.keys):''}${issues?'<div class="shared-alert"><b>共同部分需要留意</b><ul class="issue-list">'+issues+'</ul></div>':''}<details id="${prefix}shared-fold"><summary>${issues?'查看相关分段及全部':'展开'} ${split.keys.length} 个共同步骤</summary>${m.audience==='technical'?technicalTable(m,split.keys):costHtml(m,first.index,{keys:split.keys})}</details></section>`;
+    return `<section class="shared-steps"><div class="shared-heading"><h3>共同经过的步骤</h3><span>${split.keys.length} 步 · 切换结果时不变</span></div><p class="small-note">当前展示的 ${m.visibleLines.length} 项结果，都先从「${esc(first.startName)}」经过相同的步骤，到「${esc(end)}」为止。${m.audience==='technical'?'本页还包括内部记录，共同范围可能与结论页不同。':''}</p>${m.audience==='general'?costFocus(m,split.keys):''}${issues?'<div class="shared-alert"><b>共同步骤中的较慢或异常记录</b><ul class="issue-list">'+issues+'</ul></div>':''}<details id="${prefix}shared-fold"><summary>${issues?'查看相关分段及全部':'展开'} ${split.keys.length} 个共同步骤</summary>${m.audience==='technical'?technicalTable(m,split.keys):costHtml(m,first.index,{keys:split.keys})}</details></section>`;
   }
 
   function costHtml(m,index,options={}) {
@@ -183,7 +200,7 @@
     const used=new Set(m.visibleLines.flatMap(l=>l.segments));
     const scale=axis(Math.max(...[...used].map(k=>finite((m.segments[k]||{}).avg)?m.segments[k].avg:0)));
     if(!keys.length)return '<p class="empty-tail">经过上面的共同步骤，就已经到达这个结果，没有额外步骤。</p>';
-    return `<p class="small-note">横条越长，花的时间越多。每段按该段有记录的次数取平均；只有同批记录、路径连续完整时才能相加。</p><div class="cost-scale">横条满宽 = ${esc(fmt(scale.cap))}</div>`+keys.map((k,i)=>{
+    return `<p class="small-note">横条表示每一步的平均用时。</p><div class="cost-scale">横条满宽 = ${esc(fmt(scale.cap))}</div>`+keys.map((k,i)=>{
       const s=values[i],d=m.defs[k]||{},name=`${m.names[d.from]||'起点'} → ${m.names[d.to]||'终点'}`;
       const caption=m.audience==='general'?`${s.count||0}/${s.of||m.data.n} 次有记录${s.bad?' · 记录先后异常':s.thin?' · 记录不足':s.spiky?' · 有时明显更慢，最慢 '+fmt(s.max):''}`:`${esc(d.name||s.name||'')} · 涉及${esc(d.owner||s.owner||'未确认')} · ${s.count||0}/${s.of||m.data.n} 轮有记录${s.spiky?' · 有一次或多次明显偏慢':''}`;
       return `<div class="cost-row"><div class="cost-heading"><span>${startAt+i+1}. ${esc(name)}</span><b>单步平均 ${esc(fmt(s.avg))}</b></div><div class="duration-track">${finite(s.avg)&&s.avg>=0?`<i style="width:${s.avg/scale.cap*100}%"></i>`:''}</div><div class="cost-caption">${caption}</div></div>`;
@@ -234,7 +251,7 @@
       p.parts.forEach((part,i)=>{const x=x0+part.offset/a.cap*w,width=part.v/a.cap*w;svg+=`<rect x="${x}" y="28" width="${width}" height="25" fill="${palette[i%palette.length]}"><title>${esc(part.from+' → '+part.to+'：'+fmt(part.v))}</title></rect>`;if(width>28)svg+=`<text x="${x+width/2}" y="45" text-anchor="middle" font-size="12" fill="white">${i+1}</text>`;});svg+='</svg>';
     }
     const exact=v=>finite(v)?v.toFixed(6)+' 秒':'未测到';
-    if(m.audience==='general')return `<div class="round-verdict"><b>第 ${n} 次 · 共等待 ${esc(fmt(p.end))}</b><span>${p.valid?'这一轮的各步用时已核对。':'这次有些步骤没有记全，暂不画完整过程。'}</span></div>${svg}<ol class="round-parts">${p.parts.map((s,i)=>`<li><i style="background:${palette[i%palette.length]}">${i+1}</i><span>${esc(s.from)} → ${esc(s.to)}</span><b>${esc(fmt(s.v))}</b></li>`).join('')}</ol><p class="small-note">这是同一次测量。显示值四舍五入，相加可能差几毫秒。</p><button class="btn" data-report-tech="1">核对详细数据</button>`;
+    if(m.audience==='general')return `<div class="round-verdict"><b>第 ${n} 次 · 共等待 ${esc(fmt(p.end))}</b><span>${p.valid?'':p.parts.some(s=>!finite(s.v))?'这次缺少分段记录，无法展示完整过程。':'这次分段与总用时未能对齐，保留分段记录供核对。'}</span></div>${svg}<ol class="round-parts">${p.parts.map((s,i)=>`<li><i style="background:${palette[i%palette.length]}">${i+1}</i><span>${esc(s.from)} → ${esc(s.to)}</span><b>${esc(fmt(s.v))}</b></li>`).join('')}</ol><button class="btn" data-report-tech="1">核对详细数据</button>`;
     return `<div class="round-verdict"><b title="${exact(p.end)}">第 ${n} 次 · 首尾实测 ${esc(fmt(p.end))}</b><span>${p.valid?'按原始精度核对：分段连接，分段和与首尾用时一致。':'分段缺失、连接不完整或与首尾不符，暂不画连续时间线。'}</span></div>${svg}<ol class="round-parts">${p.parts.map((s,i)=>`<li><i style="background:${palette[i%palette.length]}">${i+1}</i><span>${esc(s.from)} → ${esc(s.to)}</span><b title="${exact(s.v)}">${esc(fmt(s.v))}</b></li>`).join('')}</ol><p class="small-note">这是同一次测量。短段按真实比例绘制；显示值四舍五入，相加可能差几毫秒。</p><details><summary>核对精确用时</summary><table><thead><tr><th>分段</th><th>原始精度（秒）</th></tr></thead><tbody>${p.parts.map(s=>`<tr><td>${esc(s.from)} → ${esc(s.to)}</td><td>${exact(s.v)}</td></tr>`).join('')}<tr><th>分段和</th><td>${p.valid?exact(p.total):'无法完整核对'}</td></tr><tr><th>首尾实测</th><td>${exact(p.end)}</td></tr></tbody></table></details>`;
   }
   function resultOptions(m) {
@@ -281,7 +298,7 @@
   function panel(data,audience='general') {
     const m=model(data,audience),split=sharedPrefix(m),state=selectedState(m),i=state.selected;
     const json=JSON.stringify(data).replace(/</g,'\\u003c').replace(/&/g,'\\u0026');
-    return `<div class="report-inspect" data-audience="${audience}"><script type="application/json" data-role="report-data">${json}</script>${audience==='general'?`<h3>各个结果，平均要等多久</h3><p class="small-note">从各自起点到结果的平均用时，按同一比例绘制。图中名称表示程序记下的事件，是否实际完成可在技术细节核对。</p><div class="scroll">${summarySvg(m)}</div>`:''}${sharedHtml(m,split)}<section class="different-steps"><div class="different-heading"><h3>查看其中各步</h3><p class="small-note">点右侧卡片切换结果。两版均以平均用时为主；单次实测与补充统计另行标明。</p></div><div class="result-switcher"><div class="result-heading"><h3 data-role="cost-title">${esc(resultHeading(m,i))}</h3><p data-role="total-scope" class="small-note">${esc(resultScope(m,i))}</p><p data-role="different-note" class="switch-hint">${i==null?'有记录后可查看。':tailNote(split,i)}</p></div><div class="result-choices" data-role="choices">${resultChoices(m,i)}</div></div><div data-role="cost-content">${tailHtml(m,split,i)}</div>${audience==='technical'?`<div data-role="line-summary">${i==null?'':lineSummary(m,i)}</div>`:''}</section><details class="single-round"><summary>查看某一次的完整过程</summary><label class="round-select">选择测量次数 <select data-role="round-select" aria-label="选择测量次数">${data.rounds.map(r=>`<option value="${r.n}" ${r.n===state.round?'selected':''}>第 ${esc(r.n)} 次</option>`).join('')}</select></label><div data-role="round-content">${i==null?'':roundHtml(m,i,state.round)}</div></details></div>`;
+    return `<div class="report-inspect" data-audience="${audience}"><script type="application/json" data-role="report-data">${json}</script>${audience==='general'?`<h3>各个结果，平均要等多久</h3><p class="small-note">按程序记录的起终点计算，所有结果使用同一比例。</p><div class="scroll">${summarySvg(m)}</div>`:''}${sharedHtml(m,split)}<section class="different-steps"><div class="different-heading"><h3>查看其中各步</h3><p class="small-note">点右侧卡片，查看对应结果的各步用时。</p></div><div class="result-switcher"><div class="result-heading"><h3 data-role="cost-title">${esc(resultHeading(m,i))}</h3><p data-role="total-scope" class="small-note">${esc(resultScope(m,i))}</p><p data-role="different-note" class="switch-hint">${i==null?'有记录后可查看。':tailNote(split,i)}</p></div><div class="result-choices" data-role="choices">${resultChoices(m,i)}</div></div><div data-role="cost-content">${tailHtml(m,split,i)}</div>${audience==='technical'?`<div data-role="line-summary">${i==null?'':lineSummary(m,i)}</div>`:''}</section><details class="single-round"><summary>查看某一次的完整过程</summary><label class="round-select">选择测量次数 <select data-role="round-select" aria-label="选择测量次数">${data.rounds.map(r=>`<option value="${r.n}" ${r.n===state.round?'selected':''}>第 ${esc(r.n)} 次</option>`).join('')}</select></label><div data-role="round-content">${i==null?'':roundHtml(m,i,state.round)}</div></details></div>`;
   }
   function valuesTable(data,kind='lines',audience='technical') {
     const m=model(data,audience),cols=kind==='lines'?m.visibleLines.map(l=>({key:l.index,name:l.endName})):Object.keys(m.defs).map(k=>({key:k,name:m.defs[k].name}));
@@ -296,7 +313,7 @@
     const m=model(data,'general'),all=model(data),rows=[];
     record.lines.forEach(name=>{const line=all.lines.find(l=>l.name===name);if(line)rows.push({name:humanName(line.startName)+' → '+humanName(line.endName),stat:line.stat});});
     [...new Set([...record.segments,...(record.parallel||[])])].forEach(k=>{const d=m.defs[k]||{};rows.push({name:humanName(d.plain||d.short||d.name||'另外记录的一步'),stat:m.segments[k]||{}});});
-    return `<section class="panel" id="sec-rec"><h2>只记录、不判快慢</h2><p class="small-note">这些记录帮助了解完整过程和同时发生的其他步骤，不加入上面的回应时间合计。受处理内容多少影响的记录，不直接判断快慢。</p><details><summary>查看完整过程及独立步骤的全部统计</summary>${rows.map(row=>`<div class="line-summary"><h4>${esc(row.name)}</h4><dl><div><dt>平均用时</dt><dd>${fmt(row.stat.avg)}</dd></div><div><dt>最快</dt><dd>${fmt(row.stat.min)}</dd></div><div><dt>最慢</dt><dd>${fmt(row.stat.max)}</dd></div><div><dt>有记录的次数</dt><dd>${row.stat.count==null?'未提供':row.stat.count}/${row.stat.of||data.n}</dd></div></dl></div>`).join('')}</details></section>`;
+    return `<section class="panel" id="sec-rec"><h2>只记录、不判快慢</h2><p class="small-note">完整过程及独立步骤的记录。</p><details><summary>查看完整过程及独立步骤的全部统计</summary>${rows.map(row=>`<div class="line-summary"><h4>${esc(row.name)}</h4><dl><div><dt>平均用时</dt><dd>${fmt(row.stat.avg)}</dd></div><div><dt>最快</dt><dd>${fmt(row.stat.min)}</dd></div><div><dt>最慢</dt><dd>${fmt(row.stat.max)}</dd></div><div><dt>有记录的次数</dt><dd>${row.stat.count==null?'未提供':row.stat.count}/${row.stat.of||data.n}</dd></div></dl></div>`).join('')}</details></section>`;
   }
   function paint(box,changeLine){
     const data=JSON.parse(box.querySelector('[data-role="report-data"]').textContent),m=model(data,box.dataset.audience),split=sharedPrefix(m),state=selectedState(m),i=state.selected;
@@ -329,7 +346,7 @@
     });
     document.addEventListener('change',e=>{const select=e.target.closest('[data-role="round-select"]'),box=select&&select.closest('.report-inspect');if(!box)return;const m=model(JSON.parse(box.querySelector('[data-role="report-data"]').textContent),box.dataset.audience);controlState(box,m).round=Number(select.value);paint(box,false);});
   }
-  const api={esc,fmt,finite,median,mean,axis,model,pathInfo,summarySvg,roundsOverview,costHtml,roundHtml,resultOptions,resultChoices,sharedPrefix,sharedHtml,referenceInfo,referenceText,issueRows,costFocus,resultHeading,resultScope,findings,comparison,technicalTable,lineSummary,pointCatalog,humanName,panel,valuesTable,extra,recordOnly,install};
+  const api={esc,fmt,finite,median,mean,axis,model,pathInfo,summarySvg,roundsOverview,costHtml,roundHtml,resultOptions,resultChoices,sharedPrefix,sharedHtml,referenceInfo,referenceText,issueRows,costFocus,resultHeading,resultScope,resultIssues,findings,comparison,technicalTable,lineSummary,pointCatalog,humanName,panel,valuesTable,extra,recordOnly,install};
   if(typeof module!=='undefined')module.exports=api;
   root.ReportLayout=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
