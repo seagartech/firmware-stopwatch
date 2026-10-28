@@ -153,10 +153,28 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const heads=host.querySelectorAll('thead th');if(heads.length)heads[heads.length-1].textContent='需关注的记录';
   return host.innerHTML;
  }
- function stageTable(keys,offset=0){
-  if(!keys.length)return '<p class="small-note">共用步骤已到达这个结果，没有额外分段。</p>';
-  let groups;try{groups=stageGroups(m,{segments:keys,start_point:m.defs[keys[0]].from,end_point:m.defs[keys.at(-1)].to},phaseMeta)}catch(e){return table(keys,offset)}
-  let start=offset;return groups.map(g=>{const n=start;start+=g.keys.length;const partial=offset>0&&split.keys.some(k=>{try{return stageGroups(m,m.lines[selected],phaseMeta).some(full=>full.keys.includes(k)&&g.keys.some(t=>full.keys.includes(t)))}catch{return false}});return '<div class="tech-stage"><div class="tech-stage-head"><h4>'+E(g.label)+(partial?'（后续部分）':'')+'</h4><span>'+(partial?'后续步骤平均 ':'阶段平均 ')+F(g.avg)+(g.count<payload.rounds.length?' · '+g.count+'/'+payload.rounds.length+' 次有记录':'')+'</span></div>'+(partial?'<p class="stage-scope">不含上方已列出的共用步骤。</p>':'')+table(g.keys,n)+'</div>'}).join('');
+ // All stages share one header; row groups preserve the actual path order.
+ function stageRows(keys,offset=0){
+  if(!keys.length)return '<tr class="segment-empty"><td colspan="5">'+(split.keys.length?'共用步骤已到达这个结果，没有额外分段。':'此结果没有已记录的分段。')+'</td></tr>';
+  const host=document.createElement('div');host.innerHTML=table(keys,offset);
+  let groups;try{groups=stageGroups(m,{segments:keys,start_point:m.defs[keys[0]].from,end_point:m.defs[keys.at(-1)].to},phaseMeta)}catch{return host.querySelector('tbody').innerHTML}
+  const body=host.querySelector('tbody');
+  for(const g of groups){
+   const first=[...body.querySelectorAll('tr.technical-segment')].find(row=>row.dataset.segment===g.keys[0]);
+   const partial=offset>0&&split.keys.some(k=>{try{return stageGroups(m,m.lines[selected],phaseMeta).some(full=>full.keys.includes(k)&&g.keys.some(t=>full.keys.includes(t)))}catch{return false}});
+   const heading=document.createElement('tr');heading.className='segment-stage-heading';
+   heading.innerHTML='<th colspan="5"><div><span>'+E(g.label)+(partial?'（后续部分）':'')+'</span><span>'+(partial?'后续步骤平均 ':'阶段平均 ')+F(g.avg)+(g.count<payload.rounds.length?' · '+g.count+'/'+payload.rounds.length+' 次有记录':'')+'</span></div></th>';
+   first.before(heading);
+  }
+  return body.innerHTML;
+ }
+ function groupedSegments(){
+  const host=document.createElement('div');host.innerHTML=table(split.keys.length?split.keys:(m.lines[selected]?.segments||[]));
+  const template=host.querySelector('table');if(!template)return '<div id="tech-tail-title" hidden></div><table class="technical-table"><tbody id="tech-tail"></tbody></table>';
+  template.classList.add('grouped-segments');template.setAttribute('aria-label','当前结果的分段用时');template.querySelector('tbody').remove();
+  if(split.keys.length)template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5"><button class="shared-toggle" aria-expanded="'+!!state.commonOpen+'" aria-controls="tech-common-rows">共用步骤 · '+split.keys.length+' 步<span aria-hidden="true">⌄</span></button></th></tr></tbody><tbody id="tech-common-rows"'+(state.commonOpen?'':' hidden')+'>'+stageRows(split.keys)+'</tbody>');
+  template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5" id="tech-tail-title"></th></tr></tbody><tbody id="tech-tail"></tbody>');
+  return host.innerHTML;
  }
  function stats(l){
   const s={...l.stat,...ReportPolicy.stats(payload.rounds.map(r=>r.ends[l.index])),of:payload.rounds.length},values=[['平均用时',F(s.avg)],['最快',F(s.min)],['最慢',F(s.max)],['中位数',F(s.med)],['P90',F(s.p90)],['有效记录',String(s.count??0)+'/'+String(s.of??payload.rounds.length)+' 次']];
@@ -226,10 +244,9 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
  const legacy=m.lines.map(l=>'<h4>'+E(l.endName)+'</h4><p>'+E(l.stat.combo||l.stat.verdict||'未判')+'</p>').join('');
  root.innerHTML=source()+panel('tech-observations','每次用了多久',plot()+observations())+
  panel('d-sec-technical-steps','阶段与分段用时','<div class="result-switcher"><div><p class="fine">选择要核对的结果</p><h3 id="tech-selected-title"></h3><div id="tech-selected-scope"></div></div><div id="tech-choices" class="tech-choices"></div></div><div id="tech-total"></div>'+
- (split.keys.length?'<div class="tech-common"><h3>所有结果共用的步骤 · '+split.keys.length+' 步</h3>'+fold('展开共用步骤',stageTable(split.keys))+'</div>':'<p class="small-note">'+E(split.note)+'</p>')+'<div id="tech-tail"></div>')+
- panel('tech-round','单次完整过程','<div class="tech-round-controls"><label>查看结果 <select id="tech-round-result" aria-label="单次过程的结果">'+m.lines.map(l=>'<option value="'+l.index+'">'+E(l.endName)+'</option>').join('')+'</select></label><label>测试轮次 <select id="tech-round-select" aria-label="技术细节测量轮次">'+payload.rounds.map(r=>'<option value="'+E(r.n)+'">第 '+E(r.n)+' 次</option>').join('')+'</select></label></div><p id="tech-round-line" class="small-note"></p><div id="tech-round-content"></div>')+
- (independent.length?panel('tech-independent','其他已测分段','<p class="small-note">以下分段没有作为上述结果的相加步骤，单独列出；不能再次加进总用时。</p>'+table(independent)):'')+
- panel('tech-evidence','源码、完整数据与日志',fold('全部计时位置与源码上下文',catalog())+fold('全部结果用时（秒）',rawTable('lines'))+fold('全部分段用时（秒）',rawTable('segments'))+fold('原始日志',payload.raw_log?'<p class="code">'+E(payload.raw_log)+'</p><p>本报告保留日志路径，日志文件未嵌入。</p>':'<p>这份数据未附原始日志文件或路径。逐轮数值与源码摘录保存在完整数据中。</p>')+(adjustment?fold('计时范围调整记录','<ul>'+adjustment+'</ul>'):'')+fold('阶段划分依据','<p>阶段只合并同一路径上连续的步骤。下面保留各阶段采用的代码位置；每个阶段包含的步骤见上方分段表。</p><ul>'+Object.values(phaseMeta.boundaries||{}).map(b=>'<li>'+E(b.label)+'：'+E(b.evidence||'未保存划分依据')+'</li>').join('')+'</ul>')+fold('原报告的判定记录','<p>以下保留原报告对本组数据的判定；其中体验判断采用中位数。这里只供追溯，与上方平均用时的比较分开。</p>'+legacy)+ '<p class="fine">页面底部可下载全部数据或保存报告。重新测试、还原固件需在码表主界面操作。</p>');
+ groupedSegments())+
+ '<details class="panel process-fold" id="tech-round"'+(state.processOpen?' open':'')+'><summary>单次完整过程</summary><div class="process-body"><div class="tech-round-controls"><label>查看结果 <select id="tech-round-result" aria-label="单次过程的结果">'+m.lines.map(l=>'<option value="'+l.index+'">'+E(l.endName)+'</option>').join('')+'</select></label><label>测试轮次 <select id="tech-round-select" aria-label="技术细节测量轮次">'+payload.rounds.map(r=>'<option value="'+E(r.n)+'">第 '+E(r.n)+' 次</option>').join('')+'</select></label></div><p id="tech-round-line" class="small-note"></p><div id="tech-round-content"></div></div></details>'+
+ panel('tech-evidence','补充资料',(independent.length?'<details class="tech-fold" id="tech-independent"><summary>其他已测分段 · '+independent.length+' 项</summary><div class="tech-fold-body"><p class="small-note">这些分段不在所选结果的连续路径中，单独保留，不加入总用时。</p>'+table(independent)+'</div></details>':'')+fold('全部计时位置与源码上下文',catalog())+fold('全部结果用时（秒）',rawTable('lines'))+fold('全部分段用时（秒）',rawTable('segments'))+fold('原始日志',payload.raw_log?'<p class="code">'+E(payload.raw_log)+'</p><p>本报告保留日志路径，日志文件未嵌入。</p>':'<p>这份数据未附原始日志文件或路径。逐轮数值与源码摘录保存在完整数据中。</p>')+(adjustment?fold('计时范围调整记录','<ul>'+adjustment+'</ul>'):'')+fold('阶段划分依据','<p>阶段只合并同一路径上连续的步骤。下面保留各阶段采用的代码位置；每个阶段包含的步骤见上方分段表。</p><ul>'+Object.values(phaseMeta.boundaries||{}).map(b=>'<li>'+E(b.label)+'：'+E(b.evidence||'未保存划分依据')+'</li>').join('')+'</ul>')+fold('原报告的判定记录','<p>以下保留原报告对本组数据的判定；其中体验判断采用中位数。这里只供追溯，与上方平均用时的比较分开。</p>'+legacy)+ '<p class="fine">页面底部可下载全部数据或保存报告。重新测试、还原固件需在码表主界面操作。</p>');
  function preciseTime(v,unitFrom=v){
   if(!Number.isFinite(v))return '未记录';
   const factor=Math.abs(unitFrom)>0&&Math.abs(unitFrom)<1?1000:1;
@@ -246,7 +263,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   return host.innerHTML;
  }
 
- function drawRound(){const l=m.lines[selected];if(!l||round===undefined){scope.querySelector('#'+'tech-round-result').disabled=!m.lines.length;scope.querySelector('#'+'tech-round-select').disabled=!payload.rounds.length;scope.querySelector('#'+'tech-round-content').innerHTML='<p>本次没有可展示的逐次过程记录。</p>';return;}scope.querySelector('#'+'tech-round-line').textContent=l.startName+' → '+l.endName+(endsFor(l.segments.at(-1)).length>1?'。结束规则：'+endDescription(l)+'。':'');scope.querySelector('#'+'tech-round-select').value=round;scope.querySelector('#'+'tech-round-result').value=selected;scope.querySelector('#'+'tech-round-content').innerHTML=roundMarkup(selected,round);}
+ function drawRound(){const l=m.lines[selected];if(!l||round===undefined){scope.querySelector('#'+'tech-round-result').disabled=!m.lines.length;scope.querySelector('#'+'tech-round-select').disabled=!payload.rounds.length;scope.querySelector('#'+'tech-round-content').innerHTML='<p>本次没有可展示的逐次过程记录。</p>';return;}scope.querySelector('#'+'tech-round-line').textContent=l.startName+' → '+l.endName+(endsFor(l.segments.at(-1)).length>1?'。结束规则：'+endDescription(l)+'。':'');scope.querySelector('#'+'tech-round-select').value=round;scope.querySelector('#'+'tech-round-result').value=selected;for(const id of ['tech-round-select','tech-round-result']){const select=scope.querySelector('#'+id);for(const option of select.options)option.toggleAttribute('selected',option.value===select.value)}scope.querySelector('#'+'tech-round-content').innerHTML=roundMarkup(selected,round);}
  function recordReview(n){
   const record=payload.rounds.find(r=>r.n===n),review=ReportPolicy.review(m,record,R),affected=review.affected.map(x=>x.l);
   function evidenceRow({k,v,med,count}){
@@ -282,10 +299,12 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   scope.querySelector('#'+'tech-selected-title').textContent=l.endName;
   scope.querySelector('#'+'tech-selected-scope').innerHTML=eventScope(l);
   scope.querySelector('#'+'tech-total').innerHTML=detailsForLine(l);
-  scope.querySelector('#'+'tech-tail').innerHTML='<h3>'+E(l.endName)+' · '+(split.keys.length?'后续':'全部')+'步骤</h3>'+stageTable(split.tails[i]||l.segments,split.keys.length);
+  scope.querySelector('#'+'tech-tail-title').textContent=(split.keys.length?'后续':'全部')+'步骤 · '+l.endName;
+  scope.querySelector('#'+'tech-tail').innerHTML=stageRows(split.tails[i]||l.segments,split.keys.length);
   drawRound();
  }
- root.addEventListener('click',e=>{const b=e.target.closest('[data-tech-line]'),go=e.target.closest('[data-tech-round]');if(b)choose(Number(b.dataset.techLine));if(go)toggleObservation(go);});
+ root.addEventListener('click',e=>{const b=e.target.closest('[data-tech-line]'),go=e.target.closest('[data-tech-round]'),shared=e.target.closest('.shared-toggle');if(b)choose(Number(b.dataset.techLine));if(go)toggleObservation(go);if(shared){state.commonOpen=shared.getAttribute('aria-expanded')!=='true';shared.setAttribute('aria-expanded',String(state.commonOpen));scope.querySelector('#tech-common-rows').hidden=!state.commonOpen;}});
+ root.addEventListener('toggle',e=>{if(e.target.id==='tech-round')state.processOpen=e.target.open},true);
  scope.querySelector('#'+'tech-round-result').addEventListener('change',e=>choose(Number(e.target.value)));
  scope.querySelector('#'+'tech-round-select').addEventListener('change',e=>{round=Number(e.target.value);state.round=round;drawRound()});
  choose(selected);if(!m.lines.length)drawRound();
@@ -329,6 +348,8 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
     summary:Number(scope.querySelector('#outcomes [aria-pressed="true"]')?.dataset.summaryLine),
     technical:Number(scope.querySelector('[data-tech-line][aria-pressed="true"]')?.dataset.techLine),
     round:Number(scope.querySelector('#tech-round-select')?.value),
+    processOpen:scope.querySelector('#tech-round')?.open,
+    commonOpen:scope.querySelector('.shared-toggle')?.getAttribute('aria-expanded')==='true',
     open:[...scope.querySelectorAll('[data-tech-round][aria-expanded="true"]')].map(b=>Number(b.dataset.techRound))};
   }
   states.set(key,state);
@@ -391,6 +412,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
    if(e.target.closest('[data-report-save]')){if(options.onSave)options.onSave();else download('<!doctype html>'+document.documentElement.outerHTML,'固件用时报告.html','text/html');}
   });
   scope.addEventListener('change',e=>{if(e.target.matches('#tech-round-result'))technicalControls()});
+  scope.addEventListener('toggle',()=>updateFloating(),true);
   bindPlot(scope);
   if(summaryLines.length)pick(selected);else{$('summary-grid').hidden=true;scope.querySelectorAll('#v-measure>.panel').forEach(el=>el.hidden=true);$('v-measure').insertAdjacentHTML('beforeend','<section class="panel"><p>'+(!payload.rounds.length?'本次没有逐次测量记录。':'本次没有可单独展示的响应用时。完整过程用时可在技术细节中查看。')+'</p><button class="pill" data-report-tab="tech">查看技术细节</button></section>')}
   technicalControls();view(state.tab||'measure');scope._reportMounted=true;scope._show=view;scope._updateFloating=updateFloating;

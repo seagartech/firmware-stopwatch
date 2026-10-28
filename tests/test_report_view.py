@@ -143,3 +143,16 @@ def test_floating_selector_only_appears_in_its_visible_controlled_range():
 def test_detail_selector_compacts_before_its_statistics_reach_the_header():
     x=run("const b={enabled:true,count:4,anchorTop:60,anchorBottom:320,endBottom:700,top:60,height:72,early:true};console.log(JSON.stringify([V.floatingActive(b),V.floatingActive({...b,anchorTop:61}),V.floatingActive({...b,endBottom:132})]));")
     assert x == [True,False,False]
+
+
+def test_saved_round_selection_is_serializable_for_offline_report_reopening():
+    js = (STATIC/'report-view.js').read_text()
+    draw = js[js.index(' function drawRound()'):js.index(' function recordReview(')]
+    code = r'''
+const select=values=>({get value(){return this._value},set value(v){this._value=String(v)},options:values.map(value=>({value:String(value),selected:false,toggleAttribute(key,on){if(key==='selected')this.selected=on}}))});
+const nodes={'tech-round-select':select([2,9,17]),'tech-round-result':select([0,1]),'tech-round-line':{},'tech-round-content':{}};
+const scope={querySelector:id=>nodes[id.slice(1)]},m={lines:[{startName:'读到卡',endName:'完成解锁',segments:['read','open']},{startName:'读到卡',endName:'亮灯',segments:['read','light']}]};
+const selected=1,round=17,payload={rounds:[{n:2},{n:9},{n:17}]},endsFor=()=>['light'],roundMarkup=(i,n)=>i+':'+n;
+'''
+    result = subprocess.run(['node','-e',code+draw+"drawRound();console.log(JSON.stringify([nodes['tech-round-select'].options.filter(o=>o.selected).map(o=>o.value),nodes['tech-round-result'].options.filter(o=>o.selected).map(o=>o.value),nodes['tech-round-content'].innerHTML]));"],capture_output=True,text=True,check=True)
+    assert json.loads(result.stdout) == [['17'], ['1'], '1:17']
