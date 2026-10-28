@@ -61,7 +61,7 @@ def test_rounds_use_original_precision_and_refuse_missing_negative_or_wrong_tota
 def test_plot_encodes_time_on_x_and_one_row_per_round_without_connecting_rounds():
     out=render("console.log(JSON.stringify(C.roundsOverview(C.model(data))));")
     assert out.count('data-round=')==4 and '<path' not in out and '<polyline' not in out
-    assert 'data-value="0.350000"' in out and '细虚线：中位数' in out
+    assert 'data-value="0.350000"' in out and '细虚线：平均用时' in out
 
 
 def test_audience_filter_does_not_drop_internal_values_or_content_dependent_results():
@@ -100,7 +100,7 @@ def test_gate_measured_result_is_not_hidden_as_if_it_were_variable_length_speech
 
 def test_record_only_explanation_keeps_all_values_without_internal_owner_columns():
     out=render("console.log(JSON.stringify(C.recordOnly(data,{lines:['提示'],segments:['read'],parallel:['motor']})));")
-    for value in ('0.35 秒','0.50 秒','0.10 秒','0.30 秒'):
+    for value in ('0.42 秒','0.50 秒','0.15 秒','0.35 秒'):
         assert value in out
     assert '只记录、不判快慢' in out and '同时发生' in out and '谁负责' not in out
 
@@ -117,7 +117,7 @@ console.log(JSON.stringify([first,parts['[data-role="round-content"]'].innerHTML
 ''')
     assert '首尾实测 0.90 秒' in out[0] and '第 2 次' in out[0]
     assert '首尾实测 0.50 秒' in out[1] and '第 2 次' in out[1]
-    assert out[2]=='亮绿灯｜首尾用时 0.35 秒'
+    assert out[2]=='亮绿灯｜首尾用时 · 平均 0.42 秒'
     assert out[3]=='总用时范围：「刷卡」→「亮绿灯」。'
 
 
@@ -158,7 +158,7 @@ def test_reference_and_anomaly_views_preserve_raw_payload_and_technical_names():
     out=render("data.scenario.point_names.ready='语音活动上报';const before=JSON.stringify(data),g=C.model(data,'general'),t=C.model(data);C.findings(g,'failed');C.comparison(g);console.log(JSON.stringify([JSON.stringify(data)===before,g.names.ready,t.names.ready,C.recordOnly(data,{lines:['提示'],segments:[],parallel:[]})]));")
     assert out[:3]==[True,'程序发出说话状态通知','语音活动上报']
     assert '<details><summary>查看完整过程及独立步骤的全部统计</summary>' in out[3]
-    assert '0.35 秒' in out[3]
+    assert '0.42 秒' in out[3]
 
 
 def test_result_alert_and_advice_entry_survive_without_an_all_clear_fallback():
@@ -167,7 +167,7 @@ def test_result_alert_and_advice_entry_survive_without_an_all_clear_fallback():
     stubs="const activeFixes=()=>[{title:'方案'}],cardOf=(f,x)=>x.k==='line:开锁'?0:-1,recLine=()=> '已有建议',jump=(id,label)=>'<a href=\"#'+id+'\">'+label+'</a>';"
     code="const ReportLayout=C;"+stubs+"const decisions=()=>[{k:'main',lv:0,t:'过慢',d:'旧判断',src:['tiers','标准']},{k:'line:开锁',lv:1,t:'开锁',src:['tiers','标准']},{k:'problem',lv:4,t:'动作异常',d:'仍需处理',src:['rounds','记录']}];"+function+"const m=C.model(data);console.log(JSON.stringify(readableActions({},m)));"
     out=render(code)
-    assert '亮绿灯' in out and '动作异常' in out and '仍需处理' in out
+    assert '亮绿灯' not in out and '动作异常' in out and '仍需处理' in out
     assert '已有建议' in out and '#fix-0' in out and '#sec-tiers' in out
     assert '没有需要' not in out
 
@@ -188,7 +188,7 @@ def test_range_handles_ties_missing_and_one_record_without_inventing_stability()
 
 
 def test_focus_uses_segment_identity_and_valid_values_and_keeps_ties():
-    out=render("data.segments[0].med=.2;const m=C.model(data,'general');const a=C.costFocus(m,['read','verify']);data.segments[1].bad=true;const b=C.costFocus(C.model(data,'general'),['read','verify']);data.segments[0].thin=true;console.log(JSON.stringify([a,b,C.costFocus(C.model(data,'general'),['read','verify'])]));")
+    out=render("data.rounds.forEach(r=>r.segs.read=r.segs.verify);const m=C.model(data,'general');const a=C.costFocus(m,['read','verify']);data.segments[1].bad=true;const b=C.costFocus(C.model(data,'general'),['read','verify']);data.segments[0].thin=true;console.log(JSON.stringify([a,b,C.costFocus(C.model(data,'general'),['read','verify'])]));")
     assert '刷卡 → 读取卡片' in out[0] and '读取卡片 → 校验通过' in out[0]
     assert '读取卡片 → 校验通过' not in out[1]
     assert '不能据此确定原因' in out[0] and '暂不判断' in out[2]
@@ -218,11 +218,42 @@ def test_advice_and_next_step_distinguish_incomplete_analysis_and_bad_data():
 
 def test_result_total_uses_endpoint_statistic_not_sum_of_segment_medians():
     out=render("data.lines[0].med=.9;const m=C.model(data,'general');console.log(JSON.stringify([C.resultHeading(m,0),C.resultScope(m,0),C.panel(data,'general')]));")
-    assert out[0]=='亮绿灯｜完整等待 0.90 秒'
+    assert out[0]=='亮绿灯｜完整等待 · 平均 0.42 秒'
     assert out[1]=='总用时范围：「刷卡」→「亮绿灯」。'
-    assert '单步用时 0.05 秒' in out[2] and '不能直接相加' in out[2]
+    assert '单步平均 0.03 秒' in out[2] and '同批记录' in out[2]
 
 
 def test_total_label_handles_content_dependent_bad_thin_and_missing_data():
-    out=render("const results=[];data.lines[0].verdict='看回答长短';results.push(C.resultHeading(C.model(data,'general'),0));delete data.lines[0].verdict;for(const flag of ['bad','thin']){data.lines[0][flag]=true;results.push(C.resultHeading(C.model(data),0));delete data.lines[0][flag];}data.lines[0].med=null;results.push(C.resultHeading(C.model(data,'general'),0));console.log(JSON.stringify(results));")
-    assert out==['亮绿灯｜完整过程 0.35 秒','亮绿灯｜首尾用时 计时先后异常','亮绿灯｜首尾用时 记录不足','亮绿灯｜完整等待 未测到']
+    out=render("const results=[];data.lines[0].verdict='看回答长短';results.push(C.resultHeading(C.model(data,'general'),0));delete data.lines[0].verdict;for(const flag of ['bad','thin']){data.lines[0][flag]=true;results.push(C.resultHeading(C.model(data),0));delete data.lines[0][flag];}data.lines[0].med=null;data.rounds.forEach(r=>r.ends[0]=null);results.push(C.resultHeading(C.model(data,'general'),0));console.log(JSON.stringify(results));")
+    assert out==['亮绿灯｜完整过程 · 平均 0.42 秒','亮绿灯｜首尾用时 · 平均 计时先后异常','亮绿灯｜首尾用时 · 平均 记录不足','亮绿灯｜完整等待 · 平均 未测到']
+
+
+def test_both_audiences_compute_same_mean_from_valid_rounds_without_mutation():
+    out=render("data.rounds=[{n:1,ends:[0],segs:{read:0}},{n:2,ends:[1],segs:{read:1}},{n:3,ends:[8],segs:{read:8}},{n:4,ends:[null],segs:{read:null}},{n:5,ends:[-1],segs:{read:-1}}];const before=JSON.stringify(data);const ms=['general','technical'].map(a=>C.model(data,a));console.log(JSON.stringify([ms.map(m=>[m.lines[0].stat.avg,m.segments.read.avg]),JSON.stringify(data)===before,ms.map(m=>C.resultHeading(m,0)),C.technicalTable(ms[1],['read'])]));")
+    assert out[0]==[[3,3],[3,3]] and out[1]
+    assert all('平均 3.00 秒' in h for h in out[2])
+    assert 'data-label="平均用时">3.00 秒' in out[3] and 'data-label="中位数（补充）">0.10 秒' in out[3]
+
+
+def test_no_raw_samples_does_not_relabel_saved_median_as_average():
+    out=render("data.rounds=[];const m=C.model(data);console.log(JSON.stringify([m.lines[0].stat.avg,m.segments.read.avg,C.costHtml(m,0),C.resultHeading(m,0)]));")
+    assert out[:2]==[None,None] and '单步平均 未测到' in out[2] and '平均 未测到' in out[3]
+
+
+def test_anomalous_largest_step_is_not_duplicated_in_focus_and_issue_summary():
+    out=render("data.segments[1].spiky=true;data.segments[1].spiky_rounds=[2];const m=C.model(data,'general');console.log(JSON.stringify([C.costFocus(m,['read','verify']),C.issueRows(m,['read','verify'])]));")
+    assert out[0]=='' and '平均 0.25 秒' in out[1]
+
+
+def test_standard_card_has_one_average_and_does_not_relabel_history():
+    out=render("data.lines[0].exp_std={fair:1,statistic:'mean'};data.lines[0].vs={prev:.2,change:'慢了'};const m=C.model(data);console.log(JSON.stringify(C.comparison(m)));")
+    assert out.count('0.42 秒')==1 and '<dt>平均</dt>' not in out
+    assert '历史比较（原记录采用中位数）' in out and '0.20 秒 → 0.35 秒' in out
+
+
+def test_action_summary_uses_mean_and_primary_reference_is_not_repeated():
+    source=(STATIC/'app.js').read_text()
+    function=source[source.index('function readableActions('):source.index('function readableSources(')]
+    code="const ReportLayout=C,activeFixes=()=>[],cardOf=()=>-1,recLine=()=>'',jump=()=>'';const decisions=()=>[{k:'main',lv:0,t:'主线',d:'旧中位数'},{k:'spiky',seg:'read',lv:1,t:'读取偏慢',d:'平时0.1'}];"+function+"console.log(JSON.stringify(readableActions({},C.model(data))));"
+    out=render(code)
+    assert '平均 0.15 秒' in out and '平时0.1' not in out and '旧中位数' not in out
