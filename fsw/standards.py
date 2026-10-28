@@ -500,7 +500,9 @@ def real_scenario(page, standard, values=None):
             "follow": [x["p"] for x in steps if x.get("follow")],
             "points": {x["p"]: {"n": x["n"], "f": x.get("f") or Path(x.get("path") or "").name, "l": x.get("l"),
                                 **({"at": a} if (a := point_at(x)) else {})} for x in steps},
-            "matched": mp}
+            "matched": mp,
+            **({"presentation": page["reportPresentation"]}
+               if isinstance(page.get("reportPresentation"), dict) else {})}
 
 
 UNSEEN = re.compile(r"看不到|看不见|不显示|不会显示|显示不出|藏起来|被隐藏|隐藏了|听不到|听不见|不可见|用户感觉不到|感觉不到")

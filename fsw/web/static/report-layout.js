@@ -64,7 +64,7 @@
     const lines=options.complete?m.visibleLines.filter(l=>l.contentDependent):m.visibleLines.filter(l=>!l.contentDependent),rounds=m.data.rounds;
     const values=rounds.flatMap(r=>lines.map(l=>r.ends[l.index])).filter(v=>finite(v)&&v>=0);
     if(!values.length)return '<p class="small-note">没有逐次用时记录。</p>';
-    const references=m.audience==='general'?[]:[...new Set(lines.map(l=>(l.stat.exp_std||{}).fair).filter(v=>finite(v)&&v>0))];
+    const references=m.audience==='general'?[]:[...new Set(lines.map(l=>(l.stat.exp_std||{}).fair).filter(v=>finite(v)&&v>=0))];
     const bad=new Map();(m.data.labels||[]).filter(v=>v.kind==='problem'||v.kind==='spiky'||v.kind==='line').forEach(v=>(v.rounds||[]).forEach(n=>bad.set(n,[bad.get(n),v.name||v.why||'这次有异常记录'].filter(Boolean).join('；'))));
     const used=new Set(lines.flatMap(l=>l.segments));
     used.forEach(k=>{const s=m.segments[k]||{};if(s.spiky)(s.spiky_rounds||[]).forEach(n=>bad.set(n,'这次有步骤明显偏慢'));});

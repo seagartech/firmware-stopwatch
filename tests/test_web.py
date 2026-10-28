@@ -90,14 +90,25 @@ def test_flow_api_refuses_invalid_moves_in_plain_words(client):
 SCENE_WORDS = re.compile(r"DemoDisplay|小智|xiaozhi|CoreS3|门禁|刷卡|door|voice|语音对话|scene==='")
 
 
+def scenario_code(text):
+    # Reference URLs can contain a category word without selecting a device or scenario.
+    # Keep all executable conditions, labels and ordinary string literals under this check.
+    return re.sub(r'https?://[^\s\"\'<>]+', '', text)
+
+
 def test_code_has_no_scenario_specific_names():
     files = [p for p in WEB.rglob("*") if p.suffix in {".py", ".js", ".html", ".css"}]
     hits = [
         f"{p.name}: {m.group(0)}"
         for p in files
-        for m in SCENE_WORDS.finditer(p.read_text(encoding="utf-8"))
+        for m in SCENE_WORDS.finditer(scenario_code(p.read_text(encoding="utf-8")))
     ]
     assert hits == []
+
+
+def test_reference_url_does_not_mask_a_scenario_specific_condition():
+    assert not SCENE_WORDS.search(scenario_code('"https://example.org/voice-agents"'))
+    assert SCENE_WORDS.search(scenario_code('if(scene===\'voice\'){useSpecialLayout()}'))
 
 
 def test_home_page_reads_real_source_instead_of_demo_data():

@@ -1871,7 +1871,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         out["merged"] = merged
         sc = {**sc, "first_run": not (prev and prev.get("segs") is not None)}  # 没有上次可比：第一次测
         keep = ("name", "start", "segments", "lines", "experiences", "problems", "standard", "matched", "point_names", "points",
-                "first_run", "exp_skip", "parallel")  # parallel：同时在走、不在哪条线路径上的段，报告单列（10-26）
+                "first_run", "exp_skip", "parallel", "last_points", "point_kinds", "category", "line_notes", "presentation")
+        # Keep occurrence rules and optional source-bound presentation with the report.
+        # No preview hardware, firmware version or source interpretation is synthesized here.
         allr = (job or {}).get("rounds", []) if ok and same else []
         quality = {"ok": len(ok), "stale": len([r for r in allr if r.get("stale")]),
                    "missing": len([r for r in allr if not r.get("ok") and not r.get("stale")]), "half": (job or {}).get("half", 0) if raw else 0,
@@ -1884,7 +1886,9 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
         return {**out, "rounds": ok, "raw_log": raw, "scenario": {**{k: sc.get(k) for k in keep}, "experience": main_experience(sc)},
                 "quality": quality, "start_lag": _start_lag(raw, sc), "code": code_ctx(job) if raw else {},
                 "prev": prev,
-                "measured_at": (job or {}).get("measured_at") if ok and same else None}
+                "measured_at": (job or {}).get("measured_at") if ok and same else None,
+                **({"measurement_environment": job["measurement_environment"]}
+                   if same and isinstance((job or {}).get("measurement_environment"), dict) else {})}
 
     def _late_names(late):
         """晚到的尾巴点按名字数次数：[{name, n, how}]。"""

@@ -56,6 +56,20 @@ def test_first_full_run_only_records_and_old_range_list_is_ignored(app):
     assert c.get("/api/rangelist").status_code == 404 and c.get("/api/rangelists").status_code == 404
 
 
+def test_report_keeps_source_bound_presentation_and_occurrence_without_example_hardware(app):
+    c, _, _, tmp_path = app
+    page = json.loads(json.dumps(PAGE))
+    page["reportPresentation"] = {"phases": {"boundaries": {}, "resultNames": {}}, "events": {"events": {}}}
+    c.post("/api/collect/start", json={"page": page, "source": "device", "rounds": 10,
+                                     "project_dir": str(tmp_path / "data" / "presentation")})
+    wait(c, lambda j: j["status"] == "done")
+    report = c.get("/api/report").json()
+    assert report["scenario"]["presentation"] == page["reportPresentation"]
+    assert report["scenario"]["last_points"] == stds.real_scenario(page, None)["last_points"]
+    assert "point_kinds" in report["scenario"] and "line_notes" in report["scenario"]
+    assert "measurement_environment" not in report  # No version or hardware example is invented.
+
+
 # ---- 导出：一个 HTML 文件，存在项目文件夹的 reports/，文件名"场景_测完时间.html"，断网能开 ----
 
 PAGE_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>body{}</style></head><body><h1>报告</h1><script>function sw(v){}</script></body></html>'

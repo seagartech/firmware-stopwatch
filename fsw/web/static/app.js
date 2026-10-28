@@ -879,6 +879,7 @@ let AUTOSAVED='';
 function autoSave(){if(page!=='report'||!repKey().startsWith('real')||!JREP||JREP._none||!JREP.measured_at||AUTOSAVED===JREP.measured_at)return;
  if(ADV?ADV.status==='running':D0ok())return;AUTOSAVED=JREP.measured_at;if(EXP.state==='ok'&&EXP.saved)return;setTimeout(()=>exportReport(),300)}
 async function exportReport(folder){
+  if(typeof ReportView!=='undefined'&&document.querySelector('.product-report'))return exportModernReport(folder);
   const keep={mode,fixTodo},m=document.getElementById('main');
   mode='boss';fixTodo=false;render();const boss=m.innerHTML;mode='dev';render();const dev=m.innerHTML;mode=keep.mode;fixTodo=keep.fixTodo;render();
   const css=await (await fetch('/static/style.css')).text(),layoutScript=await (await fetch('/static/report-layout.js')).text();
@@ -901,6 +902,24 @@ async function exportReport(folder){
   if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
   {const t=document.getElementById('toast');if(t&&t.classList.contains('t-bad'))t.hidden=true}  // 上一次没导出成功的红色提示，这次成功了就收起
   EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path}
+// Export the same report tree and renderer; no server or external assets are required to read it.
+async function exportModernReport(folder){
+ const scope=document.querySelector('.product-report'),copy=scope.cloneNode(true);
+ copy.dataset.offline='true';copy.querySelector('[data-slot="notice"]').innerHTML='';
+ copy.querySelector('[data-slot="actions"]').innerHTML='<p class="small-note">复测和还原固件需在码表主界面操作。</p>';
+ const advice=copy.querySelector('[data-slot="advice"]');advice.innerHTML=expStrip(advice.innerHTML,'');
+ const files=['style.css','report-view.css','report-layout.js','report-rules.js','report-view.js'];
+ const assets=await Promise.all(files.map(async name=>[name,await(await fetch('/static/'+name)).text()]));
+ const css=assets.filter(([n])=>n.endsWith('.css')).map(([,s])=>s).join('\n');
+ const scripts=assets.filter(([n])=>n.endsWith('.js')).map(([,s])=>s.replace(/<\/script/gi,'<\\/script')).join('\n');
+ const at=htmlEsc(JREP&&JREP.measured_at||'测试时间未记录'),what=expWhat()||'测量报告';
+ const html='<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>固件用时报告</title><style>'+css+'</style></head><body><main class="wrap"><header><h1>固件用时报告</h1><p class="note">'+at+'</p></header>'+copy.outerHTML+'</main><div id="tip" hidden></div><script>'+scripts+'\nReportView.install();ReportLayout.install(target=>ReportView.show(document.querySelector(".product-report"),"tech",target));ReportView.mount(document.querySelector(".product-report"));'+tipShow.toString()+todoCopy.toString()+codeTog.toString()+';document.addEventListener("click",e=>{todoCopy(e)||codeTog(e)});document.addEventListener("mouseover",tipShow);document.addEventListener("focusin",tipShow);<\/script></body></html>';
+ let r,j;try{r=await fetch('/api/report/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html,what,demo:repKey().startsWith('real')?null:scene,folder:folder||null})});j=await r.json()}catch(e){r={ok:false};j={detail:'码表后台没有回应。'}}
+ if(!r.ok){EXP.state='fail';EXP.err=j.detail||'导出没成功';toast('✕ '+EXP.err);render();return}
+ const toastElement=document.getElementById('toast');if(toastElement?.classList.contains('t-bad'))toastElement.hidden=true;
+ EXP.saved=j.path;EXP.state='ok';EXP.partial=!!(ADV&&ADV.status!=='done'&&repKey().startsWith('real'));histLoad();render();return j.path;
+}
+
 // 协作沟通（10-21 用户定）：每人一段消息。服务器、网络、第三方可能是别家公司，消息一律按外部对接人写：
 // 不带我们的源码位置，不用码表的内部说法（码表、达标率、线名），附设备外几段的每轮数据方便对方对日志；发给固件研发的另附改法和代码位置
 const isFw=w=>/固件/.test(w);
@@ -974,6 +993,7 @@ function recOnlyBox(D){const R=D.S.recOnly,J=D.J;if(!R||!J||!(R.lines.length||R.
  <p class="note" style="margin:8px 0 0">${R.lines.length?'线：长短主要看这次回答说了多少字，不判快慢，也不画进上面的图、不进结论；':''}数照样从原始日志算，单位秒。</p></section>`}
 function reportPage(D){
   if(JREP&&JREP._key===repKey()&&JREP._error)return `<div class="errbox"><b>报告暂时不能生成</b><p>${htmlEsc(JREP._error)}</p></div>`;
+  if(typeof ReportView!=='undefined'&&D.J&&D.J.scenario&&D.J.rounds)return modernReport(D);
   if(mode==='dev')return dev(D);
   if(typeof ReportLayout!=='undefined'&&D.J&&D.J.scenario&&D.J.rounds)return readableReport(D);
   return `<div class="stack">${expDone()}<div><div class="titlerow">${titleHtml(D)}${vsTag()}</div><p class="sub">${subline(D)}</p>${D.S.real&&JREP?checksBox(JREP):''}${D.S.real&&JREP?`<details class="fold"><summary>数据怎么来的、起点怎么算</summary>${qualityLine(JREP.quality,JREP)+startLagLine(D.S.startShort,JREP.start_lag,startGap(JREP))+mergedLine(JREP.merged)}</details>`:''}${D.n<10?`<p class="note" style="margin:4px 0 0;color:var(--bad)">只测了 ${D.n} 轮，适合跑流程，数字不作数；要看一般多快、偶尔出的问题，建议测到 20 轮。</p>`:''}</div>
@@ -986,6 +1006,15 @@ function reportPage(D){
 }
 
 // Keep existing advice choices and links, but do not turn an empty action list into an all-clear.
+// Product report: the approved three-tab layout, with existing advice and live actions.
+function modernReport(D){
+ const fixes=activeFixes(D),pending=D.S.real&&(!ADV||ADV.status!=='done');
+ const advice=(pending?advBox():'')+(fixes.length?fixA(D):(!pending?'<div class="panel"><p>本报告未附经核对通过的修改建议。</p></div>':''))+
+  (fixes.length?'<details class="panel"><summary>研发处理细节</summary>'+fixDev(D)+'</details>':'');
+ const actions='<section class="panel" id="sec-research-actions"><h2>复测与还原</h2>'+retestEntry()+restoreBox(scene)+(D.J.raw_log?'<button class="pill" data-openlog="1">打开原始日志所在文件夹</button>':'')+'</section>';
+ return ReportView.shell(D.J,{real:!!D.S.real,adviceHtml:advice,actionsHtml:actions,noticeHtml:expDone()});
+}
+
 function readableActions(D,m){
   const FX=activeFixes(D),ds=decisions(D).filter(x=>x.lv!==3);
   const rows=ds.map(x=>{
@@ -1758,8 +1787,10 @@ function render(){if(booting||!scene||!SCENES[scene])return;applyScene();
   else if(page==='retest')body=retestPage();
   else body=`<div class="panel todo">这一页还没做样子，按顺序下一步做。</div>`;
   const PG=(RV?'run':page)+'|'+mode,mEl=document.getElementById('main'),same=mEl.dataset.pg===PG&&mEl.firstElementChild;
-  if(same)morphHTML(mEl.firstElementChild,body);else mEl.innerHTML=`<div class="view">${body}</div>`;  // 换页才整页换（带淡入），同一页只改变了的地方
+  const modernReportActive=isReport&&typeof ReportView!=='undefined'&&body.includes('class="product-report');
+  if(modernReportActive)ReportView.update(mEl,body,{onSave:exportStart});else if(same)morphHTML(mEl.firstElementChild,body);else mEl.innerHTML=`<div class="view">${body}</div>`;  // 换页才整页换（带淡入），同一页只改变了的地方
   if(mEl.dataset.pg!==PG)mEl.dataset.pg=PG;
+  document.getElementById('verseg').hidden=!isReport||modernReportActive;
   const md=document.getElementById('modal');md.hidden=RV||!(isHome&&hStage>=2);
   if(!md.hidden)morphHTML(document.getElementById('dlg'),modalHTML());
   const pp=document.getElementById('pop');pp.hidden=!pop;if(pop)morphHTML(document.getElementById('popdlg'),popHTML());
@@ -1864,7 +1895,8 @@ function todoCopy(e){const b=e.target.closest&&e.target.closest('[data-copy]');i
   if(!b.dataset.html)b.dataset.html=b.innerHTML;b.innerHTML='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg>已复制';b.classList.add('done');
   clearTimeout(b._t);b._t=setTimeout(()=>{b.innerHTML=b.dataset.html;b.classList.remove('done')},2000);return true}
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
-if(typeof ReportLayout!=='undefined')ReportLayout.install(target=>{mode='dev';render();if(target)document.getElementById(target)?.scrollIntoView({block:'start'});else window.scrollTo(0,0)});
+if(typeof ReportView!=='undefined')ReportView.install();
+if(typeof ReportLayout!=='undefined')ReportLayout.install(target=>{const report=document.querySelector('.product-report');if(report){ReportView.show(report,'tech',target);return;}mode='dev';render();if(target)document.getElementById(target)?.scrollIntoView({block:'start'});else window.scrollTo(0,0)});
 document.addEventListener('mouseover',tipShow);document.addEventListener('focusin',tipShow);document.addEventListener('scroll',()=>{document.getElementById('tip').hidden=true},true);
 document.addEventListener('click',e=>{
   const nd=e.target.closest('[data-need]');if(nd){if(nd.dataset.needgo&&nd.dataset.needgo!==page){if(hStage>=2)hStage=1;page=nd.dataset.needgo;render();window.scrollTo(0,0);return}const g=nd.parentElement.querySelector('.gate');if(g)g.classList.add('hit');nudge(nd.dataset.need);return}
