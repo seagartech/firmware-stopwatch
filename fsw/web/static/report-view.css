@@ -23,3 +23,8 @@
 .product-report #v-advice{padding-top:6px}.product-report #v-advice h2{margin:0 0 16px}.product-report [data-slot=actions]{margin-top:22px}
 .product-report .tech-round-controls select:disabled{opacity:.5;background:#e9eeeb;color:#89968e;cursor:not-allowed}
 @media(max-width:700px){.product-report{padding:18px 16px}.product-report .report-bottom{flex-wrap:wrap}}
+/* A technical result selector stays available only over the data that it controls. */
+.product-report #v-tech .tech-inspection.compact-active #tech-choices{visibility:hidden;pointer-events:none}
+.product-report #v-tech .tech-inspection.compact-active .tech-round-result-control{display:none}
+.product-report #v-tech #tech-tail>h3,.product-report #v-tech #tech-round>h2{position:sticky;top:calc(var(--report-top) + var(--tech-switch-height,72px) + 8px);z-index:90;background:#fff;padding:12px 0;margin-top:-12px}
+.product-report #v-tech #tech-tail,.product-report #v-tech #tech-round{scroll-margin-top:calc(var(--report-top) + var(--tech-switch-height,72px) + 28px)}

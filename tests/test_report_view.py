@@ -116,3 +116,27 @@ const scene='fixture',D={J:{raw_log:'fixture.log'},S:{real:true}};
     assert 'data-advretry' in x['adviceHtml'] and 'data-copy' in x['adviceHtml']
     assert 'technical options' in x['adviceHtml']
     assert all(k in x['actionsHtml'] for k in ['data-retest','data-restore','data-openlog'])
+
+
+@pytest.mark.parametrize('count', [0, 1, 2, 3, 4, 7])
+def test_compact_result_controls_follow_data_count_and_keep_stable_indices(count):
+    x=run(f"const lines=Array.from({{length:{count}}},(_,i)=>({{index:i+8,endName:'结果<'+i+'>'}}));console.log(JSON.stringify(V.compactOptions(lines,9,'data-choice','data-select','选择结果')));")
+    if count < 2:
+        assert x == ''
+    elif count <= 3:
+        assert x.count('<button') == count and '<select' not in x
+        assert 'data-choice="9"' in x and 'aria-pressed="true"' in x
+        assert '结果&lt;1&gt;' in x
+    else:
+        assert x.count('<option') == count and x.count('<select') == 1
+        assert 'value="9" selected' in x and '结果&lt;1&gt;' in x
+
+
+def test_floating_selector_only_appears_in_its_visible_controlled_range():
+    x=run("const b={enabled:true,count:4,anchorBottom:140,endBottom:700,top:60,height:72};console.log(JSON.stringify([b,{...b,enabled:false},{...b,count:0},{...b,anchorBottom:141},{...b,endBottom:132}].map(V.floatingActive)));")
+    assert x == [True,False,False,False,False]
+
+
+def test_detail_selector_compacts_before_its_statistics_reach_the_header():
+    x=run("const b={enabled:true,count:4,anchorTop:60,anchorBottom:320,endBottom:700,top:60,height:72,early:true};console.log(JSON.stringify([V.floatingActive(b),V.floatingActive({...b,anchorTop:61}),V.floatingActive({...b,endBottom:132})]));")
+    assert x == [True,False,False]
