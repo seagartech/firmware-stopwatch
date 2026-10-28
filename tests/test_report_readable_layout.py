@@ -113,10 +113,12 @@ const box={dataset:{audience:'technical'},querySelector(q){if(q==='[data-role="r
 global.document={addEventListener(k,f){listeners[k]=f}};C.install(()=>{});
 listeners.change({target:select});const first=parts['[data-role="round-content"]'].innerHTML;
 listeners.click({target:{closest(q){return q==='[data-line]'?buttons[0]:null}}});
-console.log(JSON.stringify([first,parts['[data-role="round-content"]'].innerHTML]));
+console.log(JSON.stringify([first,parts['[data-role="round-content"]'].innerHTML,parts['[data-role="cost-title"]'].textContent,parts['[data-role="total-scope"]'].textContent]));
 ''')
     assert '首尾实测 0.90 秒' in out[0] and '第 2 次' in out[0]
     assert '首尾实测 0.50 秒' in out[1] and '第 2 次' in out[1]
+    assert out[2]=='亮绿灯｜首尾用时 0.35 秒'
+    assert out[3]=='总用时范围：「刷卡」→「亮绿灯」。'
 
 
 def test_mean_reference_uses_raw_rounds_not_median_or_passing_proportion():
@@ -212,3 +214,15 @@ def test_advice_and_next_step_distinguish_incomplete_analysis_and_bad_data():
     assert 'data-advretry' not in out[0] and '尚未就绪' in out[0]
     assert 'data-advretry' in out[1] and '不直接证明根因' in out[1]
     assert '先请研发补齐' in out[2] and 'sec-research-actions' in out[2]
+
+
+def test_result_total_uses_endpoint_statistic_not_sum_of_segment_medians():
+    out=render("data.lines[0].med=.9;const m=C.model(data,'general');console.log(JSON.stringify([C.resultHeading(m,0),C.resultScope(m,0),C.panel(data,'general')]));")
+    assert out[0]=='亮绿灯｜完整等待 0.90 秒'
+    assert out[1]=='总用时范围：「刷卡」→「亮绿灯」。'
+    assert '单步用时 0.05 秒' in out[2] and '不能直接相加' in out[2]
+
+
+def test_total_label_handles_content_dependent_bad_thin_and_missing_data():
+    out=render("const results=[];data.lines[0].verdict='看回答长短';results.push(C.resultHeading(C.model(data,'general'),0));delete data.lines[0].verdict;for(const flag of ['bad','thin']){data.lines[0][flag]=true;results.push(C.resultHeading(C.model(data),0));delete data.lines[0][flag];}data.lines[0].med=null;results.push(C.resultHeading(C.model(data,'general'),0));console.log(JSON.stringify(results));")
+    assert out==['亮绿灯｜完整过程 0.35 秒','亮绿灯｜首尾用时 计时先后异常','亮绿灯｜首尾用时 记录不足','亮绿灯｜完整等待 未测到']

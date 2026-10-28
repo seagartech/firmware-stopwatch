@@ -166,7 +166,7 @@
     if(!valid.length)return '<p class="small-note">这部分还没有足够的有效记录，暂不判断主要用时。</p>';
     const max=Math.max(...valid.map(k=>m.segments[k].med));
     const largest=valid.filter(k=>m.segments[k].med===max);
-    return `<div class="cost-focus"><b>这部分用时较多的步骤</b><ul>${largest.map(k=>{const d=m.defs[k];return `<li>${esc(m.names[d.from]||'起点')} → ${esc(m.names[d.to]||'终点')}：一般 ${fmt(m.segments[k].med)}</li>`;}).join('')}</ul><p class="small-note">按各步的一般用时比较；用时较多不代表有故障，也不能据此确定原因。</p></div>`;
+    return `<div class="cost-focus"><b>单步用时 · 较长的步骤</b><ul>${largest.map(k=>{const d=m.defs[k];return `<li>${esc(m.names[d.from]||'起点')} → ${esc(m.names[d.to]||'终点')}：<strong>单步用时 ${fmt(m.segments[k].med)}</strong></li>`;}).join('')}</ul><p class="small-note">用时较长不能据此确定原因。</p></div>`;
   }
   function sharedHtml(m,split,prefix='') {
     if(!split.keys.length)return `<p class="shared-status small-note">${esc(split.note)}</p>`;
@@ -183,7 +183,7 @@
     return `<p class="small-note">横条越长，花的时间越多。各段分别统计，不能相加当作总等待时间。</p><div class="cost-scale">横条满宽 = ${esc(fmt(scale.cap))}</div>`+keys.map((k,i)=>{
       const s=values[i],d=m.defs[k]||{},name=`${m.names[d.from]||'起点'} → ${m.names[d.to]||'终点'}`;
       const caption=m.audience==='general'?`${s.count||0}/${s.of||m.data.n} 次有记录${s.bad?' · 记录先后异常':s.thin?' · 记录不足':s.spiky?' · 有时明显更慢，最慢 '+fmt(s.max):''}`:`${esc(d.name||s.name||'')} · 涉及${esc(d.owner||s.owner||'未确认')} · ${s.count||0}/${s.of||m.data.n} 轮有记录${s.spiky?' · 有一次或多次明显偏慢':''}`;
-      return `<div class="cost-row"><div class="cost-heading"><span>${startAt+i+1}. ${esc(name)}</span><b>${esc(fmt(s.med))}</b></div><div class="duration-track">${finite(s.med)&&s.med>=0?`<i style="width:${s.med/scale.cap*100}%"></i>`:''}</div><div class="cost-caption">${caption}</div></div>`;
+      return `<div class="cost-row"><div class="cost-heading"><span>${startAt+i+1}. ${esc(name)}</span><b>单步用时 ${esc(fmt(s.med))}</b></div><div class="duration-track">${finite(s.med)&&s.med>=0?`<i style="width:${s.med/scale.cap*100}%"></i>`:''}</div><div class="cost-caption">${caption}</div></div>`;
     }).join('');
   }
   function codeContext(m,point) {
@@ -240,7 +240,7 @@
   function resultChoices(m,selected,prefix='') {
     const options=resultOptions(m);
     if(!options.length)return '<p class="small-note">这份报告还没有可展示的结果。</p>';
-    return options.map(o=>`<div class="result-choice"><button type="button" class="btn result-button" data-line="${o.index}" aria-pressed="${o.index===selected}" ${o.available?'':'disabled'}><span class="result-card-label">${esc(o.label)}</span><span class="result-card-note">${o.index===selected?'正在查看':o.available?'查看各步用时':'还没有记录'}</span></button>${o.available?'':'<small>还差：这项结果的有效用时记录。</small>'}</div>`).join('');
+    return options.map(o=>`<div class="result-choice"><button type="button" class="btn result-button" data-line="${o.index}" aria-pressed="${o.index===selected}" ${o.available?'':'disabled'}><span class="result-card-label">${esc(o.label)}</span><span class="result-card-note">${o.index===selected?'正在查看':o.available?'查看单步用时':'还没有记录'}</span></button>${o.available?'':'<small>还差：这项结果的有效用时记录。</small>'}</div>`).join('');
   }
   // Only vocabulary is translated. Point identity, endpoints and measured values are untouched.
   function humanName(name) {
@@ -264,11 +264,21 @@
     const issues=issueRows(m,keys);
     return `${costFocus(m,keys)}${issues?'<ul class="issue-list">'+issues+'</ul>':''}<details><summary>查看这部分全部 ${keys.length} 步的用时</summary>${costs}</details>`;
   }
-  function tailNote(split,i){return split.keys.length?(split.tails[i].length?`接着上面的 ${split.keys.length} 个共同步骤，还需下面 ${split.tails[i].length} 步。`:'完成共同步骤，就已经到达这个结果。'):'下面是到达所选结果的全部步骤。';}
+  function resultHeading(m,i){
+    if(i==null)return '查看其中各步';
+    const l=m.lines[i],s=l.stat,label=l.contentDependent?'完整过程':m.audience==='technical'?'首尾用时':'完整等待';
+    const value=s.bad?'计时先后异常':s.thin?'记录不足':finite(s.med)&&s.med>=0?fmt(s.med):'未测到';
+    return `${l.endName}｜${label} ${value}`;
+  }
+  function resultScope(m,i){
+    if(i==null)return '';
+    const l=m.lines[i];return `总用时范围：「${l.startName}」→「${l.endName}」。`;
+  }
+  function tailNote(split,i){return split.keys.length?(split.tails[i].length?`共用步骤已在上方列出；下面是其余 ${split.tails[i].length} 步。`:'完成共同步骤，就已经到达这个结果。'):'下面是到达所选结果的全部步骤。';}
   function panel(data,audience='general') {
     const m=model(data,audience),split=sharedPrefix(m),state=selectedState(m),i=state.selected;
     const json=JSON.stringify(data).replace(/</g,'\\u003c').replace(/&/g,'\\u0026');
-    return `<div class="report-inspect" data-audience="${audience}"><script type="application/json" data-role="report-data">${json}</script>${audience==='general'?`<h3>各个结果，一般要等多久</h3><p class="small-note">从各自起点到结果的用时，中位数按同一比例绘制。图中名称表示程序记下的事件，是否实际完成可在技术细节核对。</p><div class="scroll">${summarySvg(m)}</div>`:''}${sharedHtml(m,split)}<section class="different-steps"><div class="different-heading"><h3>到达各个结果的后续步骤</h3><p class="small-note">上面的共同步骤只显示一次。点右侧卡片，看分开以后还做了什么。</p></div><div class="result-switcher"><div class="result-heading"><h3 data-role="cost-title">${i==null?'每一步花了多久':'到「'+esc(m.lines[i].endName)+'」'}</h3><p data-role="different-note" class="switch-hint">${i==null?'有记录后可查看。':tailNote(split,i)}</p></div><div class="result-choices" data-role="choices">${resultChoices(m,i)}</div></div><div data-role="cost-content">${tailHtml(m,split,i)}</div>${audience==='technical'?`<div data-role="line-summary">${i==null?'':lineSummary(m,i)}</div>`:''}</section><details class="single-round"><summary>查看某一次的完整过程</summary><label class="round-select">选择测量次数 <select data-role="round-select" aria-label="选择测量次数">${data.rounds.map(r=>`<option value="${r.n}" ${r.n===state.round?'selected':''}>第 ${esc(r.n)} 次</option>`).join('')}</select></label><div data-role="round-content">${i==null?'':roundHtml(m,i,state.round)}</div></details></div>`;
+    return `<div class="report-inspect" data-audience="${audience}"><script type="application/json" data-role="report-data">${json}</script>${audience==='general'?`<h3>各个结果，一般要等多久</h3><p class="small-note">从各自起点到结果的用时，中位数按同一比例绘制。图中名称表示程序记下的事件，是否实际完成可在技术细节核对。</p><div class="scroll">${summarySvg(m)}</div>`:''}${sharedHtml(m,split)}<section class="different-steps"><div class="different-heading"><h3>查看其中各步</h3><p class="small-note">点右侧卡片切换结果。完整用时和单步用时均取各自的中位数，不能直接相加。</p></div><div class="result-switcher"><div class="result-heading"><h3 data-role="cost-title">${esc(resultHeading(m,i))}</h3><p data-role="total-scope" class="small-note">${esc(resultScope(m,i))}</p><p data-role="different-note" class="switch-hint">${i==null?'有记录后可查看。':tailNote(split,i)}</p></div><div class="result-choices" data-role="choices">${resultChoices(m,i)}</div></div><div data-role="cost-content">${tailHtml(m,split,i)}</div>${audience==='technical'?`<div data-role="line-summary">${i==null?'':lineSummary(m,i)}</div>`:''}</section><details class="single-round"><summary>查看某一次的完整过程</summary><label class="round-select">选择测量次数 <select data-role="round-select" aria-label="选择测量次数">${data.rounds.map(r=>`<option value="${r.n}" ${r.n===state.round?'selected':''}>第 ${esc(r.n)} 次</option>`).join('')}</select></label><div data-role="round-content">${i==null?'':roundHtml(m,i,state.round)}</div></details></div>`;
   }
   function valuesTable(data,kind='lines',audience='technical') {
     const m=model(data,audience),cols=kind==='lines'?m.visibleLines.map(l=>({key:l.index,name:l.endName})):Object.keys(m.defs).map(k=>({key:k,name:m.defs[k].name}));
@@ -289,9 +299,10 @@
     const data=JSON.parse(box.querySelector('[data-role="report-data"]').textContent),m=model(data,box.dataset.audience),split=sharedPrefix(m),state=selectedState(m),i=state.selected;
     if(i==null)return;
     if(changeLine){
-      box.querySelector('[data-role="cost-title"]').textContent='到「'+m.lines[i].endName+'」';
+      box.querySelector('[data-role="cost-title"]').textContent=resultHeading(m,i);
+      box.querySelector('[data-role="total-scope"]').textContent=resultScope(m,i);
       box.querySelector('[data-role="different-note"]').textContent=tailNote(split,i);
-      box.querySelectorAll('[data-line]').forEach(b=>{const active=Number(b.dataset.line)===i;b.setAttribute('aria-pressed',String(active));b.querySelector('.result-card-note').textContent=active?'正在查看':b.disabled?'还没有记录':'查看各步用时';});
+      box.querySelectorAll('[data-line]').forEach(b=>{const active=Number(b.dataset.line)===i;b.setAttribute('aria-pressed',String(active));b.querySelector('.result-card-note').textContent=active?'正在查看':b.disabled?'还没有记录':'查看单步用时';});
       box.querySelector('[data-role="cost-content"]').innerHTML=tailHtml(m,split,i);
       const total=box.querySelector('[data-role="line-summary"]');if(total)total.innerHTML=lineSummary(m,i);
     }
@@ -315,7 +326,7 @@
     });
     document.addEventListener('change',e=>{const select=e.target.closest('[data-role="round-select"]'),box=select&&select.closest('.report-inspect');if(!box)return;const m=model(JSON.parse(box.querySelector('[data-role="report-data"]').textContent),box.dataset.audience);controlState(box,m).round=Number(select.value);paint(box,false);});
   }
-  const api={esc,fmt,finite,median,axis,model,pathInfo,summarySvg,roundsOverview,costHtml,roundHtml,resultOptions,resultChoices,sharedPrefix,sharedHtml,referenceInfo,referenceText,issueRows,costFocus,findings,comparison,technicalTable,lineSummary,pointCatalog,humanName,panel,valuesTable,extra,recordOnly,install};
+  const api={esc,fmt,finite,median,axis,model,pathInfo,summarySvg,roundsOverview,costHtml,roundHtml,resultOptions,resultChoices,sharedPrefix,sharedHtml,referenceInfo,referenceText,issueRows,costFocus,resultHeading,resultScope,findings,comparison,technicalTable,lineSummary,pointCatalog,humanName,panel,valuesTable,extra,recordOnly,install};
   if(typeof module!=='undefined')module.exports=api;
   root.ReportLayout=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
