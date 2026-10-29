@@ -52,3 +52,21 @@
 .product-report #v-tech .process-fold>summary::after{content:'⌄';font-size:18px;color:#567467}
 .product-report #v-tech .process-fold[open]>summary::after{transform:rotate(180deg)}
 .product-report #v-tech .grouped-segments thead th{position:sticky;top:calc(var(--report-top) + var(--tech-switch-height,79px));z-index:80;background:#f6f8f7}
+/* Keep the shared path at the same position while switching results. */
+.product-report #v-tech .tech-overview{display:flow-root;overflow-anchor:none}
+.product-report #v-tech .shared-scope-note{display:block;margin-top:4px;font-size:12px;font-weight:400;color:#738780}
+.product-report #v-tech .tech-stats dt{min-height:3em;line-height:1.5}
+/* Align values against the tallest label in each statistics row. */
+.product-report #v-tech .tech-stats{align-items:stretch}
+.product-report #v-tech .tech-stats>div{display:grid;grid-template-rows:1fr auto;min-width:0}
+.product-report #v-tech .tech-stats dt{min-height:0}
+.product-report #v-tech .tech-stats dd{align-self:end}
+.product-report #v-tech .tech-round-controls>div{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:12px;width:100%;min-width:0;font-size:12px;color:#607b6c}
+.product-report #v-tech .process-buttons{display:flex;gap:6px;min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;padding-bottom:6px;scrollbar-width:thin}
+.product-report #v-tech .process-buttons button{flex:0 0 auto;min-width:56px;height:40px;padding:0 10px;border:1px solid #cfddd5;border-radius:8px;background:#fff;color:#48645a;font-size:13px;cursor:pointer}
+.product-report #v-tech .process-buttons button[aria-pressed=true]{background:#dceee4;border-color:#59977d;color:#195b45}
+.product-report #v-tech .process-tooltip{position:fixed;z-index:200;max-width:min(340px,calc(100vw - 24px));box-sizing:border-box;padding:10px 14px;border-radius:8px;background:#244d43;color:#fff;box-shadow:0 4px 14px #17372b26;white-space:pre-line;font-size:13px;line-height:1.6;pointer-events:none}
+.product-report #v-tech .round-svg [data-process-tip]{cursor:help;outline:none}
+.product-report #v-tech .round-svg [data-process-tip]:hover rect,.product-report #v-tech .round-svg [data-process-tip]:focus rect{stroke:#244d43;stroke-width:1.5}
+@media(max-width:520px){.product-report #v-tech .tech-round-controls>div{grid-template-columns:1fr;gap:6px}}
+.product-report #v-tech .tech-overview .result-switcher{box-sizing:border-box}

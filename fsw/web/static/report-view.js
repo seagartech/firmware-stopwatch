@@ -3,6 +3,7 @@
  const Rules=typeof module!=="undefined"&&module.exports?require('./report-rules.js'):root.ReportRules;
  const Layout=typeof module!=="undefined"&&module.exports?require('./report-layout.js'):root.ReportLayout;
  const states=new Map();
+ const P90_LABEL='90%记录不超过（P90）';
  function facade(){const R={...Layout};R.model=(data,audience)=>{const m=Rules.refreshModel(Layout.model(data,audience),audience),meta=Rules.metadata(data);Object.assign(m.names,meta.phaseMeta.resultNames);for(const l of m.lines){l.startName=m.names[l.start_point]||l.startName;l.endName=m.names[l.end_point]||l.endName}return m};configureReferences(R);configurePlot(R);return R;}
  function configureReferences(R){
 // Match a cited standard and statistic, never a device or a sample round.
@@ -139,7 +140,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
    const more=th.querySelector('details');more.classList.add('tech-fold');more.querySelector('summary').textContent='统计、计时位置与源码';
    more.insertAdjacentHTML('beforeend',endpoints([d.from,...endsFor(k)])+(endsFor(k).length>1?'<p class="fine">此段取上述终点候选中最后记录到的时刻。逐次数据未注明最终采用哪个候选。</p>':'')+'<p class="fine">原分段名称：'+E(d.name||s.name)+'；涉及模块（原报告标注）：'+E(d.owner||s.owner||'未提供')+'。</p>');
    more.querySelectorAll('.endpoint-location').forEach(x=>x.remove());
-   more.querySelectorAll('dl>div').forEach(cell=>{const dt=cell.querySelector('dt'),dd=cell.querySelector('dd');if(dd?.textContent==='没有可比记录'||dt?.textContent==='参与方')cell.remove();else if(dt?.textContent==='有效次数')dt.textContent='有效样本数';else if(dt?.textContent==='90%分位')dt.textContent='P90'});
+   more.querySelectorAll('dl>div').forEach(cell=>{const dt=cell.querySelector('dt'),dd=cell.querySelector('dd');if(dd?.textContent==='没有可比记录'||dt?.textContent==='参与方')cell.remove();else if(dt?.textContent==='有效次数')dt.textContent='有效样本数';else if(dt?.textContent==='90%分位')dt.textContent=P90_LABEL});
    const body=document.createElement('div');body.className='tech-fold-body';while(more.children.length>1)body.append(more.children[1]);th.querySelector('button[data-code]')?.remove();const source=tr.nextElementSibling;while(source?.firstElementChild?.firstChild)body.append(source.firstElementChild.firstChild);source?.remove();more.append(body);
    if(expanded){const section=document.createElement('section');section.className='segment-facts segment-more';section.append(body);more.replaceWith(section)}
    const detailRow=document.createElement('tr');detailRow.className='segment-detail-row';const detailCell=document.createElement('td');detailCell.colSpan=5;detailCell.append(expanded?th.querySelector('.segment-facts'):more);detailRow.append(detailCell);tr.after(detailRow);
@@ -173,12 +174,12 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const host=document.createElement('div');host.innerHTML=table(split.keys.length?split.keys:(m.lines[selected]?.segments||[]));
   const template=host.querySelector('table');if(!template)return '<div id="tech-tail-title" hidden></div><table class="technical-table"><tbody id="tech-tail"></tbody></table>';
   template.classList.add('grouped-segments');template.setAttribute('aria-label','当前结果的分段用时');template.querySelector('tbody').remove();
-  if(split.keys.length)template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5">共用步骤 · '+split.keys.length+' 步</th></tr></tbody><tbody id="tech-common-rows">'+stageRows(split.keys)+'</tbody>');
+  if(split.keys.length)template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5">所有结果共用的前'+split.keys.length+'步<small class="shared-scope-note">切换结果时，这部分不变</small></th></tr></tbody><tbody id="tech-common-rows">'+stageRows(split.keys)+'</tbody>');
   template.insertAdjacentHTML('beforeend','<tbody class="segment-group-label"><tr><th colspan="5" id="tech-tail-title"></th></tr></tbody><tbody id="tech-tail"></tbody>');
   return host.innerHTML;
  }
  function stats(l){
-  const s={...l.stat,...ReportPolicy.stats(payload.rounds.map(r=>r.ends[l.index])),of:payload.rounds.length},values=[['平均用时',F(s.avg)],['最快',F(s.min)],['最慢',F(s.max)],['中位数',F(s.med)],['P90',F(s.p90)],['有效记录',String(s.count??0)+'/'+String(s.of??payload.rounds.length)+' 次']];
+  const s={...l.stat,...ReportPolicy.stats(payload.rounds.map(r=>r.ends[l.index])),of:payload.rounds.length},values=[['平均用时',F(s.avg)],['最快',F(s.min)],['最慢',F(s.max)],['中位数',F(s.med)],[P90_LABEL,F(s.p90)],['有效记录',String(s.count??0)+'/'+String(s.of??payload.rounds.length)+' 次']];
   const prev=payload.prev?.lines?.[l.name];if(Number.isFinite(prev))values.push(['上次中位数',F(prev)+(s.vs?' · '+s.vs.change:'')]);
   return '<dl class="tech-stats">'+values.map(([k,v])=>'<div><dt>'+E(k)+'</dt><dd>'+E(v)+'</dd></div>').join('')+'</dl>';
  }
@@ -196,9 +197,9 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const boundaries=starts.length===1?'<h4>所有结果的计时起点</h4>'+timingEntry(starts[0],name(starts[0]))+'<h4>各项结果的计时终点</h4>'+m.lines.map(lineEnd).join(''):m.lines.map(l=>'<div class="scope-result"><h4>'+E(l.endName)+'</h4>'+timingEntry(l.start_point,'起点：'+l.startName)+lineEnd(l)+'</div>').join('');
   return '<div class="tech-intro"><h2>本次测量</h2><p>'+payload.rounds.length+' 次记录 · '+m.lines.length+' 项结果 · '+Object.keys(m.defs).length+' 个分段</p>'+(actualChecks.length?'<ul class="issue-list">'+actualChecks.map(c=>'<li>'+E(c.why||c.name)+'</li>').join(''):'')+fold('数据来源与测量环境','<section class="source-section"><h4>测试记录</h4>'+fields(sourceRows)+'</section>'+environment)+fold('计时从哪里开始、到哪里结束',boundaries)+'</div>';
  }
- function method(){const references=m.lines.map(l=>R.referenceInfo(m,l)).filter(r=>r.usable);const unique=[...new Map(references.map(r=>[String(r.e.source)+'|'+r.e.fair,r])).values()];return fold('统计与标记规则',
- (unique.length?'<section class="method-section"><h4>参考线的含义与出处</h4>'+unique.map(r=>R.referenceEvidence(r)).join('')+'</section>':'')+
- '<section class="method-section"><h4>数值如何计算</h4><ul><li>平均值使用有效记录，慢的记录不剔除；缺失值和负用时不计入平均。</li><li>中位数用于观察分布和比较同一步骤的各次记录。P90 为升序排列后的第 ⌈有效样本数 × 90%⌉ 个值。</li><li>总用时取每次起终点的时间差；阶段用时先逐次合计其连续分段，再求平均。</li><li>同一次记录可核对分段之和；不同分段的中位数不能相加代替总用时。显示值有四舍五入，完整数值表统一用秒。</li></ul></section>'+
+ function method(){const references=m.lines.map(l=>R.referenceInfo(m,l)).filter(r=>Number.isFinite(r.e.fair));const unique=[...new Map(references.map(r=>[JSON.stringify([r.e,r.mode]),r])).values()];return fold('统计与标记规则',
+ (unique.length?'<section class="method-section"><h4>参考线的含义与出处</h4>'+unique.map(r=>'<p>'+E(R.referenceMeaning(r).label)+'：'+F(r.e.fair)+'；'+E(r.mode==='mean'?'用于平均用时比较':'来源未明确比较哪项统计值')+'。</p>'+R.referenceEvidence(r)).join('')+'</section>':'')+
+ '<section class="method-section"><h4>数值如何计算</h4><ul><li>平均值使用有效记录，慢的记录不剔除；缺失值和负用时不计入平均。</li><li>中位数用于观察分布和比较同一步骤的各次记录。90%记录不超过（P90）用于观察较慢时的表现，取升序排列后的第 ⌈有效样本数 × 90%⌉ 个值；它与平均值、中位数分别保留。</li><li>总用时取每次起终点的时间差；阶段用时先逐次合计其连续分段，再求平均。</li><li>同一次记录可核对分段之和；不同分段的中位数不能相加代替总用时。显示值有四舍五入，完整数值表统一用秒。</li></ul></section>'+
  '<section class="method-section"><h4>哪些记录会列出来</h4><ul><li>分段偏慢：该段最慢用时超过中位数 2.5 倍，且多出 0.3 秒以上；随后列出该段超过中位数 2.5 倍的各次记录。原规则标为内容长度相关的分段不参与此项判断。</li><li>单次超过参考值：只表示这一次用时较长；如果参考值用于平均用时，不能据此判定单次不合格。</li><li>计时记录问题：列出负用时、分段缺失或分段合计与总用时不一致的记录，保留原值供核对。</li><li>分段证据以各段中位数为基准，列出各条路径多耗时最多的一段；相同分段只列一次。</li></ul></section>')}
  function plot(){return R.roundsOverview(m)}
  // Presentation rounding never changes threshold decisions or saved measurements.
@@ -235,8 +236,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const r=R.referenceInfo(m,l);
   const comparison=r.usable&&r.mode==='mean'?'本次平均用时'+(r.avg<=r.e.fair?'未超过':'超过')+R.referenceMeaning(r).label+' '+F(r.e.fair)+'。':r.usable?'参考值为 '+F(r.e.fair)+'，但来源未明确比较平均值还是其他统计值，暂不判断是否达标。':R.referenceText(m,l,true);
   const summary=stats(l)+'<p class="small-note">'+E(comparison)+'</p>';
-  const source=Number.isFinite(r.e.fair)?fold('参考值与比较方法','<p>'+E(R.referenceMeaning(r).label)+'：'+F(r.e.fair)+'；'+E(r.mode==='mean'?'用于平均用时比较':'来源未明确比较哪项统计值')+'。</p>'+R.referenceEvidence(r)):'';
-  return summary+source;
+  return summary;
  }
  function rawTable(kind){const host=document.createElement('div');host.innerHTML=R.valuesTable(payload,kind);const cols=host.querySelectorAll('thead th');cols.forEach((th,i)=>{if(!i){th.textContent='测试轮次';return}th.textContent=kind==='segments'?boundary(Object.keys(m.defs)[i-1]):m.lines[i-1].endName});return host.innerHTML;}
  function catalog(){const host=document.createElement('div');host.innerHTML=R.pointCatalog(m);host.querySelectorAll('[data-source-point]').forEach(row=>{const label=document.createElement('small');label.className='actual-event-range';label.textContent=event(row.dataset.sourcePoint);row.querySelector('th').append(label)});host.querySelectorAll('[data-code]').forEach(button=>button.remove());host.querySelectorAll('.coderow').forEach(row=>row.hidden=false);return host.innerHTML;}
@@ -244,10 +244,11 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
  const adjustment=(payload.checks||[]).filter(c=>c.kind==='line_changed').map(c=>'<li>'+E(c.why)+'</li>').join('')+(payload.merged||[]).map(x=>'<li>'+E(x.why)+'。</li>').join('');
  const legacy=m.lines.map(l=>'<h4>'+E(l.endName)+'</h4><p>'+E(l.stat.combo||l.stat.verdict||'未判')+'</p>').join('');
  root.innerHTML=source()+panel('tech-observations','每次用了多久',plot()+observations())+
- panel('d-sec-technical-steps','阶段与分段用时','<div class="result-switcher"><div><p class="fine">选择要核对的结果</p><h3 id="tech-selected-title"></h3><div id="tech-selected-scope"></div></div><div id="tech-choices" class="tech-choices"></div></div><div id="tech-total"></div>'+
+ panel('d-sec-technical-steps','阶段与分段用时','<div class="tech-overview"><div class="result-switcher"><div><p class="fine">选择要核对的结果</p><h3 id="tech-selected-title" class="tech-selected-title"></h3><div id="tech-selected-scope" class="tech-selected-scope"></div></div><div id="tech-choices" class="tech-choices"></div></div><div id="tech-total" class="tech-total"></div></div>'+
  groupedSegments())+
- '<details class="panel process-fold" id="tech-round"'+(state.processOpen?' open':'')+'><summary>单次完整过程</summary><div class="process-body"><div class="tech-round-controls"><label>查看结果 <select id="tech-round-result" aria-label="单次过程的结果">'+m.lines.map(l=>'<option value="'+l.index+'">'+E(l.endName)+'</option>').join('')+'</select></label><label>测试轮次 <select id="tech-round-select" aria-label="技术细节测量轮次">'+payload.rounds.map(r=>'<option value="'+E(r.n)+'">第 '+E(r.n)+' 次</option>').join('')+'</select></label></div><p id="tech-round-line" class="small-note"></p><div id="tech-round-content"></div></div></details>'+
+ '<details class="panel process-fold" id="tech-round"'+(state.processOpen?' open':'')+'><summary>单次完整过程</summary><div class="process-body"><div class="tech-round-controls"'+(!payload.rounds.length||!m.lines.length?' hidden':'')+'><div class="tech-round-result-control"'+(m.lines.length<2?' hidden':'')+'><span>查看结果</span><div id="tech-process-results" class="process-buttons" role="group" aria-label="单次过程的结果">'+compactOptions(m.lines,selected,'data-tech-process-line')+'</div></div><div class="tech-round-number-control"><span>测试轮次</span><div id="tech-process-rounds" class="process-buttons" role="group" aria-label="选择测量轮次">'+roundOptions(payload.rounds,round)+'</div></div><select id="tech-round-result" hidden aria-hidden="true" tabindex="-1">'+m.lines.map(l=>'<option value="'+l.index+'">'+E(l.endName)+'</option>').join('')+'</select><select id="tech-round-select" hidden aria-hidden="true" tabindex="-1">'+payload.rounds.map(r=>'<option value="'+E(r.n)+'">第 '+E(r.n)+' 次</option>').join('')+'</select></div><p id="tech-round-line" class="small-note"></p><div id="tech-round-content"></div></div></details>'+
  panel('tech-evidence','补充资料',(independent.length?'<details class="tech-fold" id="tech-independent"><summary>其他已测分段 · '+independent.length+' 项</summary><div class="tech-fold-body"><p class="small-note">这些分段不在所选结果的连续路径中，单独保留，不加入总用时。</p>'+table(independent,0,true)+'</div></details>':'')+fold('全部计时位置与源码上下文',catalog())+fold('全部结果用时（秒）',rawTable('lines'))+fold('全部分段用时（秒）',rawTable('segments'))+fold('原始日志',payload.raw_log?'<p class="code">'+E(payload.raw_log)+'</p><p>本报告保留日志路径，日志文件未嵌入。</p>':'<p>这份数据未附原始日志文件或路径。逐轮数值与源码摘录保存在完整数据中。</p>')+(adjustment?fold('计时范围调整记录','<ul>'+adjustment+'</ul>'):'')+fold('阶段划分依据','<p>阶段只合并同一路径上连续的步骤。下面保留各阶段采用的代码位置；每个阶段包含的步骤见上方分段表。</p><ul>'+Object.values(phaseMeta.boundaries||{}).map(b=>'<li>'+E(b.label)+'：'+E(b.evidence||'未保存划分依据')+'</li>').join('')+'</ul>')+fold('原报告的判定记录','<p>以下保留原报告对本组数据的判定；其中体验判断采用中位数。这里只供追溯，与上方平均用时的比较分开。</p>'+legacy)+ '<p class="fine">页面底部可下载全部数据或保存报告。重新测试、还原固件需在码表主界面操作。</p>');
+ const processTooltip=document.createElement('div');processTooltip.id='tech-process-tooltip';processTooltip.className='process-tooltip';processTooltip.setAttribute('role','tooltip');processTooltip.hidden=true;root.append(processTooltip);
  function preciseTime(v,unitFrom=v){
   if(!Number.isFinite(v))return '未记录';
   const factor=Math.abs(unitFrom)>0&&Math.abs(unitFrom)<1?1000:1;
@@ -257,6 +258,14 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const l=m.lines[index],record=payload.rounds.find(r=>r.n===Number(n)),p=R.pathInfo(m,l,record),host=document.createElement('div');
   host.innerHTML=R.roundHtml(m,index,Number(n)).replaceAll('首尾实测',provenance.simulation?'首尾记录':'首尾实测').replaceAll('真实连续分段','连续分段').replaceAll('按原始精度核对','按完整数值核对').replaceAll('原始精度（秒）','完整数值（秒）').replaceAll('核对精确用时','查看完整用时数值').replaceAll('首尾记录','总用时').replaceAll('首尾实测','总用时').replaceAll('按完整数值核对：分段连接，分段和与首尾用时一致。','分段相接，合计与总用时一致。');
   host.querySelectorAll('details').forEach(el=>el.remove());
+  host.querySelectorAll('.round-svg rect').forEach((rect,i)=>{
+   const part=p.parts[i];if(!part)return;
+   const group=document.createElementNS('http://www.w3.org/2000/svg','g'),next=rect.nextElementSibling;
+   const tip='第 '+(i+1)+' 步：'+part.from+' → '+part.to+'\n用时 '+preciseTime(part.v);
+   group.dataset.processTip=tip;group.setAttribute('tabindex','0');group.setAttribute('role','img');group.setAttribute('aria-label',tip);group.setAttribute('aria-describedby','tech-process-tooltip');
+   rect.querySelector('title')?.remove();rect.before(group);group.append(rect);
+   if(next?.tagName.toLowerCase()==='text'&&next.textContent===String(i+1))group.append(next);
+  });
   host.querySelectorAll('.round-parts>li b').forEach((el,i)=>{el.textContent=preciseTime(p.parts[i].v);el.removeAttribute('title')});
   host.querySelectorAll('.round-verdict b').forEach(el=>{el.textContent='第 '+E(n)+' 次 · 总用时 '+preciseTime(p.end);el.removeAttribute('title')});
   host.querySelectorAll('p.small-note').forEach(el=>el.remove());
@@ -264,7 +273,28 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   return host.innerHTML;
  }
 
- function drawRound(){const l=m.lines[selected];if(!l||round===undefined){scope.querySelector('#'+'tech-round-result').disabled=!m.lines.length;scope.querySelector('#'+'tech-round-select').disabled=!payload.rounds.length;scope.querySelector('#'+'tech-round-content').innerHTML='<p>本次没有可展示的逐次过程记录。</p>';return;}scope.querySelector('#'+'tech-round-line').textContent=l.startName+' → '+l.endName+(endsFor(l.segments.at(-1)).length>1?'。结束规则：'+endDescription(l)+'。':'');scope.querySelector('#'+'tech-round-select').value=round;scope.querySelector('#'+'tech-round-result').value=selected;for(const id of ['tech-round-select','tech-round-result']){const select=scope.querySelector('#'+id);for(const option of select.options)option.toggleAttribute('selected',option.value===select.value)}scope.querySelector('#'+'tech-round-content').innerHTML=roundMarkup(selected,round);}
+ function hideProcessTip(){processTooltip.hidden=true;}
+ function showProcessTip(e){
+  const part=e.target.closest?.('[data-process-tip]');if(!part)return;
+  processTooltip.textContent=part.dataset.processTip;processTooltip.hidden=false;
+  const box=part.getBoundingClientRect(),x=Number.isFinite(e.clientX)?e.clientX:box.left+box.width/2,y=Number.isFinite(e.clientY)?e.clientY:box.bottom;
+  const tip=processTooltip.getBoundingClientRect();
+  processTooltip.style.left=Math.max(12,Math.min(x+12,window.innerWidth-tip.width-12))+'px';
+  processTooltip.style.top=Math.max(12,y+16+tip.height<window.innerHeight?y+16:y-tip.height-12)+'px';
+ }
+ function paintProcessChoices(){
+  scope.querySelectorAll('[data-tech-process-line]').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.techProcessLine)===selected)));
+  scope.querySelectorAll('[data-tech-process-round]').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.techProcessRound)===round)));
+  for(const id of ['tech-process-results','tech-process-rounds']){const strip=scope.querySelector('#'+id);if(strip.clientWidth)revealSelected(strip)}
+ }
+ function drawRound(){
+  hideProcessTip();paintProcessChoices();const l=m.lines[selected];
+  if(!l||round===undefined){scope.querySelector('#tech-round-result').disabled=!m.lines.length;scope.querySelector('#tech-round-select').disabled=!payload.rounds.length;scope.querySelector('#tech-round-content').innerHTML='<p>本次没有可展示的逐次过程记录。</p>';return;}
+  scope.querySelector('#tech-round-line').textContent=l.startName+' → '+l.endName+(endsFor(l.segments.at(-1)).length>1?'。结束规则：'+endDescription(l)+'。':'');
+  scope.querySelector('#tech-round-select').value=round;scope.querySelector('#tech-round-result').value=selected;
+  for(const id of ['tech-round-select','tech-round-result']){const select=scope.querySelector('#'+id);for(const option of select.options)option.toggleAttribute('selected',option.value===select.value)}
+  scope.querySelector('#tech-round-content').innerHTML=roundMarkup(selected,round);scope._updateFloating?.();
+ }
  function recordReview(n){
   const record=payload.rounds.find(r=>r.n===n),review=ReportPolicy.review(m,record,R),affected=review.affected.map(x=>x.l);
   function evidenceRow({k,v,med,count}){
@@ -294,23 +324,48 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   row.querySelector('.observation-detail').innerHTML='<div class="observation-detail-head"><h4>第 '+E(n)+' 次 · 值得核对的步骤</h4></div>'+recordReview(n);
  }
 
+ // Reserve the tallest overview at this width, regardless of the selected result.
+ // The temporary probe uses the same CSS context and is removed before painting.
+ let overviewWidth=0;
+ const overview=root.querySelector('.tech-overview');
+ function sizeOverview(){
+  const width=overview.getBoundingClientRect().width;
+  if(!m.lines.length||width<=0||width===overviewWidth)return;
+  const probe=overview.cloneNode(true);
+  probe.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
+  Object.assign(probe.style,{position:'absolute',left:'-100000px',top:'0',width:width+'px',minHeight:'0',visibility:'hidden',pointerEvents:'none'});
+  probe.inert=true;overview.parentElement.append(probe);
+  const header=probe.querySelector('.result-switcher');header.style.minHeight='0';
+  let height=0,headerHeight=0;
+  const fill=l=>{probe.querySelector('.tech-selected-title').textContent=l.endName;probe.querySelector('.tech-selected-scope').innerHTML=eventScope(l);probe.querySelector('.tech-total').innerHTML=detailsForLine(l)};
+  try{
+   for(const l of m.lines){fill(l);headerHeight=Math.max(headerHeight,header.getBoundingClientRect().height)}
+   header.style.minHeight=Math.ceil(headerHeight)+'px';
+   for(const l of m.lines){fill(l);height=Math.max(height,probe.getBoundingClientRect().height)}
+  }finally{probe.remove()}
+  overviewWidth=width;overview.querySelector('.result-switcher').style.minHeight=Math.ceil(headerHeight)+'px';overview.style.minHeight=Math.ceil(height)+'px';
+ }
  function choose(i){
   const l=m.lines[i];if(!l)return;selected=i;state.technical=i;
   scope.querySelector('#'+'tech-choices').innerHTML=m.lines.map(x=>'<button class="result-button" data-tech-line="'+x.index+'" aria-pressed="'+(i===x.index)+'"><span>'+E(x.endName)+'</span><small>'+(x.internal?'程序内部事件':x.contentDependent?'完整过程':'结果')+'</small></button>').join('');
   scope.querySelector('#'+'tech-selected-title').textContent=l.endName;
   scope.querySelector('#'+'tech-selected-scope').innerHTML=eventScope(l);
   scope.querySelector('#'+'tech-total').innerHTML=detailsForLine(l);
-  scope.querySelector('#'+'tech-tail-title').textContent=(split.keys.length?'后续':'全部')+'步骤 · '+l.endName;
+  scope.querySelector('#'+'tech-tail-title').textContent='到「'+l.endName+'」的'+(split.keys.length?'后续':'')+'步骤';
   scope.querySelector('#'+'tech-tail').innerHTML=stageRows(split.tails[i]||l.segments,split.keys.length);
   drawRound();
  }
- root.addEventListener('click',e=>{const b=e.target.closest('[data-tech-line]'),go=e.target.closest('[data-tech-round]');if(b)choose(Number(b.dataset.techLine));if(go)toggleObservation(go);});
- root.addEventListener('toggle',e=>{if(e.target.id==='tech-round')state.processOpen=e.target.open},true);
+ root.addEventListener('click',e=>{const b=e.target.closest('[data-tech-line],[data-tech-process-line]'),go=e.target.closest('[data-tech-round]'),pick=e.target.closest('[data-tech-process-round]');if(b)choose(Number(b.dataset.techLine??b.dataset.techProcessLine));if(go)toggleObservation(go);if(pick){round=Number(pick.dataset.techProcessRound);state.round=round;drawRound()}});
+ root.addEventListener('toggle',e=>{if(e.target.id==='tech-round'){state.processOpen=e.target.open;if(e.target.open)paintProcessChoices();else hideProcessTip()}},true);
+ root.addEventListener('pointerover',showProcessTip);root.addEventListener('pointermove',showProcessTip);
+ root.addEventListener('pointerout',e=>{const part=e.target.closest?.('[data-process-tip]');if(part&&!part.contains(e.relatedTarget))hideProcessTip()});
+ root.addEventListener('focusin',showProcessTip);root.addEventListener('focusout',e=>{if(e.target.closest?.('[data-process-tip]'))hideProcessTip()});
+ root.addEventListener('keydown',e=>{if(e.key==='Escape')hideProcessTip()});
  scope.querySelector('#'+'tech-round-result').addEventListener('change',e=>choose(Number(e.target.value)));
  scope.querySelector('#'+'tech-round-select').addEventListener('change',e=>{round=Number(e.target.value);state.round=round;drawRound()});
  choose(selected);if(!m.lines.length)drawRound();
  for(const n of state.open||[]){const b=root.querySelector('[data-tech-round="'+n+'"]');if(b)toggleObservation(b)}
- return {toggleObservation,recordReview,choose,model:m};
+ return {toggleObservation,recordReview,choose,model:m,sizeOverview,overview,hideProcessTip};
 }
 
  // Both audiences use the same compact controls and bounded floating-state rule.
@@ -318,6 +373,9 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const E=Layout.esc;
   if(lines.length<2)return '';
   return lines.map(l=>'<button aria-pressed="'+(l.index===selected)+'" '+buttonAttribute+'="'+l.index+'">'+E(l.endName)+'</button>').join('');
+ }
+ function roundOptions(rounds,selected){
+  const E=Layout.esc;return rounds.map(r=>'<button type="button" data-tech-process-round="'+E(r.n)+'" aria-pressed="'+(r.n===selected)+'">第 '+E(r.n)+' 次</button>').join('');
  }
  function revealSelected(host){
   const selected=host.querySelector('[aria-pressed="true"]');if(!selected||!host.clientWidth)return;
@@ -365,13 +423,12 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const detailSteps=$('d-sec-technical-steps');detailSteps.before(inspection);inspection.append(detailSteps,$('tech-round'));
   const technicalBar=document.createElement('div');technicalBar.id='tech-floating-switch';technicalBar.className='floating-switch';technicalBar.setAttribute('aria-label','技术细节结果切换');
   technicalBar.innerHTML='<strong id="tech-floating-current"></strong><div id="tech-compact-options" class="compact-options"></div>';inspection.prepend(technicalBar);
-  $('tech-round-result').closest('label').classList.add('tech-round-result-control');
   function technicalControls(){const l=technical.model.lines[state.technical];$('tech-floating-current').textContent=l?l.endName+' · 平均 '+F(l.stat.avg):'';paintCompact($('tech-compact-options'),technical.model.lines,state.technical,'data-tech-compact-line');updateFloating()}
   if(actions){actions.hidden=false;scope.querySelector('#v-tech').append(actions)}
   function view(which){
    if(!['measure','tech','advice'].includes(which))which='measure';state.tab=which;
    for(const t of ['measure','tech','advice']){$('v-'+t).hidden=t!==which;$('tab-'+t).setAttribute('aria-selected',String(t===which))}
-   scope.dataset.view=which;updateFloating();
+   scope.dataset.view=which;technical.sizeOverview();updateFloating();
   }
   function ref(l){const r=R.referenceInfo(model,l);if(l.contentDependent)return '<span class="ref-chip">时长随处理内容变化</span>';if(!r.usable)return '<span class="ref-chip">暂无适用的快慢参考</span>';const text=r.mode==='mean'?'平均用时'+(r.avg<=r.e.fair?'未超过':'超过')+' '+F(r.e.fair)+' '+R.referenceMeaning(r).label:'参考值 '+F(r.e.fair)+'，比较口径待确认';return '<span class="ref-chip">'+E(text)+'</span>';}
   function updateFloating(){
@@ -407,7 +464,7 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
    const tab=e.target.closest('[data-report-tab]'),choice=e.target.closest('[data-summary-line]');
    if(tab)view(tab.dataset.reportTab);if(choice)pick(Number(choice.dataset.summaryLine));
    const techChoice=e.target.closest('[data-tech-compact-line]');if(techChoice)technical.choose(Number(techChoice.dataset.techCompactLine));
-   if(techChoice||e.target.closest('[data-tech-line]'))technicalControls();
+   if(techChoice||e.target.closest('[data-tech-line],[data-tech-process-line]'))technicalControls();
    if(e.target.closest('[data-report-data]'))download(JSON.stringify(payload,null,2),'measurement-data.json','application/json');
    if(e.target.closest('[data-report-save]')){if(options.onSave)options.onSave();else download('<!doctype html>'+document.documentElement.outerHTML,'固件用时报告.html','text/html');}
   });
@@ -415,8 +472,8 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   scope.addEventListener('toggle',()=>updateFloating(),true);
   bindPlot(scope);
   if(summaryLines.length)pick(selected);else{$('summary-grid').hidden=true;scope.querySelectorAll('#v-measure>.panel').forEach(el=>el.hidden=true);$('v-measure').insertAdjacentHTML('beforeend','<section class="panel"><p>'+(!payload.rounds.length?'本次没有逐次测量记录。':'本次没有可单独展示的响应用时。完整过程用时可在技术细节中查看。')+'</p><button class="pill" data-report-tab="tech">查看技术细节</button></section>')}
-  technicalControls();view(state.tab||'measure');scope._reportMounted=true;scope._show=view;scope._updateFloating=updateFloating;
-  if(typeof ResizeObserver!=='undefined'){const observer=new ResizeObserver(updateFloating);observer.observe($('floating-switch'));observer.observe(technicalBar);scope._cleanup=()=>observer.disconnect()}
+  technicalControls();view(state.tab||'measure');scope._reportMounted=true;scope._show=view;scope._updateFloating=updateFloating;scope._hideProcessTip=technical.hideProcessTip;
+  if(typeof ResizeObserver!=='undefined'){const observer=new ResizeObserver(()=>{technical.sizeOverview();updateFloating()});observer.observe($('floating-switch'));observer.observe(technicalBar);observer.observe(technical.overview);scope._cleanup=()=>observer.disconnect()}
  }
  function update(container,html,options={}){
   const next=document.createElement('div');next.innerHTML=html;const incoming=next.querySelector('.product-report'),old=container.querySelector('.product-report');
@@ -430,9 +487,9 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
  function download(text,name,type){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
  function show(scope,tab,target){scope?._show?.(tab);if(target){const el=scope.querySelector('#'+target)||scope.querySelector('#d-'+target);el?.scrollIntoView({block:'start'})}}
  function install(){
-  const reposition=()=>document.querySelectorAll('.product-report').forEach(scope=>scope._updateFloating?.());
+  const reposition=()=>document.querySelectorAll('.product-report').forEach(scope=>{scope._hideProcessTip?.();scope._updateFloating?.()});
   window.addEventListener('scroll',reposition,{passive:true});window.addEventListener('resize',reposition);
  }
- const api={shell,mount,update,show,install,compactOptions,revealSelected,floatingActive,model:(data,audience)=>facade().model(data,audience)};
+ const api={shell,mount,update,show,install,compactOptions,roundOptions,revealSelected,floatingActive,model:(data,audience)=>facade().model(data,audience)};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.ReportView=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

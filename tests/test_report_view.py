@@ -152,7 +152,24 @@ def test_saved_round_selection_is_serializable_for_offline_report_reopening():
 const select=values=>({get value(){return this._value},set value(v){this._value=String(v)},options:values.map(value=>({value:String(value),selected:false,toggleAttribute(key,on){if(key==='selected')this.selected=on}}))});
 const nodes={'tech-round-select':select([2,9,17]),'tech-round-result':select([0,1]),'tech-round-line':{},'tech-round-content':{}};
 const scope={querySelector:id=>nodes[id.slice(1)]},m={lines:[{startName:'读到卡',endName:'完成解锁',segments:['read','open']},{startName:'读到卡',endName:'亮灯',segments:['read','light']}]};
+const hideProcessTip=()=>{},paintProcessChoices=()=>{};
 const selected=1,round=17,payload={rounds:[{n:2},{n:9},{n:17}]},endsFor=()=>['light'],roundMarkup=(i,n)=>i+':'+n;
 '''
     result = subprocess.run(['node','-e',code+draw+"drawRound();console.log(JSON.stringify([nodes['tech-round-select'].options.filter(o=>o.selected).map(o=>o.value),nodes['tech-round-result'].options.filter(o=>o.selected).map(o=>o.value),nodes['tech-round-content'].innerHTML]));"],capture_output=True,text=True,check=True)
     assert json.loads(result.stdout) == [['17'], ['1'], '1:17']
+
+
+def test_mean_median_and_p90_remain_distinct_after_primary_metric_change():
+    x = run("console.log(JSON.stringify(P.stats([1,1,1,1,1,1,1,1,4,10,null,-3])));")
+    assert x['count'] == 10
+    assert x['avg'] == pytest.approx(2.2)
+    assert x['med'] == 1 and x['p90'] == 4
+
+
+@pytest.mark.parametrize('numbers,selected', [([], None), ([17], 17), ([2,9,17], 9)])
+def test_round_buttons_follow_record_identifiers_not_a_fixed_ten_rounds(numbers, selected):
+    x=run("console.log(JSON.stringify(V.roundOptions("+json.dumps([{'n': n} for n in numbers])+","+json.dumps(selected)+")));")
+    assert x.count('<button') == len(numbers)
+    for number in numbers:
+        assert f'data-tech-process-round="{number}"' in x
+    assert x.count('aria-pressed="true"') == (1 if numbers else 0)
