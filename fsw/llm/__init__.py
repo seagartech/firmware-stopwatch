@@ -466,12 +466,18 @@ class DeepSeek(LLM):
                 return self._read_error(getattr(e, "reason", e))
             return LLMError("offline", self._say("offline"), _why(e))
 
-    def investigate(self, prompt, root, on_text=None, on_tool=None):
+    def investigate_json(self, prompt, root, on_text=None, on_tool=None):
+        """Advice JSON mode, with the same read-only source tools and request limits."""
+        return self.investigate(prompt, root, on_text=on_text, on_tool=on_tool, json_output=True)
+
+    def investigate(self, prompt, root, on_text=None, on_tool=None, json_output=False):
         tools, messages, t0 = SourceTools(root), [{"role": "user", "content": prompt}], time.time()
         self.retry_log = []
         for rnd in range(MAX_TOOL_ROUNDS + 1):
             self._req_no = rnd + 1
             body = {"model": self.model, "messages": messages}
+            if json_output:
+                body.update(response_format={"type": "json_object"}, temperature=0.1, max_tokens=8192)
             if rnd < MAX_TOOL_ROUNDS:
                 body["tools"] = openai_tools()
             else:

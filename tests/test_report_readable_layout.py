@@ -303,7 +303,7 @@ def test_advice_survives_display_copy_of_main_and_uses_mean_title():
     classifiers=source[source.index('const LV='):source.index('function decisions(D)')]
     advice=source[source.index('function activeFixes(D)'):source.index('// 工作量怎么分')]
     code=r'''
-const ReportLayout=C,plain=x=>x,noCode=x=>x,f=x=>String(x),roundList=x=>'';
+const htmlEsc=C.esc;const ReportLayout=C,plain=x=>x,noCode=x=>x,f=x=>String(x),roundList=x=>'';
 const D={J:data,n:2,S:{fixes:[{when:['main'],why:'示例',impact:'等待',rec:'核对',opts:[]}]},
  lines:[{name:'提示',end:'亮绿灯',med:.35,segs:['read','verify','lamp']},{name:'开锁',end:'门开始打开',med:.6,segs:['read','verify','motor']}],
  allSegs:data.segments,biggest:data.segments[1],verdict:()=>['已记录',''],exp:null};

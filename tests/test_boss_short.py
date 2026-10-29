@@ -59,8 +59,8 @@ def test_decide_comes_before_the_timing_chart():
 
 def test_details_folded_by_default():
     fa = grab("fixA")
-    assert "<details" in fa and "optTable(F,fi,false)" in fa.split("<details", 1)[1]  # 方案表收在里面，不再勾选（10-21）
-    assert "<b>为什么：</b>" in fa.split("<details", 1)[1] and "<b>对用户的影响：</b>" in fa.split("<details", 1)[1]
+    assert "<details" in fa and "adviceOptions(F)" in fa.split("<details", 1)[1]  # 方案表收在里面，不再勾选（10-21）
+    assert "<b>已知情况</b>" in fa.split("<details", 1)[1] and "<b>使用影响</b>" in fa.split("<details", 1)[1]
     assert "不用改的" not in fa and "S.fine" not in fa  # 收起块删了（10-21 用户定）
     ot = grab("optTable")
     assert "pick?'':ESTNOTE" in ot  # 工作量怎么分：表下一行小字

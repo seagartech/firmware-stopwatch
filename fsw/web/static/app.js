@@ -21,13 +21,14 @@ function build(S){
   const rounds=[...Array(n)].map((_,r)=>({n:r+1,ends:lines.map(l=>l.ends[r])}));
   let reversed=[];
   if(S.firstBeforeSecond&&lines.length>1)reversed=rounds.filter(r=>r.ends[0]>r.ends[1]);
-  const fair=S.exp&&S.exp.fair,mi=lines.length-1;
+  const declared=(S.J?.scenario?.lines||[]).find(l=>l.first)||(S.J?.scenario?.lines||[]).find(l=>l.measure);
+  const fair=S.exp&&S.exp.fair,mi=declared?Math.max(0,lines.findIndex(l=>l.name===declared.name)):lines.length-1;
   if(fair){const e=lines[mi].ends.filter(x=>x!=null),k=e.filter(x=>x<=fair).length;Object.assign(lines[mi],{pass_n:k,count:e.length,pass_rate:k/e.length})}  // 达标率：没超过体验标准的轮次占几成  // 让人等太久的轮：这一轮超过体验标准（体验标准挂在要测的这条线上）
   const slowRounds=fair==null?[]:rounds.filter(r=>r.ends[mi]!=null&&r.ends[mi]>fair);
   const allSegs=Object.entries(S.segs).map(([k,s])=>({k,...s,med:med(s.v),max:mx(s.v)}));
   const biggest=[...allSegs].sort((a,b)=>b.med-a.med)[0];
   const spiky=allSegs.filter(s=>s.max>s.med*2.5&&s.max-s.med>.3).sort((a,b)=>(b.max-b.med)-(a.max-a.med))[0];
-  const main=lines[lines.length-1];
+  const main=lines[mi];
   const verdict=()=>['只记录用时','c-gray'];  // 没有后台判定时（演示原型）：不判快慢
   const exp=S.exp?(main.med>S.exp.fair?['差','c-bad']:['可以','c-ok']):null;
   const out={S,n,use,lines,rounds,reversed,slowRounds,allSegs,biggest,spiky,main,verdict,exp};
@@ -57,7 +58,8 @@ function lenByContent(J){const sc0=J.scenario,bad=new Set((J.lines||[]).filter(x
  // 从中间分出去、同时在走的段（不在哪条线从起点到终点的那一串上）：不进图、不进合计，单列在"只记录"里，照样有数（10-26）
  const onLine=new Set(sc.lines.flatMap(l=>l.segments)),par=(sc0.parallel||[]).filter(k=>sc.segments[k]&&!onLine.has(k));
  const used=new Set(keep.flatMap(l=>l.segments)),gone=new Set(sc.lines.filter(l=>hide.has(l.name)).flatMap(l=>l.segments).filter(k=>!used.has(k)));
- const main=keep[keep.length-1];
+ const declared=(J.scenario.lines||[]).find(l=>l.first)||(J.scenario.lines||[]).find(l=>l.measure&&keep.some(k=>k.name===l.name));
+ const main=keep.find(l=>l.name===declared?.name)||keep[keep.length-1];
  if(!gone.size&&!par.length&&keep===sc.lines)return {...sc,cutEnd:main.end||main.name};
  // 不进图和结论，但不丢（10-26 用户要看全程）：报告里单列"只记录、不判快慢"，写一般、最快、最慢
  return {...sc,lines:keep,segments:Object.fromEntries(Object.entries(sc.segments).filter(([k])=>!gone.has(k)&&!par.includes(k))),cutEnd:main.end||main.name,
@@ -844,7 +846,7 @@ function vsTag(){const P=JREP&&JREP.prev;if(!(JREP&&!JREP._none&&repKey().starts
 function staleBar(){if(!(JREP&&!JREP._none&&repKey().startsWith('real')))return '';return prevLine()}  // 报告顶上：和上次比的那一句
 // 负责人看的文字不出现代码：括号里带文件名、行号、函数名的整段去掉（码表格式检查也会拦，这里兜底早先存下的建议）
 const noCode=t=>String(t||'').replace(/\s*[（(][^（）()]*?(?:[\w/.-]+\.(?:c|cc|cpp|cxx|h|hpp)\b|第\s*\d+\s*行|[A-Za-z_]\w*\(\))[^（）()]*?[）)]/g,'');
-function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:(()=>{const name=d.k==='main'?D.main.name:String(d.k).startsWith('line:')?String(d.k).slice(5):null;if(name&&D.J&&typeof ReportLayout!=='undefined'){const l=ReportLayout.model(D.J,'general').lines.find(x=>x.name===name);if(l)return l.endName+' · 平均 '+ReportLayout.fmt(l.stat.avg)}return d.t})(),lv:d.lv,why:noCode(plain(F.why)),impact:noCode(plain(F.impact)),rec:noCode(plain(F.rec)),opts:F.opts.map(o=>({...o,name:noCode(plain(o.name)),effect:noCode(plain(o.effect)),cost:noCode(plain(o.cost)),wn:noCode(plain(o.wn))}))})});return out}
+function activeFixes(D){const out=[];decisions(D).forEach(d=>{const F=(D.S.fixes||[])[cardOf(D.S.fixes||[],d)];if(F&&!out.some(o=>o.when===F.when))out.push({...F,title:(()=>{const name=d.k==='main'?D.main.name:String(d.k).startsWith('line:')?String(d.k).slice(5):null;if(name&&D.J&&typeof ReportLayout!=='undefined'){const l=ReportLayout.model(D.J,'general').lines.find(x=>x.name===name);if(l)return l.endName+' · 平均 '+ReportLayout.fmt(l.stat.avg)}return d.t})(),lv:d.lv,why:htmlEsc(noCode(plain(F.why))),impact:htmlEsc(noCode(plain(F.impact))),rec:htmlEsc(noCode(plain(F.rec))),done:htmlEsc(plain(F.done)),dev:Object.fromEntries(Object.entries(F.dev||{}).map(([k,v])=>[k,htmlEsc(plain(v))])),opts:F.opts.map(o=>({...o,name:htmlEsc(noCode(plain(o.name))),effect:htmlEsc(noCode(plain(o.effect))),cost:htmlEsc(noCode(plain(o.cost))),wn:htmlEsc(noCode(plain(o.wn))),how:htmlEsc(plain(o.how)),ask:htmlEsc(plain(o.ask)),size:htmlEsc(o.size),rk:htmlEsc(o.rk),who:htmlEsc(o.who)}))})});return out}
 // 工作量怎么分（10-21 用户定）：表下一行小字，不放收起块、不用浮窗
 const ESTNOTE='<p class="note" style="margin:6px 0 0">工作量：<span class="wk wk-s">小</span> 改一处　<span class="wk wk-m">中</span> 改几处，或要另一方配合　<span class="wk wk-l">大</span> 新做一块，或要长期维护　<span class="wk wk-u">不确定</span> 要先查清原因</p>';
 function optTable(F,fi,pick){
@@ -923,13 +925,13 @@ async function exportModernReport(folder){
 // 协作沟通（10-21 用户定）：每人一段消息。服务器、网络、第三方可能是别家公司，消息一律按外部对接人写：
 // 不带我们的源码位置，不用码表的内部说法（码表、达标率、线名），附设备外几段的每轮数据方便对方对日志；发给固件研发的另附改法和代码位置
 const isFw=w=>/固件/.test(w);
-function todoText(w,chosen,FX,D){const mine=chosen.filter(o=>o.who===w),fw=isFw(w),[dev,what]=String(D.S.crumb).split(' · ');
+function todoText(w,chosen,FX,D){const mine=chosen.filter(o=>o.who===w),fw=isFw(w),M=D.J&&typeof ReportLayout!=='undefined'?ReportLayout.model(D.J,'general').main:null,legacy=String(D.S.crumb).split(' · '),dev=M?(D.S.real?pName:(D.J.scenario.name||legacy[0])):legacy[0],what=M?M.startName+'到'+M.endName:legacy.slice(1).join(' · ');
   const at=D.S.real&&JREP&&JREP.measured_at?`${JREP.measured_at} 开始，`:'';
   // 每轮数据：设备外的几段，表头写从哪个点到哪个点（几段的起点可能相同，写清楚免得对方相加）；一般不到 0.01 秒的段不列
   const outS=D.allSegs.filter(s=>((D.J&&D.J.segments.find(x=>x.k===s.k))||{}).outside&&s.med>=0.01),rows=D.rounds.map((r,i)=>[r.n,...outS.map(s=>s.v[i]==null?'—':s.v[i].toFixed(2))].join(' | '));
   const tbl=!fw&&outS.length?`\n\n每轮数据（秒，设备上记到的时刻之差）：\n轮 | ${outS.map(s=>String(s.code).split('→').map(p=>plain(p.trim()).replace(/^“|”$/g,'')).join(' → ')).join(' | ')}\n${rows.join('\n')}`:'';
-  return `【${dev}响应时间测量，请帮忙处理】\n\n你好，我们测了 ${dev}从${what}的时间（${at}连续 ${D.n} 轮），有 ${mine.length} 件事想请你们帮忙：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];
-    return `${k+1}. ${noCode(plain(o.ask||o.name))}\n   怎么算解决：${noCode(plain(F.done||F.dev.verify))}`+(fw?`\n   改法：${plain(o.how)}`:'')}).join('\n\n')+tbl+`\n\n改好后告诉我们，我们按同样条件再测一次对比。`}
+  return (D.J?.simulation?'【模拟数据示例，非真实测试结论】\n':'')+`【${dev}响应时间测量，请帮忙处理】\n\n你好，我们测了 ${dev}从${what}的时间（${at}连续 ${D.n} 轮），有 ${mine.length} 件事想请你们帮忙：\n\n`+mine.map((o,k)=>{const F=FX[o.fi];
+    return `${k+1}. ${noCode(plain(o.ask||o.name))}\n   怎么算解决：${noCode(plain(F.done||F.dev.verify))}`+(fw?`\n   改法：${plain(o.how)}${adviceLocations(o,D)}`:'')}).join('\n\n')+tbl+`\n\n改好后告诉我们，我们按同样条件再测一次对比。`}
 // 勾了的方案；同一个人做同一件事出现在几张卡片里（10-20 真测：「思考中」表情两张卡片都有），待办只算一件，标上解决哪几个问题
 function pickedOpts(FX){const out=[],seen={};FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(!fixPick.has(fi+'-'+oi))return;const k=o.who+'|'+o.name;if(seen[k]){seen[k].fis.push(fi);return}out.push(seen[k]={...o,fi,fis:[fi]})}));return out}
 const pNos=o=>'问题 '+o.fis.map(i=>i+1).join('、');
@@ -937,15 +939,24 @@ function myPick(D,FX){initPick(FX);
   if(!FX.length)return '';  // 没有要改的问题：不显示
   const chosen=pickedOpts(FX),who=[...new Set(chosen.map(o=>o.who))];
   // 协作沟通（10-21 用户定名、默认收起）：收起时也看得出要找谁、几件
-  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak);padding-top:10px;padding-bottom:10px"><details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"><span><b>协作沟通</b>　发给：${who.map(w=>`${w}（${chosen.filter(o=>o.who===w).length} 件）`).join('、')}</span></summary><p class="note" style="margin:8px 0">每个问题按「建议」方案，按人合成一段，复制后发给对方。发给设备以外的人（服务器、网络等）的不带源码位置，可以直接转给外部对接人。</p>
+  return `<div class="panel" id="my-pick" style="border-left:3px solid var(--speak);padding-top:10px;padding-bottom:10px"><details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"><span><b>协作沟通</b>　发给：${who.map(w=>`${w}（${chosen.filter(o=>o.who===w).length} 件）`).join('、')}</span></summary><p class="note" style="margin:8px 0">按推荐方案生成处理请求，复制内容与下方文本一致。</p>
    ${who.map((w,wi)=>`<div class="todo1"><div class="todoh"><b>发给：${w}</b><button class="pill copy" data-copy="todo-${wi}" aria-label="复制发给${w}的消息">${COPY_IC}复制</button></div><pre id="todo-${wi}" data-who="${w}">${todoText(w,chosen,FX,D)}</pre></div>`).join('')}</details></div>`;
 }
-function fixA(D){const FX=activeFixes(D);initPick(FX);
-  return FX.map((F,fi)=>`<div class="panel" id="fix-${fi}" style="border-left:3px solid ${F.lv===0?'var(--bad)':'var(--warn)'};padding-top:10px;padding-bottom:10px">
-   <details class="fixmore"><summary style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}<span>问题 ${fi+1}：<b>${F.title}</b>${(F.opts.find(o=>o.rec)||F.opts[0])?`　建议：${(F.opts.find(o=>o.rec)||F.opts[0]).name}`:''}</span><span hidden>${fi}</span></summary>
-   <p style="margin:0 0 6px"><b>为什么：</b>${F.why}</p><p style="margin:0 0 10px"><b>对用户的影响：</b>${F.impact}</p>
-   ${optTable(F,fi,false)}<p style="margin:10px 0 0"><b>建议：</b>${F.rec}</p></details></div>`).join('')+myPick(D,FX);
+function adviceLocations(o,D){
+ const lines=(o.observations||[]).map(a=>{const c=D.J?.code?.[a.point]||{},line=a.line||(c.ctx||[]).find(([,text])=>String(text).includes(a.at))?.[0];return (a.path||c.path||'源码')+(line?' 第 '+line+' 行':'')+'调用'+(a.relation==='after'?'后':'前')+'：'+a.at});
+ return lines.length?'\n   新增观测位置：\n'+lines.map(x=>'   '+htmlEsc(x)).join('\n'):'';
 }
+function adviceFacts(F){
+ const facts=Object.values(F.facts||{});if(!facts.length)return '';
+ const fmt=v=>typeof ReportLayout!=='undefined'?ReportLayout.fmt(v):f(v)+' 秒';
+ return facts.map(x=>{const bits=[];if(x.average!=null)bits.push('平均 '+fmt(x.average));if(x.reference&&x.reference.fair!=null&&x.over_rounds)bits.push(x.count+' 次有效记录中 '+x.over_rounds.length+' 次超过 '+fmt(x.reference.fair));if(x.count<x.total)bits.push('有效记录 '+x.count+'/'+x.total+' 次');return '<p class="advice-facts">'+htmlEsc(bits.join(' · '))+'</p>'}).join('');
+}
+function adviceState(F){return F.analysis_kind==='investigate'?'先定位原因':F.analysis_kind==='change'?'修改思路，待复测':'已有建议，需核对依据'}
+function adviceOptions(F){return F.opts.map(o=>'<div class="advice-option"><div><b>'+o.name+'</b> '+(o.rec?'<span class="chip c-ok">推荐</span>':'')+'</div><dl><dt>能得到什么</dt><dd>'+o.effect+'</dd><dt>代价</dt><dd>'+o.cost+'</dd><dt>工作量</dt><dd>'+o.work+' · '+o.wn+'</dd><dt>负责人</dt><dd>'+o.who+'</dd></dl></div>').join('')}
+function fixA(D){const FX=activeFixes(D);initPick(FX);
+ return FX.map((F,fi)=>{const first=F.opts.find(o=>o.rec),people=[...new Set(F.opts.filter(o=>o.rec).map(o=>o.who))];return `<section class="panel advice-card" id="fix-${fi}"><div class="advice-heading">${lvTag(F.lv)}<h3>${htmlEsc(F.title.replace(/ · 平均 .*$/,''))}</h3><span class="advice-state">${adviceState(F)}</span></div>${adviceFacts(F)}<p class="advice-next"><b>下一步</b> ${F.rec}</p><p class="advice-owner">负责人：${people.join('、')||'待确认'}</p><details class="fixmore"><summary>方案与判断依据${F.opts.length>1?' · '+F.opts.length+' 个方案':''}</summary><div class="advice-reason"><p><b>已知情况</b> ${F.why}</p><p><b>使用影响</b> ${F.impact}</p>${Object.values(F.facts||{}).map(x=>x.rule?'<p><b>处理等级依据</b> '+htmlEsc(x.rule.replace(/标准/g,"参考线"))+'（报告内部规则）</p>':'').join('')}</div>${adviceOptions(F)}<p class="small-note">等级来自报告内部处理规则，建议性质单独说明。</p></details></section>`}).join('')+myPick(D,FX);
+}
+
 function fixB(D){const FX=activeFixes(D);
   if(!fixPick){fixPick=new Set();FX.forEach((F,fi)=>F.opts.forEach((o,oi)=>{if(o.rec)fixPick.add(fi+'-'+oi)}))}
   const chosen=pickedOpts(FX);
@@ -977,8 +988,8 @@ function fixDev(D){const FX=activeFixes(D);initPick(FX);if(!FX.length)return '';
   const opts=[];FX.forEach((F,fi)=>F.opts.forEach(o=>{const n=String(o.name).trim(),x=opts.find(y=>y.key===n);if(x){x.for.push(fi+1);x.rec=x.rec||o.rec}else opts.push({...o,key:n,for:[fi+1]})}));
   const has=v=>v&&!/^[—\-－]+$/.test(String(v).trim());
   return `<section class="panel"><h2>怎么改</h2><p class="note" style="margin:-4px 0 10px">改法是 AI 读代码后给的思路，没有实现、没有测过。</p>${FX.map((F,fi)=>`<div style="margin-bottom:14px"><h3 style="margin:0 0 6px;font-size:15px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${lvTag(F.lv)}问题 ${fi+1}：${F.title}</h3>
-   <table><tbody><tr><th style="width:7em">推算</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table></div>`).join('')}
-   <h3 style="margin:4px 0 6px;font-size:15px">方案</h3>${opts.map(o=>`<div class="optdev ${o.rec?'on':''}"><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''} <span class="note">${FX.length>1?`对应问题 ${o.for.join('、')} · `:''}找谁：${o.who}</span><ul class="notes"><li>改法：${o.how}</li>${has(o.size)?`<li>改动大小：${o.size}</li>`:''}${has(o.rk)?`<li>风险：${o.rk}</li>`:''}</ul></div>`).join('')}</section>`;
+   <table><tbody><tr><th style="width:7em">推算</th><td>${F.dev.data}</td></tr><tr><th>原因</th><td>${F.dev.cause}</td></tr><tr><th>处理思路</th><td>${F.dev.change}</td></tr><tr><th>验收目标</th><td>${F.done}</td></tr><tr><th>怎么复测</th><td>${F.dev.verify}</td></tr></tbody></table></div>`).join('')}
+   <h3 style="margin:4px 0 6px;font-size:15px">方案</h3>${opts.map(o=>`<div class="optdev ${o.rec?'on':''}"><b>${o.name}</b>${o.rec?' <span class="chip c-ok">建议</span>':''} <span class="note">${FX.length>1?`对应问题 ${o.for.join('、')} · `:''}找谁：${o.who}</span><ul class="notes"><li>改法：${o.how}</li>${(o.observations||[]).map(a=>{const c=D.J?.code?.[a.point]||{},line=(c.ctx||[]).find(([,text])=>String(text).includes(a.at));return `<li>新增观测：${htmlEsc(c.path||"源码")} ${line?'第 '+line[0]+' 行':''}调用${a.relation==='after'?'后':'前'}<pre>${htmlEsc(a.at)}</pre></li>`}).join('')}${(o.anchors||[]).map(a=>`<li>源码引用：${htmlEsc(D.J?.scenario?.point_names?.[a.point]||"计时位置")}附近 <code>${htmlEsc(a.code)}</code></li>`).join('')}${has(o.size)?`<li>改动大小：${o.size}</li>`:''}${has(o.rk)?`<li>风险：${o.rk}</li>`:''}</ul></div>`).join('')}</section>`;
 }
 // 只记录、不判快慢（10-26）：长短看回答说了多少字的线（比如到回到聆听）和只在它上面的段，不进图和结论，但数照写
 function recOnlyBox(D){const R=D.S.recOnly,J=D.J;if(!R||!J||!(R.lines.length||R.segments.length||(R.parallel||[]).length))return '';
@@ -1009,11 +1020,12 @@ function reportPage(D){
 // Product report: the approved three-tab layout, with existing advice and live actions.
 function modernReport(D){
  const fixes=activeFixes(D),pending=D.S.real&&(!ADV||ADV.status!=='done');
- const advice=(pending?advBox():'')+(fixes.length?fixA(D):(!pending?'<div class="panel"><p>本报告未附经核对通过的修改建议。</p></div>':''))+
+ const advice=(pending?advBox():'')+(fixes.length?fixA(D):(!pending?`<div class="panel"><p>${ADV?.status==='done'&&!decisions(D).some(d=>[0,1,4].includes(d.lv))?'本次未触发需要处理的问题，未生成修改建议。':'本报告未附经核对通过的修改建议。'}</p></div>`:''))+
   (fixes.length?'<details class="panel"><summary>研发处理细节</summary>'+fixDev(D)+'</details>':'');
  const log=D.S.real&&typeof D.J.raw_log==='string'&&D.J.raw_log.trim()?'<div class="report-log-entry"><button class="pill" data-openlog="1">打开原始日志所在文件夹</button></div>':'';
  const actions=log+'<section class="panel" id="sec-research-actions"><h2>复测与还原</h2>'+retestEntry()+restoreBox(scene)+'</section>';
- return ReportView.shell(D.J,{real:!!D.S.real,adviceHtml:advice,actionsHtml:actions,noticeHtml:expDone()});
+ const payload={...D.J,...(ADV?.status==='done'?{advice:{status:ADV.status,fixes:ADV.fixes||[],fine:ADV.fine||'',for:ADV.for||null,source_revision:ADV.source_revision||null}}:{})};
+ return ReportView.shell(payload,{real:D.J.simulation===true?false:!!D.S.real,adviceHtml:advice,actionsHtml:actions,noticeHtml:expDone()});
 }
 
 function readableActions(D,m){
@@ -1890,11 +1902,11 @@ async function uiRestore(){const get=async u=>{try{const r=await fetch(u);return
  else if(page==='home'&&u.last&&u.last!=='home'&&canView(u.last))LASTP=u.last}
 // 复制按钮（10-21 用户定）：点了换成对勾"已复制"，2 秒后变回来；只改按钮本身，不重画页面，导出的报告里也能用
 const COPY_IC='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
-function todoCopy(e){const b=e.target.closest&&e.target.closest('[data-copy]');if(!b)return false;const el=document.getElementById(b.dataset.copy);if(!el)return true;const t=el.textContent;
-  const old=()=>{const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(_){}a.remove()};
-  try{navigator.clipboard.writeText(t).catch(old)}catch(_){old()}
-  if(!b.dataset.html)b.dataset.html=b.innerHTML;b.innerHTML='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg>已复制';b.classList.add('done');
-  clearTimeout(b._t);b._t=setTimeout(()=>{b.innerHTML=b.dataset.html;b.classList.remove('done')},2000);return true}
+function todoCopy(e){const b=e.target.closest&&e.target.closest('[data-copy]');if(!b)return false;const el=document.getElementById(b.dataset.copy);if(!el)return true;const t=el.textContent,seq=(b._copySeq||0)+1;b._copySeq=seq;
+ if(!b.dataset.html)b.dataset.html=b.innerHTML;clearTimeout(b._t);b.textContent='正在复制…';b.classList.remove('done');
+ const old=()=>{if(document.hasFocus&&!document.hasFocus())throw Error('report not focused');const a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();let ok=false;try{ok=document.execCommand('copy')}finally{a.remove()}if(!ok)throw Error('copy failed')};
+ const run=async()=>{try{try{if(!navigator.clipboard?.writeText)throw Error('clipboard unavailable');await navigator.clipboard.writeText(t)}catch(_){old()}if(b._copySeq!==seq)return;b.textContent='✓ 已复制';b.classList.add('done');b._t=setTimeout(()=>{b.innerHTML=b.dataset.html;b.classList.remove('done')},2000)}catch(_){if(b._copySeq===seq)b.textContent='复制失败，请重试'}};run();return true}
+
 function tipShow(e){const el=e.target.closest&&e.target.closest('[data-tip]'),T=document.getElementById('tip');if(!el){T.hidden=true;return}T.innerHTML=el.dataset.tip;T.hidden=false;const r=el.getBoundingClientRect(),w=T.offsetWidth,h=T.offsetHeight;let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<4)y=r.bottom+8;x=Math.max(4,Math.min(x,innerWidth-w-4));T.style.left=x+'px';T.style.top=y+'px'}
 if(typeof ReportView!=='undefined')ReportView.install();
 if(typeof ReportLayout!=='undefined')ReportLayout.install(target=>{const report=document.querySelector('.product-report');if(report){ReportView.show(report,'tech',target);return;}mode='dev';render();if(target)document.getElementById(target)?.scrollIntoView({block:'start'});else window.scrollTo(0,0)});

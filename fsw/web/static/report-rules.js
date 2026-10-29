@@ -49,14 +49,13 @@
  }
 function stageGroups(m,line,meta){
  const groups=[];let keys=[];
- const hasBoundaries=line.segments.some(k=>meta.boundaries[m.defs[k]?.to]);
+ const hasBoundaries=line.segments.some(k=>meta.boundaries[m.defs[k]?.to]),declaredEnds=new Set(m.lines.map(l=>l.end_point));
  const flush=()=>{if(!keys.length)return;const first=m.defs[keys[0]],last=m.defs[keys[keys.length-1]],boundary=meta.boundaries[last.to];
  const values=m.data.rounds.map(r=>keys.every(k=>Number.isFinite(r.segs[k])&&r.segs[k]>=0)?keys.reduce((s,k)=>s+r.segs[k],0):null).filter(v=>v!==null);
  groups.push({keys:[...keys],from:first.from,to:last.to,label:(boundary?.label&&(!boundary.fromAt||m.scenario.points?.[first.from]?.at===boundary.fromAt)?boundary.label:null)||(m.names[first.from]+' → '+m.names[last.to]),avg:values.length?values.reduce((a,b)=>a+b,0)/values.length:null,count:values.length});keys=[]};
  let cursor=line.start_point;for(const k of line.segments){const d=m.defs[k];if(!d||d.from!==cursor)throw Error('Disconnected stage path');
- // Without reviewed phases, use only declared device/external boundaries. Do not infer a cause.
- const previous=m.defs[keys.at(-1)];if(!hasBoundaries&&previous?.side&&d.side&&previous.side!==d.side)flush();
- keys.push(k);cursor=d.to;if(meta.boundaries[d.to])flush()}flush();if(cursor!==line.end_point)throw Error('Wrong endpoint');return groups;
+ // Without reviewed phases, group by declared result endpoints; do not infer device/external ownership.
+ keys.push(k);cursor=d.to;if(meta.boundaries[d.to]||(!hasBoundaries&&declaredEnds.has(d.to)))flush()}flush();if(cursor!==line.end_point)throw Error('Wrong endpoint');return groups;
 }
 
 function metadata(report){

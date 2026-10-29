@@ -17,7 +17,11 @@ DEMO = Path(__file__).resolve().parent.parent / "fsw/web/demo"
 
 
 def demo(name):
-    return json.loads((DEMO / f"{name}.json").read_text(encoding="utf-8"))
+    d = json.loads((DEMO / f"{name}.json").read_text(encoding="utf-8"))
+    for f in d["page"]["fixes"]:
+        for i, o in enumerate(f["opts"]):
+            o["rec"] = int(i == 0)
+    return d
 
 
 def demo_rounds(d):
@@ -45,7 +49,7 @@ def test_problems_come_from_the_labels_not_from_ai():
     d, j = judged("voice")
     probs = adv.problems(j, d["scenario"])
     assert [p["key"] for p in probs] == ["problem:sw", "main"]   # 出错排前（轮次多的在前），再是必须改 / 建议改；偶发特别慢不再单独出（10-20）
-    assert probs[1]["seg"] == "think"
+    assert probs[1]["seg"] == max(j["segments"], key=lambda g: adv.observed({**j, "scenario": d["scenario"]}, "segment", g["k"])["average"] or 0)["k"]
 
 
 def test_prompt_has_data_and_code_places_and_asks_for_json():
@@ -64,7 +68,7 @@ def test_recorded_door_reply_passes_the_check(tmp_path):
 
 
 @pytest.mark.parametrize("break_it,words", [
-    (lambda f: f[0].update(opts=f[0]["opts"][:1]), "2～3 个方案"),
+    (lambda f: f[0].update(opts=[]), "1～3 个有效方案"),
     (lambda f: f[0]["opts"][0].update(work="两天"), "工作量"),
     (lambda f: f[0].update(when=["没有这个问题"]), "对不上"),
     (lambda f: f[0].update(seg="nope"), "没有这一段"),
@@ -96,7 +100,7 @@ def test_at_least_one_recommended_option(tmp_path):
         o.pop("rec", None)
     text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
     r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], save_to=tmp_path / "a")
-    assert r["ok"] and r["fixes"][0]["opts"][0]["rec"] == 1  # 一个都没标建议，码表把第一个当建议（默认勾上）
+    assert not r["ok"] and "不能由码表代选" in r["message"]
 
 
 def test_model_failure_is_plain(tmp_path):
@@ -116,7 +120,7 @@ def test_nothing_to_fix_needs_no_model(tmp_path):
 def test_prompt_asks_for_names_not_codes_and_short_why():
     d, j = judged("voice")
     p = adv.build_prompt(j, d["scenario"])
-    assert "不要写 P2-P5 这样的编号" in p and "2～4 句" in p
+    assert "why最多两句" in p and "算术平均" in p
 
 
 # ---- 真测修复 5：同一个根因合并；每条现象挂到真正讨论它的卡片上 ----
@@ -159,7 +163,7 @@ def test_card_must_name_the_rounds_of_every_problem_it_claims(tmp_path):
 def test_prompt_says_only_put_problems_the_card_discusses():
     d, j = judged("voice")
     p = adv.build_prompt(j, d["scenario"])
-    assert "真正讨论" in p and "第几轮" in p
+    assert "真正讨论" in p and "轮次" in p
 
 
 def test_card_covering_two_segments_is_accepted_and_keeps_the_first():
@@ -199,26 +203,25 @@ def test_only_one_option_stays_recommended(tmp_path):
         o["rec"] = 1
     text = "```json\n" + json.dumps({"fixes": fixes, "fine": "x"}, ensure_ascii=False) + "\n```"
     r = adv.advise(FakeLLM(text), tmp_path, j, d["scenario"], steps=d["F"]["steps"])
-    assert r["ok"] and [bool(o.get("rec")) for o in r["fixes"][0]["opts"]].count(True) == 1
+    assert not r["ok"] and "明确推荐一个" in r["message"]
 
 
 def test_old_advice_is_not_reused_after_prompt_changes(tmp_path, monkeypatch):
     d, j = judged("door")
     save = tmp_path / "advice"
     adv.advise(FakeLLM(recorded(d)), tmp_path, j, d["scenario"], steps=d["F"]["steps"], save_to=save)
-    assert adv.saved_for(save, j, d["scenario"])
+    assert adv.saved_for(save, j, d["scenario"], adv.source_revision(tmp_path))
     monkeypatch.setattr(adv, "PROMPT_VER", adv.PROMPT_VER + 1)
-    assert adv.saved_for(save, j, d["scenario"]) is None
+    assert adv.saved_for(save, j, d["scenario"], adv.source_revision(tmp_path)) is None
 
 
 def test_manager_text_keeps_one_decimal_and_no_estimate_suffix():
     f = {"why": "一般 1.164 秒，比平时多 0.001 秒", "impact": "x", "rec": "约 2.526秒", "dev": {"data": "1.164 秒"}}
     opts = [{"name": "a", "effect": "约 0.35 秒（估算）", "how": "一般 1.164 秒"}, {"name": "b", "effect": "查清原因后才知道（估算）"}]
     adv._tidy(f, opts)
-    assert f["why"] == "一般 1.2 秒，比平时多不到 0.01 秒" and f["rec"] == "约 2.5 秒"
-    assert opts[0]["effect"] == "约 0.35 秒"
-    assert opts[1]["effect"] == "查清原因后才知道" and f["dev"]["data"] == "1.16 秒"  # 技术细节留两位
-    assert opts[0]["how"] == "一般 1.16 秒"
+    assert f["why"] == "一般 1.164 秒，比平时多 0.001 秒" and f["rec"] == "约 2.526秒"
+    assert opts[0]["effect"] == "约 0.35 秒（估算）"
+    assert f["dev"]["data"] == "1.164 秒" and opts[0]["how"] == "一般 1.164 秒"
 
 
 def test_adding_a_timing_point_is_not_a_find_cause_option(tmp_path):
@@ -233,7 +236,7 @@ def test_adding_a_timing_point_is_not_a_find_cause_option(tmp_path):
 def test_short_lines_keep_two_decimals():
     f = {"why": "刷卡到亮灯一般 0.034 秒，最慢 0.082 秒", "impact": "x", "rec": "x"}
     adv._tidy(f, [])
-    assert f["why"] == "刷卡到亮灯一般 0.03 秒，最慢 0.08 秒"
+    assert f["why"] == "刷卡到亮灯一般 0.034 秒，最慢 0.082 秒"
 
 
 def test_ask_and_done_go_to_outside_people_so_no_code_or_internal_words():

@@ -15,6 +15,8 @@
 """
 
 import math
+import hashlib
+import json
 
 from fsw.scenario import experience_of
 
@@ -51,7 +53,7 @@ def p90(a):
 
 
 def stats(vals):
-    return {"med": round(med(vals), 6), "p90": round(p90(vals), 6), "max": round(max(vals), 6), "min": round(min(vals), 6)}
+    return {"avg": round(sum(vals) / len(vals), 6), "med": round(med(vals), 6), "p90": round(p90(vals), 6), "max": round(max(vals), 6), "min": round(min(vals), 6)}
 
 
 ANSWER = "看回答长短"  # 放回答的几段、到全部放完那条：长短跟这次回答说了多少字有关，不判快慢
@@ -231,7 +233,7 @@ def judge(scenario, rounds, prev=None):
     n = len(rounds)
     segs_def, lines_def = scenario["segments"], scenario["lines"]
     pv = prev if prev and prev.get("segs") is not None and n >= 10 else None  # 两次都满 10 轮才比
-    out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": []}
+    out = {"n": n, "few": n < FEW, "segments": [], "lines": [], "labels": [], "measurement_digest": hashlib.sha256(json.dumps(rounds, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()}
 
     # 有"到第一声"那条线时，第一声之后到全部放完的那几段是在放回答：长短跟回答说了多少有关，不算"偶发特别慢"
     first = next((l for l in lines_def if l.get("first")), None)

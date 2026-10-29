@@ -50,7 +50,7 @@ def test_code_is_fine_in_how_and_dev(tmp_path):
 def test_prompt_says_manager_text_has_no_code():
     d, j = judged("door")
     p = adv.build_prompt(j, d["scenario"])
-    assert "不能写文件名、行号、函数名" in p
+    assert "不写文件、行号、函数、变量" in p
 
 
 # ---- 2. 选完源码扫"AI 推荐"：源码没变就用上次结果，并告诉页面这次调没调用 ----

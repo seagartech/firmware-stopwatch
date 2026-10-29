@@ -82,3 +82,26 @@
 .product-report #v-tech .scope-stage b{font-weight:600}
 .product-report #v-tech .scope-stage p{margin:3px 0;color:#536d60}
 .product-report #v-tech .scope-stage small{display:block;color:#71867a;overflow-wrap:anywhere}
+
+/* Advice: current evidence and a short next action first; all details remain flat. */
+.product-report #v-advice .advice-card{border-left:3px solid #86aa98}
+.product-report #v-advice .advice-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.product-report #v-advice .advice-heading h3{font-size:18px;margin:0;color:#273f46}
+.product-report #v-advice .advice-state{font-size:12px;color:#60796e}
+.product-report #v-advice .advice-facts{font-size:14px;color:#37624f;margin:14px 0}
+.product-report #v-advice .advice-next{font-size:15px;line-height:1.8;margin:12px 0}
+.product-report #v-advice .advice-owner{font-size:13px;color:#627b70;margin:8px 0 18px}
+.product-report #v-advice .fixmore{background:transparent;padding:0;border:0}
+.product-report #v-advice .fixmore>summary{display:inline-flex;border:1px solid #cbdcd2;border-radius:8px;padding:9px 12px;background:#fff;font-size:13px}
+.product-report #v-advice .advice-reason{font-size:14px;line-height:1.8;margin:16px 0}
+.product-report #v-advice .advice-option{border-top:1px solid #dce6e0;padding:16px 0;font-size:14px;line-height:1.7}
+.product-report #v-advice .advice-option dl{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px 12px;margin:12px 0 0}
+.product-report #v-advice .advice-option dt{color:#70877b}
+.product-report #v-advice .advice-option dd{margin:0;overflow-wrap:anywhere}
+.product-report #v-advice pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.product-report #v-advice .optdev{overflow-wrap:anywhere}
+.product-report #v-advice table{width:100%;table-layout:fixed}
+.product-report #v-advice td{overflow-wrap:anywhere;vertical-align:top}
+@media(max-width:560px){.product-report #v-advice .advice-option dl{grid-template-columns:1fr;gap:3px}.product-report #v-advice .advice-option dd{margin-bottom:8px}}
+
+.product-report .report-simulation-banner{padding:14px 18px;margin:10px 0 20px;border:1px solid #dfcf9c;background:#fff6df;border-radius:10px;color:#765b21;font-size:14px}

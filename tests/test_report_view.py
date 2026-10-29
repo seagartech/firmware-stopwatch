@@ -80,8 +80,11 @@ def test_stage_averages_use_matching_complete_rounds_and_refuse_disconnected_pat
 
 def test_unannotated_stages_use_declared_execution_boundary_and_actual_names():
     x=run("data.scenario.segments.read.side='device';data.scenario.segments.open.side='outside';const m=model();console.log(JSON.stringify(P.stageGroups(m,m.lines[1],{boundaries:{}})));")
-    assert [g['keys'] for g in x]==[['read'],['open']]
-    assert [g['label'] for g in x]==['读到卡 → 取得卡号','取得卡号 → 完成解锁']
+    assert [g['keys'] for g in x]==[['read','open']]
+    assert [g['label'] for g in x]==['读到卡 → 完成解锁']
+    # A declared intermediate result, rather than a claimed network boundary, splits the overview.
+    y=run("data.scenario.lines.push({name:'读取完成',segments:['read']});data.lines.push({name:'读取完成'});data.rounds.forEach(r=>r.ends.push(r.segs.read));const m=model();console.log(JSON.stringify(P.stageGroups(m,m.lines[1],{boundaries:{}})));")
+    assert [g['keys'] for g in y]==[['read'],['open']]
 
 
 def test_zero_one_many_and_content_dependent_summary_results():

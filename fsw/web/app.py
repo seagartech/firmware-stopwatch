@@ -2202,10 +2202,6 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
             prev = job0["_prev"]
         sc, ok, _ = jdg.merge_overruns(sc0, ok)
         j = jdg.judge(sc, ok, prev)
-        if body.project_dir and (old := advs.saved_for(Path(body.project_dir) / "advice", j, sc)):
-            adv["job"] = {**old, "status": "done", "seconds": 0, "called": False}  # 要改的问题和上次一样（比如只改了清单）：不再调用大模型
-            return adv["job"]
-        _, model = _model()
         root = body.work  # 读你原来的源码（只读）：码表那份插过计时点，行号会变
         try:
             src = json.loads((Path(body.project_dir) / "project.json").read_text(encoding="utf-8"))["source"]
@@ -2213,6 +2209,16 @@ def create_app(data_dir=None, picker=None, llm_factory=None, idf_finder=None, bg
                 root = src
         except (OSError, ValueError, KeyError, TypeError):
             pass
+        j["rounds"] = ok
+        j["code"] = code_ctx(job0)
+        j["scenario"] = sc
+        j["measured_at"] = job0.get("measured_at")
+        j["measurement_id"] = job0.get("started") or job0.get("measured_at")
+        revision = advs.source_revision(root, body.steps)
+        if body.project_dir and revision != "unavailable" and (old := advs.saved_for(Path(body.project_dir) / "advice", j, sc, revision)):
+            adv["job"] = {**old, "status": "done", "seconds": 0, "called": False}
+            return adv["job"]
+        _, model = _model()
         job = {"status": "running", "started": time.time(), "read": "", "fixes": None, "fine": "", "message": "", "root": root}
         adv["job"] = job
         _net_watch(model, job)
