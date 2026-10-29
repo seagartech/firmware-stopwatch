@@ -183,6 +183,17 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const prev=payload.prev?.lines?.[l.name];if(Number.isFinite(prev))values.push(['上次中位数',F(prev)+(s.vs?' · '+s.vs.change:'')]);
   return '<dl class="tech-stats">'+values.map(([k,v])=>'<div><dt>'+E(k)+'</dt><dd>'+E(v)+'</dd></div>').join('')+'</dl>';
  }
+ function stageScope(){
+  const seen=new Set(),groups=[];
+  for(const l of m.lines){let stages;try{stages=stageGroups(m,l,phaseMeta)}catch{continue}
+   for(const g of stages){const key=JSON.stringify(g.keys);if(seen.has(key))continue;seen.add(key);
+    const b=phaseMeta.boundaries?.[g.to],matched=b&&(!b.fromAt||m.scenario.points?.[g.from]?.at===b.fromAt);
+    const range=name(g.from)+' → '+name(g.to);
+    groups.push('<div class="scope-stage"><b>'+E(g.label)+'</b>'+(g.label!==range?'<p>'+E(range)+'</p>':'')+(matched&&b.evidence?'<small class="code">'+E(b.evidence)+'</small>':'')+'</div>');
+   }
+  }
+  return groups.length?'<section class="scope-section"><h4>各阶段的范围与依据</h4>'+groups.join('')+'</section>':'';
+ }
  function source(){
   const q=payload.quality||{};
   const actualChecks=(payload.checks||[]).filter(c=>c.kind!=='line_changed');
@@ -195,7 +206,8 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
   const starts=[...new Set(m.lines.map(l=>l.start_point))];
   const lineEnd=l=>{const ps=endsFor(l.segments.at(-1));return ps.length>1?'<div class="scope-result"><h4>'+E(l.endName)+'</h4><p class="small-note">以以下事件中最后记录到的时刻结束计时：</p>'+ps.map(p=>timingEntry(p,name(p))).join('')+'<p class="small-note">逐次数据只保存用时，未注明每次最终采用哪个事件。</p></div>':timingEntry(l.end_point,l.endName)};
   const boundaries=starts.length===1?'<h4>所有结果的计时起点</h4>'+timingEntry(starts[0],name(starts[0]))+'<h4>各项结果的计时终点</h4>'+m.lines.map(lineEnd).join(''):m.lines.map(l=>'<div class="scope-result"><h4>'+E(l.endName)+'</h4>'+timingEntry(l.start_point,'起点：'+l.startName)+lineEnd(l)+'</div>').join('');
-  return '<div class="tech-intro"><h2>本次测量</h2><p>'+payload.rounds.length+' 次记录 · '+m.lines.length+' 项结果 · '+Object.keys(m.defs).length+' 个分段</p>'+(actualChecks.length?'<ul class="issue-list">'+actualChecks.map(c=>'<li>'+E(c.why||c.name)+'</li>').join(''):'')+fold('数据来源与测量环境','<section class="source-section"><h4>测试记录</h4>'+fields(sourceRows)+'</section>'+environment)+fold('计时从哪里开始、到哪里结束',boundaries)+'</div>';
+  const scopeBody=boundaries+stageScope()+(adjustment?'<section class="scope-section"><h4>范围与分段连接的处理记录</h4><ul>'+adjustment+'</ul></section>':'');
+  return '<div class="tech-intro"><h2>本次测量</h2><p>'+payload.rounds.length+' 次记录 · '+m.lines.length+' 项结果 · '+Object.keys(m.defs).length+' 个分段</p>'+(actualChecks.length?'<ul class="issue-list">'+actualChecks.map(c=>'<li>'+E(c.why||c.name)+'</li>').join(''):'')+fold('数据来源与测量环境','<section class="source-section"><h4>测试记录</h4>'+fields(sourceRows)+'</section>'+environment)+(scopeBody?fold('计时范围与分段说明',scopeBody):'')+'</div>';
  }
  function method(){const references=m.lines.map(l=>R.referenceInfo(m,l)).filter(r=>Number.isFinite(r.e.fair));const unique=[...new Map(references.map(r=>[JSON.stringify([r.e,r.mode]),r])).values()];return fold('统计与标记规则',
  (unique.length?'<section class="method-section"><h4>参考线的含义与出处</h4>'+unique.map(r=>'<p>'+E(R.referenceMeaning(r).label)+'：'+F(r.e.fair)+'；'+E(r.mode==='mean'?'用于平均用时比较':'来源未明确比较哪项统计值')+'。</p>'+R.referenceEvidence(r)).join('')+'</section>':'')+
@@ -242,12 +254,12 @@ function buildTechnical(scope,payload,R,ReportPolicy,phaseMeta,eventMeta,provena
  function catalog(){const host=document.createElement('div');host.innerHTML=R.pointCatalog(m);host.querySelectorAll('[data-source-point]').forEach(row=>{const label=document.createElement('small');label.className='actual-event-range';label.textContent=event(row.dataset.sourcePoint);row.querySelector('th').append(label)});host.querySelectorAll('[data-code]').forEach(button=>button.remove());host.querySelectorAll('.coderow').forEach(row=>row.hidden=false);return host.innerHTML;}
  const covered=new Set(m.lines.flatMap(l=>l.segments)),independent=Object.keys(m.defs).filter(k=>!covered.has(k));
  const adjustment=(payload.checks||[]).filter(c=>c.kind==='line_changed').map(c=>'<li>'+E(c.why)+'</li>').join('')+(payload.merged||[]).map(x=>'<li>'+E(x.why)+'。</li>').join('');
- const legacy=m.lines.map(l=>'<h4>'+E(l.endName)+'</h4><p>'+E(l.stat.combo||l.stat.verdict||'未判')+'</p>').join('');
+ const supplementary=(independent.length?'<details class="tech-fold" id="tech-independent"><summary>其他已测分段 · '+independent.length+' 项</summary><div class="tech-fold-body"><p class="small-note">这些分段不在所选结果的连续路径中，单独保留，不加入总用时。</p>'+table(independent,0,true)+'</div></details>':'')+(Object.keys(m.scenario.points||{}).length||Object.keys(payload.code||{}).length?fold('计时位置与源码',catalog()):'')+(payload.rounds.length?fold('完整测量数据','<section class="complete-values" data-values-kind="results"><h3>各次结果用时（秒）</h3>'+rawTable('lines')+'</section><section class="complete-values" data-values-kind="segments"><h3>各次分段用时（秒）</h3>'+rawTable('segments')+'</section>'):'');
  root.innerHTML=source()+panel('tech-observations','每次用了多久',plot()+observations())+
  panel('d-sec-technical-steps','阶段与分段用时','<div class="tech-overview"><div class="result-switcher"><div><p class="fine">选择要核对的结果</p><h3 id="tech-selected-title" class="tech-selected-title"></h3><div id="tech-selected-scope" class="tech-selected-scope"></div></div><div id="tech-choices" class="tech-choices"></div></div><div id="tech-total" class="tech-total"></div></div>'+
  groupedSegments())+
  '<details class="panel process-fold" id="tech-round"'+(state.processOpen?' open':'')+'><summary>单次完整过程</summary><div class="process-body"><div class="tech-round-controls"'+(!payload.rounds.length||!m.lines.length?' hidden':'')+'><div class="tech-round-result-control"'+(m.lines.length<2?' hidden':'')+'><span>查看结果</span><div id="tech-process-results" class="process-buttons" role="group" aria-label="单次过程的结果">'+compactOptions(m.lines,selected,'data-tech-process-line')+'</div></div><div class="tech-round-number-control"><span>测试轮次</span><div id="tech-process-rounds" class="process-buttons" role="group" aria-label="选择测量轮次">'+roundOptions(payload.rounds,round)+'</div></div><select id="tech-round-result" hidden aria-hidden="true" tabindex="-1">'+m.lines.map(l=>'<option value="'+l.index+'">'+E(l.endName)+'</option>').join('')+'</select><select id="tech-round-select" hidden aria-hidden="true" tabindex="-1">'+payload.rounds.map(r=>'<option value="'+E(r.n)+'">第 '+E(r.n)+' 次</option>').join('')+'</select></div><p id="tech-round-line" class="small-note"></p><div id="tech-round-content"></div></div></details>'+
- panel('tech-evidence','补充资料',(independent.length?'<details class="tech-fold" id="tech-independent"><summary>其他已测分段 · '+independent.length+' 项</summary><div class="tech-fold-body"><p class="small-note">这些分段不在所选结果的连续路径中，单独保留，不加入总用时。</p>'+table(independent,0,true)+'</div></details>':'')+fold('全部计时位置与源码上下文',catalog())+fold('全部结果用时（秒）',rawTable('lines'))+fold('全部分段用时（秒）',rawTable('segments'))+fold('原始日志',payload.raw_log?'<p class="code">'+E(payload.raw_log)+'</p><p>本报告保留日志路径，日志文件未嵌入。</p>':'<p>这份数据未附原始日志文件或路径。逐轮数值与源码摘录保存在完整数据中。</p>')+(adjustment?fold('计时范围调整记录','<ul>'+adjustment+'</ul>'):'')+fold('阶段划分依据','<p>阶段只合并同一路径上连续的步骤。下面保留各阶段采用的代码位置；每个阶段包含的步骤见上方分段表。</p><ul>'+Object.values(phaseMeta.boundaries||{}).map(b=>'<li>'+E(b.label)+'：'+E(b.evidence||'未保存划分依据')+'</li>').join('')+'</ul>')+fold('原报告的判定记录','<p>以下保留原报告对本组数据的判定；其中体验判断采用中位数。这里只供追溯，与上方平均用时的比较分开。</p>'+legacy)+ '<p class="fine">页面底部可下载全部数据或保存报告。重新测试、还原固件需在码表主界面操作。</p>');
+ (supplementary?panel('tech-evidence','补充资料',supplementary):'');
  const processTooltip=document.createElement('div');processTooltip.id='tech-process-tooltip';processTooltip.className='process-tooltip';processTooltip.setAttribute('role','tooltip');processTooltip.hidden=true;root.append(processTooltip);
  function preciseTime(v,unitFrom=v){
   if(!Number.isFinite(v))return '未记录';

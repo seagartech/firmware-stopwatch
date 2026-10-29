@@ -1011,7 +1011,8 @@ function modernReport(D){
  const fixes=activeFixes(D),pending=D.S.real&&(!ADV||ADV.status!=='done');
  const advice=(pending?advBox():'')+(fixes.length?fixA(D):(!pending?'<div class="panel"><p>本报告未附经核对通过的修改建议。</p></div>':''))+
   (fixes.length?'<details class="panel"><summary>研发处理细节</summary>'+fixDev(D)+'</details>':'');
- const actions='<section class="panel" id="sec-research-actions"><h2>复测与还原</h2>'+retestEntry()+restoreBox(scene)+(D.J.raw_log?'<button class="pill" data-openlog="1">打开原始日志所在文件夹</button>':'')+'</section>';
+ const log=D.S.real&&typeof D.J.raw_log==='string'&&D.J.raw_log.trim()?'<div class="report-log-entry"><button class="pill" data-openlog="1">打开原始日志所在文件夹</button></div>':'';
+ const actions=log+'<section class="panel" id="sec-research-actions"><h2>复测与还原</h2>'+retestEntry()+restoreBox(scene)+'</section>';
  return ReportView.shell(D.J,{real:!!D.S.real,adviceHtml:advice,actionsHtml:actions,noticeHtml:expDone()});
 }
 

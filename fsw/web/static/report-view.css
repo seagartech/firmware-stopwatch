@@ -70,3 +70,15 @@
 .product-report #v-tech .round-svg [data-process-tip]:hover rect,.product-report #v-tech .round-svg [data-process-tip]:focus rect{stroke:#244d43;stroke-width:1.5}
 @media(max-width:520px){.product-report #v-tech .tech-round-controls>div{grid-template-columns:1fr;gap:6px}}
 .product-report #v-tech .tech-overview .result-switcher{box-sizing:border-box}
+/* Supplementary records stay flat; scope explanations live with the timing boundaries. */
+.product-report #v-tech .scope-section{margin-top:20px;padding-top:16px;border-top:1px solid #e2eae5}
+.product-report #v-tech .scope-section>h4{margin:0 0 10px;font-size:14px;color:#365e4c}
+.product-report #v-tech .scope-section ul{padding-left:20px;font-size:13px;line-height:1.8}
+.product-report #v-tech .complete-values+ .complete-values{margin-top:24px;padding-top:18px;border-top:1px solid #e2eae5}
+.product-report #v-tech .complete-values>h3{margin:0 0 12px;font-size:15px}
+.product-report .report-log-entry{display:flex;justify-content:flex-end;margin:14px 0}
+.product-report #v-tech .scope-stage{padding:10px 0;border-bottom:1px solid #e8eeea;font-size:13px;line-height:1.7}
+.product-report #v-tech .scope-stage:last-child{border-bottom:0}
+.product-report #v-tech .scope-stage b{font-weight:600}
+.product-report #v-tech .scope-stage p{margin:3px 0;color:#536d60}
+.product-report #v-tech .scope-stage small{display:block;color:#71867a;overflow-wrap:anywhere}

@@ -110,8 +110,11 @@ const activeFixes=()=>[{}],advBox=()=>'<button data-advretry="1">retry</button>'
  retestEntry=()=>'<button data-retest="1">retest</button>',restoreBox=()=>'<button data-restore="1">restore</button>',expDone=()=>'';
 const scene='fixture',D={J:{raw_log:'fixture.log'},S:{real:true}};
 '''
-    result=subprocess.run(['node','-e',code+fn+'console.log(JSON.stringify(modernReport(D)));'],capture_output=True,text=True,check=True)
-    x=json.loads(result.stdout)
+    result=subprocess.run(['node','-e',code+fn+"console.log(JSON.stringify([modernReport(D),modernReport({...D,S:{real:false}}),modernReport({...D,J:{}})]));"],capture_output=True,text=True,check=True)
+    x,simulated,without_log=json.loads(result.stdout)
+    assert 'data-openlog' not in simulated['actionsHtml'] and 'data-openlog' not in without_log['actionsHtml']
+    assert x['actionsHtml'].count('data-openlog') == 1
+    assert x['actionsHtml'].index('data-openlog') < x['actionsHtml'].index('sec-research-actions')
     assert x['real']
     assert 'data-advretry' in x['adviceHtml'] and 'data-copy' in x['adviceHtml']
     assert 'technical options' in x['adviceHtml']
